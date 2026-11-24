@@ -808,7 +808,11 @@ export default function App() {
   const toastTimerRef = useRef<number | null>(null);
 
   const handleRouteChanged = useCallback((next: Route) => {
-    if (next !== 'quiz') {
+    if (
+      next !== 'quiz' ||
+      (typeof window !== 'undefined' &&
+        (window.location.hash === '#/quiz' || window.location.hash === '#/quiz/'))
+    ) {
       setQuizView({ type: 'home' });
     }
   }, []);
@@ -981,10 +985,26 @@ export default function App() {
             actions={quizActions}
             onExit={() => {
               setQuizView({ type: 'home' });
+              try {
+                const { pathname, search } = window.location;
+                window.history.replaceState(window.history.state, '', `${pathname}${search}#/quiz`);
+              } catch {
+                // ignore
+              }
               window.scrollTo(0, 0);
             }}
             onFinish={(resultSpec) => {
               setQuizView({ type: 'result', spec: resultSpec });
+              try {
+                const { pathname, search } = window.location;
+                window.history.replaceState(
+                  window.history.state,
+                  '',
+                  `${pathname}${search}#/quiz/result`,
+                );
+              } catch {
+                // ignore
+              }
               window.scrollTo(0, 0);
             }}
           />
@@ -1023,6 +1043,12 @@ export default function App() {
             onRetryMore={() => startSessionWithConfig(quizView.spec.config)}
             onBackHome={() => {
               setQuizView({ type: 'home' });
+              try {
+                const { pathname, search } = window.location;
+                window.history.replaceState(window.history.state, '', `${pathname}${search}#/quiz`);
+              } catch {
+                // ignore
+              }
               window.scrollTo(0, 0);
             }}
           />

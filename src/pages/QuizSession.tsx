@@ -303,8 +303,9 @@ export function QuizSession({ spec, store, actions, onExit, onFinish }: QuizSess
           </div>
 
           <div className="session-topbar__right">
-            <span data-testid="quiz-timer" className="session-timer" aria-label="已用时">
-              ⏱ {formatElapsed(elapsedMs)}
+            <span className="session-timer" aria-label="已用时">
+              <span aria-hidden="true">⏱ </span>
+              <span data-testid="quiz-timer">{formatElapsed(elapsedMs)}</span>
             </span>
             <button
               type="button"

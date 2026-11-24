@@ -42,14 +42,14 @@ export function navLink(page: Page, key: NavTarget): Locator {
 export function hubCardQuiz(page: Page): Locator {
   return page
     .getByTestId('hub-card-quiz')
-    .or(page.getByRole('link', { name: /刷题工具/ }))
+    .or(page.locator('main').getByRole('link', { name: /刷题工具/ }))
     .first();
 }
 
 export function hubCardNotes(page: Page): Locator {
   return page
     .getByTestId('hub-card-notes')
-    .or(page.getByRole('link', { name: /知识点手册/ }))
+    .or(page.locator('main').getByRole('link', { name: /知识点手册/ }))
     .first();
 }
 

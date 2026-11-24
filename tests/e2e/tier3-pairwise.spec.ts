@@ -204,8 +204,8 @@ test.describe('Tier 3: Cross-Feature Pairwise Interactions (T3-001..T3-024)', ()
   }, testInfo) => {
     onlyDesktop(testInfo);
     await gotoRoute(page, '#/notes');
-    await notesSearch(page).fill('启发式');
-    await expect(page.getByText(/启发式/).first()).toBeVisible();
+    await notesSearch(page).fill('知识图谱');
+    await expect(page.getByText(/知识图谱/).first()).toBeVisible();
     await btnQuizChapter(page, 3).click();
     await expect(page).toHaveURL(/#\/quiz/);
     await expect(chapterChip(page, 3)).toHaveAttribute('aria-pressed', 'true');

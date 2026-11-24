@@ -357,7 +357,7 @@ test.describe('Tier 2: Subjective, Nav, Sheet, Result, Storage & Responsive Boun
         );
         await btnNext(page).click();
       }
-      const txt = await page.locator('main, #root').innerText();
+      const txt = await page.locator('main, #root').first().innerText();
       return txt;
     };
 

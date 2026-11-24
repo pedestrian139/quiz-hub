@@ -1,30 +1,53 @@
 # 项目开发交接文档（HANDOFF.md）
 
-## 1. 已完成进度
-- **M1 核心引擎与契约层**：已完成题库/知识手册 TypeScript 类型契约（`src/types/quiz.ts`）、判分与题组抽样引擎（`src/core/quizEngine.ts`）、本地安全持久化与备份恢复（`src/core/storage.ts`）、工具函数（`src/core/questionUtils.ts`）及 39 项单元测试。
-- **M2 知识点手册提取与题库流水线准备**：已完成 9 章 64 节 + 4 附录的 `src/data/notes.json` 结构化提取与错别字校订；综合题库提取（117 题）、视频课弹题前半部分（37 题）与复习资料精编题（158 题）已完成，等待视频弹题后半部分完成后合成 `src/data/bank.json`。
-- **M3 前端全套 UI 与交互实现（Opus 5.5 架构审美 + Gemini 4 Carbon 接力完成）**：
-  - **全局路由与顶部导航**：支持 `#/`（复习中心）、`#/quiz`（刷题工具）、`#/wrong`（错题本）、`#/fav`（收藏夹）、`#/notes`（知识点手册）五路由切换，`aria-current="page"` 激活态，未知 Hash 安全回退至 `#/`，桌面端（1440×900）与移动端（390×844）零横向溢出、零交互控件遮挡。
-  - **复习中心门户（`#/`）**：动态题库总量/章节徽章、五题型与三来源分布统计、刷题工具与知识点手册双入口卡片、全书 9 章概览。
-  - **刷题首页（`#/quiz`）**：4 卡统计面板（已练题数/总正确率/错题/收藏，0 题安全显示 `—`）、6 大题型模式卡片（实时联动筛选题量与各模式正确率，空题池安全提示）、章节多选胶囊（`全部` + 1–9 章，保底最少 1 章约束）、来源/题量/顺序筛选、JSON 备份导出/校验导入与确认清空。
-  - **答题会话与结算页**：顶部进度条与实时计时器、题目标签与星标收藏、单选/判断即时判分锁定、多选切换与确认提交、主观题（简答/综合分析）参考答案展开与三级掌握度自评（完全会/有点模糊/不会）、键盘快捷键（`1-9`/`A-I`、`T/F`、`Space`、`ArrowLeft`/`ArrowRight`）及焦点安全保护、可折叠答题卡速跳、四档结算反馈与单题/全错题重练。
-  - **错题本（`#/wrong`）与收藏夹（`#/fav`）**：按章节升序排列、手风琴展开参考答案与解析、一键重做全部、错题本专属确认清空（收藏夹自动隐藏清空按钮）。
-  - **知识点手册（`#/notes`）**：复习总纲、安全子串关键词检索、目录速跳、9 章 64 节详情与各章“刷本章题”定向联动、全部表格包裹于 `notes-table-wrap` 横向滚动容器、4 大速查附录，以及干净的 `@media print` 打印样式表。
+## 1. 当前完成进度（M1 + M2 + M3 + E2E 全量验收通过）
+- **M1 工程骨架与核心刷题引擎**：
+  - 完成 Vite 8 + React 19 + TypeScript + Vitest + Playwright 工程配置。
+  - 完成类型契约（`src/types/quiz.ts`）、判分与题组抽样引擎（`src/core/quizEngine.ts`）、`localStorage` 安全持久化与防原型污染备份导入（`src/core/storage.ts`）、题型/答案格式化工具（`src/core/questionUtils.ts`），**39/39 单元测试全部通过**。
+- **M2 知识点手册与整合大题库构建**：
+  - `src/data/notes.json`：完整提取《人工智能导论复习资料.pdf》，包含全书复习导览、**9 章 64 个知识点小节**及 **4 大速查附录**（时间线与代表人物、高频易混概念对照、主观题答题模板、简答背诵索引）。
+  - `src/data/bank.json`：由 `scripts/build_bank.py` 汇总 4 份原始数据生成，并经 `scripts/audit_bank.py` **0 报错通过**，且经独立抽样对照源 PDF 核验一致：
+    - **总题量：335 题**（去重合并 14 道重复题并记录 `source.duplicatesMerged`）
+    - **按来源**：综合题库 `comprehensive_bank` 117 题（18 页全覆盖） / 视频课弹题 `video_popup` 60 题（74 页全覆盖，14 题与综合题库重合已合并） / 复习资料精编 `review_notes_synthesized` 158 题（**64/64 小节 100% 覆盖**）
+    - **按题型**：单选 106 / 多选 72 / 判断 118（75 对 / 43 错）/ 简答 25 / 综合分析 14
+    - **按章节**：第 1–9 章均有完整分布（Ch1:23, Ch2:24, Ch3:46, Ch4:61, Ch5:41, Ch6:28, Ch7:43, Ch8:31, Ch9:38）
+- **M3 自助刷题与知识点复习网站 UI（Opus 5.5 架构与审美把关 + Gemini 4 Carbon 接力实现）**：
+  - 对齐参考站 `https://z4j5y.github.io/material-review/` 的清新学术浅色风、卡片层级、语义反馈色板与排版规范。
+  - 完整实现 5 大路由（`#/` 复习中心、`#/quiz` 刷题工具、`#/wrong` 错题本、`#/fav` 收藏夹、`#/notes` 知识点手册）、多维筛选（章节多选/来源/题量/顺序）、单选/多选/判断即时判分、简答/分析三级掌握度自评、可折叠答题卡、键盘快捷键及焦点安全保护、JSON 备份导入导出、宽表横向滚动容器与 `@media print` 打印样式。
+- **全量验证状态**：
+  - `python scripts/audit_bank.py`：PASS（0 errors）
+  - `npm run typecheck`：PASS（0 errors）
+  - `npm test`：3 files / 39 tests PASS
+  - `npm run build`：PASS（`dist/` 静态产物可直接部署 GitHub Pages）
+  - Playwright 4 层端到端测试（桌面端 1440×900 203 项 + 移动端 390×844 26 项）：**全量通过**（零控制台错误、零 404、零水平溢出、零控件遮挡）
 
-## 2. 关键改动文件
-- `index.html`（完整学术浅色主题响应式样式与 `@media print` 打印样式）
-- `src/App.tsx`（根状态编排、路由视图切换、结算页 `ResultView`、错题/收藏页 `QuestionListView`、知识点手册页 `NotesView`）
-- `src/components/TopNav.tsx`（五路由全局导航栏）
-- `src/data/catalog.ts`（`notes.json` 与 `import.meta.glob('./bank.json')` 同步兼容加载目录模块）
-- `src/hooks/usePersistentStore.ts`（基于 `localStorage` 与同步快照引用的状态持久化 Hook）
-- `src/router/useHashRoute.ts`（Hash 路由解析与未知路径安全归一化）
-- `src/pages/quizTypes.ts`（刷题会话、结算与弹窗辅助类型及安全封装）
-- `src/pages/HubPage.tsx`（复习中心门户页）
-- `src/pages/QuizHome.tsx`（刷题工具首页与筛选备份面板）
-- `src/pages/QuizSession.tsx`（全题型答题会话、键盘快捷键与答题卡组件）
+## 2. 关键文件清单
+- **数据与构建脚本**：
+  - `src/data/bank.json`（335 题整合大题库）
+  - `src/data/notes.json`（9 章 64 节 + 4 附录结构化知识点手册）
+  - `scripts/raw_comprehensive.json`、`scripts/raw_video_1.json`、`scripts/raw_video_2.json`、`scripts/raw_synthesized.json`（4 份可复现原始题库 JSON）
+  - `scripts/build_bank.py`、`scripts/audit_bank.py`、`scripts/extract_notes.py`、`scripts/export_pdf_pages.py`
+- **前端源码**：
+  - `index.html`（全局学术浅色样式、响应式断点与 `@media print` 规则）
+  - `src/App.tsx`（根状态、五路由、`ResultView`、`QuestionListView`、`NotesView`）
+  - `src/pages/HubPage.tsx`、`src/pages/QuizHome.tsx`、`src/pages/QuizSession.tsx`、`src/pages/quizTypes.ts`
+  - `src/components/TopNav.tsx`、`src/data/catalog.ts`、`src/hooks/usePersistentStore.ts`、`src/router/useHashRoute.ts`
+  - `src/types/quiz.ts`、`src/core/quizEngine.ts`、`src/core/questionUtils.ts`、`src/core/storage.ts`
+- **测试套件与规范**：
+  - `tests/unit/*`（39 项单元测试）
+  - `tests/e2e/*` & `playwright.config.ts`（4 层桌面端 + 移动端 E2E 测试与布局审计）
+  - `AGENTS.md` & `.agents/rules/10-github-handoff.md`（两人接力开发与自动交接规则）
 
-## 3. 当前状态与下一步
-- **当前状态**：`npm run typecheck` 零报错通过，`npm test`（39 项单元测试）全部通过；`catalog.ts` 已配置 `import.meta.glob('./bank.json', { eager: true })`，一旦 `src/data/bank.json` 落盘即可自动静态打包接入，无需再改动 UI 代码。
-- **下一步计划**：
-  1. 完成 `raw_video_2.json` 提取并由 `bank-builder` 运行 `scripts/build_bank.py` 与 `scripts/audit_bank.py` 生成最终 `src/data/bank.json`。
-  2. 运行 `npm run build` 与全套 Playwright E2E 测试（`npm run test:e2e`，含桌面端 1440×900 与移动端 390×844），验证全量交互与布局审计通过。
+## 3. 当前遗留问题 / 报错状态
+- **无阻断性报错**。本地 `npm run dev`、`npm run build`、`npm test`、`npm run test:e2e` 与 `audit_bank.py` 均已验证正常。
+- 轻微非阻断提示：Vite 打包因内联 `bank.json` + `notes.json` 产生单 chunk > 500 kB 提示（gzip 后约 201 kB，不影响纯静态加载与 GitHub Pages 部署）；`audit_bank.py` 有 21 条原题仅有 2–3 个选项的常规提示（忠实保留源 PDF 选项数量）。
+
+## 4. 下一步可选接力任务（To-Do）
+1. **部署上线（GitHub Pages）**：将本项目配置 GitHub Actions 或推送 `dist/` 至 `gh-pages` 分支，生成可直接分享给同学的在线链接（`vite.config.ts` 已设 `base: './'`）。
+2. **可选视觉精修**：待 Claude Opus 5.5 配额恢复后，可对桌面端/移动端页面做一轮精细视觉打磨或补充暗黑模式、题干关键词全局搜索等增强体验。
+3. **可选代码分包**：若希望消除 Vite 500 kB chunk 提示，可在 `vite.config.ts` 为 `src/data/` 增加 `manualChunks` 拆分。
+
+## 5. 架构约定与避坑提示
+- **核心契约勿随意破坏**：`src/types/quiz.ts`、`src/core/*`、`STORAGE_KEY = 'ai-intro-quiz-v1'` 以及 `tests/e2e/helpers/selectors.ts` 中的全部 `data-testid` / `aria-*` / `data-status` 属性受 4 层 E2E 测试严格校验。
+- **数据更新流程**：修改题库请编辑 `scripts/raw_*.json` 后重新运行 `python scripts/build_bank.py && python scripts/audit_bank.py`，勿手改 `src/data/bank.json`。
+- **敏感与临时文件**：`.env`、密钥、`.tmp_pdf_pages/`、`node_modules/`、`dist/`、`playwright-report/`、`test-results/` 均已在 `.gitignore` 忽略。
