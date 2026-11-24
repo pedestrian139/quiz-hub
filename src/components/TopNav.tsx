@@ -1,18 +1,20 @@
 import type { Route } from '../router/useHashRoute';
 import { ROUTE_HASH } from '../router/useHashRoute';
+import { Icon, type IconName } from './Icons';
+import { useTheme } from './useTheme';
 
 interface NavItem {
   route: Route;
   label: string;
-  icon: string;
+  icon: IconName;
 }
 
 const NAV_ITEMS: NavItem[] = [
-  { route: 'hub', label: '复习中心', icon: '🏠' },
-  { route: 'quiz', label: '刷题工具', icon: '✍️' },
-  { route: 'wrong', label: '错题本', icon: '📕' },
-  { route: 'fav', label: '收藏夹', icon: '⭐' },
-  { route: 'notes', label: '知识点手册', icon: '📘' },
+  { route: 'hub', label: '复习中心', icon: 'home' },
+  { route: 'quiz', label: '刷题工具', icon: 'pen' },
+  { route: 'wrong', label: '错题本', icon: 'bookX' },
+  { route: 'fav', label: '收藏夹', icon: 'star' },
+  { route: 'notes', label: '知识点手册', icon: 'book' },
 ];
 
 interface TopNavProps {
@@ -23,6 +25,9 @@ interface TopNavProps {
 }
 
 export function TopNav({ route, wrongCount, favCount, onNavClick }: TopNavProps) {
+  const { theme, toggleTheme } = useTheme();
+  const isDark = theme === 'dark';
+
   const badgeFor = (r: Route): number =>
     r === 'wrong' ? wrongCount : r === 'fav' ? favCount : 0;
 
@@ -53,7 +58,7 @@ export function TopNav({ route, wrongCount, favCount, onNavClick }: TopNavProps)
                 onClick={() => onNavClick(item.route)}
               >
                 <span className="site-nav__icon" aria-hidden="true">
-                  {item.icon}
+                  <Icon name={item.icon} size={16} />
                 </span>
                 <span className="site-nav__label">{item.label}</span>
                 {badge > 0 && (
@@ -65,6 +70,23 @@ export function TopNav({ route, wrongCount, favCount, onNavClick }: TopNavProps)
             );
           })}
         </nav>
+
+        <button
+          type="button"
+          data-testid="theme-toggle"
+          className="theme-toggle"
+          aria-label={isDark ? '切换为浅色主题' : '切换为深色主题'}
+          aria-pressed={isDark ? 'true' : 'false'}
+          title={isDark ? '浅色主题' : '深色主题'}
+          onClick={toggleTheme}
+        >
+          <span className="theme-toggle__icon theme-toggle__icon--sun" aria-hidden="true">
+            <Icon name="sun" size={17} />
+          </span>
+          <span className="theme-toggle__icon theme-toggle__icon--moon" aria-hidden="true">
+            <Icon name="moon" size={17} />
+          </span>
+        </button>
       </div>
     </header>
   );

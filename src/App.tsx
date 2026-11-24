@@ -33,6 +33,7 @@ import {
   TYPE_NAME,
 } from './data/catalog';
 import { TopNav } from './components/TopNav';
+import { Icon } from './components/Icons';
 import { usePersistentStore } from './hooks/usePersistentStore';
 import { useHashRoute, type Route } from './router/useHashRoute';
 import { HubPage } from './pages/HubPage';
@@ -135,8 +136,18 @@ function ResultView({
           <span className={`pill pill--${tier.tone}`}>{tier.badge}</span>
         </div>
 
-        <div data-testid="result-score" className="result-score">
-          {result.accuracyPct}%
+        <div
+          className="result-score-ring"
+          style={{ ['--pct' as string]: `${result.accuracyPct}` }}
+        >
+          <div className="result-score-ring__inner">
+            <div data-testid="result-score" className="result-score">
+              {result.accuracyPct}%
+            </div>
+            <span className="result-score-ring__sub" aria-hidden="true">
+              本组正确率
+            </span>
+          </div>
         </div>
         <h1 className="result-headline">{tier.headline}</h1>
         <p className="result-advice">{tier.advice}</p>
@@ -225,7 +236,9 @@ function ResultView({
                         {TYPE_NAME[q.type]}
                       </span>
                     </div>
-                    <span className="review-item-btn__cta">单题重练 →</span>
+                    <span className="review-item-btn__cta">
+                      单题重练 <Icon name="arrowRight" size={14} />
+                    </span>
                   </div>
                   <div className="review-item-btn__stem">{q.stem}</div>
                   <div className="review-item-btn__ans">参考答案：{formatAnswerText(q)}</div>
@@ -292,7 +305,8 @@ function QuestionListView({
         <div>
           <div className="hero-eyebrow">
             <span className={`pill ${isWrongBook ? 'pill--bad' : 'pill--warn'}`}>
-              {isWrongBook ? '📕 错题攻克清单' : '⭐ 重点题目收藏'}
+              <Icon name={isWrongBook ? 'bookX' : 'star'} size={13} />
+              {isWrongBook ? '错题攻克清单' : '重点题目收藏'}
             </span>
             <span className="pill pill--subtle">按章节升序排列 · 共 {items.length} 题</span>
           </div>
@@ -330,19 +344,19 @@ function QuestionListView({
 
       {items.length === 0 ? (
         <div data-testid="list-empty" className="empty-card">
-          <div style={{ fontSize: '36px' }} aria-hidden="true">
-            {isWrongBook ? '🎉' : '⭐'}
+          <div className="empty-card__badge" aria-hidden="true">
+            <Icon name={isWrongBook ? 'circleCheck' : 'star'} size={28} />
           </div>
-          <h2 style={{ margin: 0, fontSize: '18px', color: 'var(--ink)' }}>
+          <h2 className="empty-card__title">
             {isWrongBook ? '当前没有待攻克的错题' : '收藏夹暂时为空'}
           </h2>
-          <p style={{ margin: 0, maxWidth: '420px' }}>
+          <p className="empty-card__desc">
             {isWrongBook
               ? '保持出色状态！前往刷题工具继续练习，遇到薄弱题会自动汇总到这里。'
               : '在刷题页面点击题目右上角的“收藏”按钮，即可将重点考题加入此处。'}
           </p>
           <button type="button" className="btn btn--primary" onClick={onGoQuizHome}>
-            前往刷题工具 →
+            前往刷题工具 <Icon name="arrowRight" size={15} />
           </button>
         </div>
       ) : (
@@ -376,7 +390,7 @@ function QuestionListView({
                     aria-pressed={isFav ? 'true' : 'false'}
                     onClick={() => onToggleFav(q.id)}
                   >
-                    <span aria-hidden="true">{isFav ? '★' : '☆'}</span>
+                    <Icon name={isFav ? 'starFill' : 'star'} size={15} />
                     <span>{isFav ? '已收藏' : '收藏'}</span>
                   </button>
                 </div>
@@ -584,11 +598,17 @@ function NotesView({ onPracticeChapter }: NotesViewProps) {
 
   return (
     <div className="page-wrap page-wrap--notes">
-      <section className="hero-card">
+      <section className="hero-card hero-card--notes">
         <div className="hero-eyebrow">
-          <span className="pill pill--brand">📘 课程知识体系精编</span>
+          <span className="pill pill--brand">
+            <Icon name="book" size={13} />
+            课程知识体系精编
+          </span>
           <span className="pill pill--neutral">9 章 · 64 节 · 4 大速查附录</span>
-          <span className="pill pill--subtle">🖨️ 支持浏览器直接打印导出 PDF</span>
+          <span className="pill pill--subtle">
+            <Icon name="fileText" size={13} />
+            支持浏览器直接打印导出 PDF
+          </span>
         </div>
         <h1 className="hero-title">{NOTES.meta.title}</h1>
         <p className="hero-subtitle">
@@ -666,7 +686,10 @@ function NotesView({ onPracticeChapter }: NotesViewProps) {
                 ))}
               </ul>
               <div className="notes-callout" style={{ marginTop: '14px' }}>
-                <strong>🎯 考前高频抢分提示：</strong>
+                <strong className="notes-callout__lead">
+                  <Icon name="target" size={15} />
+                  考前高频抢分提示：
+                </strong>
                 <ul className="notes-kp-list" style={{ marginTop: '6px' }}>
                   {NOTES.overview.examTips.map((tip, i) => (
                     <li key={i}>{tip}</li>
@@ -706,7 +729,7 @@ function NotesView({ onPracticeChapter }: NotesViewProps) {
                   className="btn btn--soft-brand btn--sm btn-quiz-chapter"
                   onClick={() => onPracticeChapter(ch.id)}
                 >
-                  刷本章题 →
+                  刷本章题 <Icon name="arrowRight" size={14} />
                 </button>
               </div>
 
@@ -746,7 +769,10 @@ function NotesView({ onPracticeChapter }: NotesViewProps) {
 
                     {sec.callout && (
                       <blockquote className="notes-callout">
-                        <strong>💡 考点辨析：</strong>
+                        <strong className="notes-callout__lead">
+                          <Icon name="sparkles" size={15} />
+                          考点辨析：
+                        </strong>
                         {sec.callout}
                       </blockquote>
                     )}
@@ -800,14 +826,21 @@ export default function App() {
     origin: 'all',
     count: 20,
     order: 'random',
+    search: '',
   }));
   const [quizView, setQuizView] = useState<QuizView>({ type: 'home' });
   const [toast, setToast] = useState<{ message: string; tone: ToastTone } | null>(null);
 
   const sessionSeqRef = useRef(1);
   const toastTimerRef = useRef<number | null>(null);
+  const preserveQuizViewRef = useRef(false);
 
   const handleRouteChanged = useCallback((next: Route) => {
+    if (preserveQuizViewRef.current && next === 'quiz') {
+      preserveQuizViewRef.current = false;
+      return;
+    }
+    preserveQuizViewRef.current = false;
     if (
       next !== 'quiz' ||
       (typeof window !== 'undefined' &&
@@ -893,6 +926,7 @@ export default function App() {
         },
       });
       if (route !== 'quiz') {
+        preserveQuizViewRef.current = true;
         navigate('quiz');
       }
       window.scrollTo(0, 0);
@@ -903,6 +937,7 @@ export default function App() {
   const handleStartMode = useCallback(
     (mode: 'all' | QuestionType) => {
       const title = mode === 'all' ? '总体刷题' : TYPE_NAME[mode];
+      const search = filters.search.trim() || undefined;
       startSessionWithConfig({
         kind: 'mode',
         title,
@@ -910,6 +945,7 @@ export default function App() {
           mode,
           chapters: filters.chapters,
           origins: filters.origin === 'all' ? undefined : [filters.origin],
+          search,
           count: filters.count,
           order: filters.order,
         },
@@ -920,6 +956,7 @@ export default function App() {
 
   const handleNavClick = useCallback(
     (target: Route) => {
+      preserveQuizViewRef.current = false;
       if (target === 'quiz') {
         setQuizView({ type: 'home' });
       }
@@ -929,10 +966,12 @@ export default function App() {
 
   const handlePracticeChapter = useCallback(
     (chapterId: number) => {
+      preserveQuizViewRef.current = false;
       setFilters((prev) => ({
         ...prev,
         chapters: [chapterId],
         origin: 'all',
+        search: '',
       }));
       setQuizView({ type: 'home' });
       navigate('quiz');
@@ -961,7 +1000,13 @@ export default function App() {
       )}
 
       <main className="app-main">
-        {route === 'hub' && <HubPage stats={homeStats} />}
+        {route === 'hub' && (
+          <HubPage
+            stats={homeStats}
+            store={storeApi.store}
+            onPracticeChapter={handlePracticeChapter}
+          />
+        )}
 
         {route === 'quiz' && quizView.type === 'home' && (
           <QuizHome

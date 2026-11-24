@@ -14,6 +14,8 @@ export interface FilterState {
   origin: 'all' | QuestionOrigin;
   count: CountOption;
   order: 'random' | 'seq';
+  /** Free-text keyword filter over stem / options / explanation (empty = no filter). */
+  search: string;
 }
 
 export type SessionKind = 'mode' | 'wrong' | 'fav' | 'retry' | 'review';

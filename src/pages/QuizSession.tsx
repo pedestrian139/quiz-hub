@@ -9,6 +9,7 @@ import {
 } from '../core/questionUtils';
 import { computeSessionResult } from '../core/quizEngine';
 import { CHAPTER_BY_ID, TYPE_NAME } from '../data/catalog';
+import { Icon, type IconName } from '../components/Icons';
 import type { QuizActions, ResultSpec, SessionSpec } from './quizTypes';
 
 interface QuizSessionProps {
@@ -19,10 +20,16 @@ interface QuizSessionProps {
   onFinish: (resultSpec: ResultSpec) => void;
 }
 
-const MASTERY_OPTIONS: { level: MasteryLevel; label: string; icon: string; tone: string }[] = [
-  { level: 2, label: '完全会', icon: '✅', tone: 'ok' },
-  { level: 1, label: '有点模糊', icon: '🤔', tone: 'warn' },
-  { level: 0, label: '不会', icon: '❌', tone: 'bad' },
+const MASTERY_OPTIONS: {
+  level: MasteryLevel;
+  label: string;
+  hint: string;
+  icon: IconName;
+  tone: string;
+}[] = [
+  { level: 2, label: '完全会', hint: '计入已掌握', icon: 'circleCheck', tone: 'ok' },
+  { level: 1, label: '有点模糊', hint: '归入错题本', icon: 'circleHelp', tone: 'warn' },
+  { level: 0, label: '不会', hint: '重点攻克', icon: 'circleX', tone: 'bad' },
 ];
 
 function formatUserChoiceText(q: Question, choice: number | number[] | boolean | undefined): string {
@@ -290,7 +297,8 @@ export function QuizSession({ spec, store, actions, onExit, onFinish }: QuizSess
             className="btn btn--ghost btn--sm"
             onClick={onExit}
           >
-            ← 退出刷题
+            <Icon name="arrowLeft" size={15} />
+            退出刷题
           </button>
 
           <div className="session-topbar__center">
@@ -304,7 +312,7 @@ export function QuizSession({ spec, store, actions, onExit, onFinish }: QuizSess
 
           <div className="session-topbar__right">
             <span className="session-timer" aria-label="已用时">
-              <span aria-hidden="true">⏱ </span>
+              <Icon name="clock" size={14} />
               <span data-testid="quiz-timer">{formatElapsed(elapsedMs)}</span>
             </span>
             <button
@@ -314,6 +322,7 @@ export function QuizSession({ spec, store, actions, onExit, onFinish }: QuizSess
               aria-expanded={sheetOpen}
               onClick={() => setSheetOpen((prev) => !prev)}
             >
+              <Icon name="grid" size={14} />
               答题卡 ({answeredCount}/{total})
             </button>
           </div>
@@ -354,7 +363,7 @@ export function QuizSession({ spec, store, actions, onExit, onFinish }: QuizSess
             aria-pressed={isFav ? 'true' : 'false'}
             onClick={() => actions.toggleFav(q.id)}
           >
-            <span aria-hidden="true">{isFav ? '★' : '☆'}</span>
+            <Icon name={isFav ? 'starFill' : 'star'} size={15} />
             <span>{isFav ? '已收藏' : '收藏'}</span>
           </button>
         </div>
@@ -385,8 +394,15 @@ export function QuizSession({ spec, store, actions, onExit, onFinish }: QuizSess
                   className={`option-btn${stateCls}`}
                   onClick={() => handleChoicePick(idx)}
                 >
-                  <span className="option-btn__badge">{getOptionLabel(idx)}</span>
+                  <span className="option-btn__badge" aria-hidden="true">
+                    {getOptionLabel(idx)}
+                  </span>
                   <span className="option-btn__text">{optText}</span>
+                  {isGraded && (isCorrectOption || isUserWrong) && (
+                    <span className="option-btn__mark" aria-hidden="true">
+                      <Icon name={isCorrectOption ? 'check' : 'x'} size={16} strokeWidth={2.4} />
+                    </span>
+                  )}
                 </button>
               );
             })}
@@ -400,14 +416,18 @@ export function QuizSession({ spec, store, actions, onExit, onFinish }: QuizSess
                 const picked = selectedMultiSet.has(idx);
                 const shouldPick = correctMultiSet.has(idx);
                 let stateCls = '';
+                let markText = '';
                 if (!isGraded) {
                   if (picked) stateCls = ' is-selected';
                 } else if (shouldPick && picked) {
                   stateCls = ' is-correct';
+                  markText = '✓';
                 } else if (shouldPick && !picked) {
                   stateCls = ' is-missed';
+                  markText = '漏选';
                 } else if (!shouldPick && picked) {
                   stateCls = ' is-wrong';
+                  markText = '✕';
                 }
                 return (
                   <button
@@ -419,8 +439,24 @@ export function QuizSession({ spec, store, actions, onExit, onFinish }: QuizSess
                     className={`option-btn option-btn--multi${stateCls}`}
                     onClick={() => handleMultiToggle(idx)}
                   >
-                    <span className="option-btn__badge">{getOptionLabel(idx)}</span>
+                    <span className="option-btn__badge" aria-hidden="true">
+                      {getOptionLabel(idx)}
+                    </span>
                     <span className="option-btn__text">{optText}</span>
+                    {!isGraded ? (
+                      <span
+                        className={`option-btn__check${picked ? ' is-checked' : ''}`}
+                        aria-hidden="true"
+                      >
+                        {picked && <Icon name="check" size={13} strokeWidth={2.6} />}
+                      </span>
+                    ) : (
+                      markText && (
+                        <span className="option-btn__mark" aria-hidden="true">
+                          {markText}
+                        </span>
+                      )
+                    )}
                   </button>
                 );
               })}
@@ -434,6 +470,7 @@ export function QuizSession({ spec, store, actions, onExit, onFinish }: QuizSess
                 disabled={isGraded || selectedMulti.length === 0}
                 onClick={handleSubmitMulti}
               >
+                <Icon name="checkSquare" size={16} />
                 确认提交
                 {!isGraded && selectedMulti.length > 0 ? `（已选 ${selectedMulti.length} 项）` : ''}
               </button>
@@ -460,9 +497,12 @@ export function QuizSession({ spec, store, actions, onExit, onFinish }: QuizSess
                   onClick={() => handleTfPick(val)}
                 >
                   <span className="tf-btn__icon" aria-hidden="true">
-                    {val ? '✓' : '✕'}
+                    <Icon name={val ? 'check' : 'x'} size={18} strokeWidth={2.4} />
                   </span>
                   <span>{val ? '正确' : '错误'}</span>
+                  <kbd className="tf-btn__kbd" aria-hidden="true">
+                    {val ? 'T' : 'F'}
+                  </kbd>
                 </button>
               );
             })}
@@ -476,7 +516,12 @@ export function QuizSession({ spec, store, actions, onExit, onFinish }: QuizSess
           >
             <div className="quiz-feedback__head">
               <strong className="quiz-feedback__status">
-                {currentRecord.ok === 1 ? '✓ 回答正确' : '✕ 回答错误'}
+                <Icon
+                  name={currentRecord.ok === 1 ? 'circleCheck' : 'circleX'}
+                  size={17}
+                  strokeWidth={2.1}
+                />
+                {currentRecord.ok === 1 ? '回答正确' : '回答错误'}
               </strong>
               <span className="quiz-feedback__ans">
                 你的作答：{formatUserChoiceText(q, currentRecord.choice)} · 正确答案：
@@ -504,6 +549,7 @@ export function QuizSession({ spec, store, actions, onExit, onFinish }: QuizSess
                   className="btn btn--primary"
                   onClick={handleReveal}
                 >
+                  <Icon name="sparkles" size={16} />
                   显示参考答案
                 </button>
               </div>
@@ -550,8 +596,13 @@ export function QuizSession({ spec, store, actions, onExit, onFinish }: QuizSess
                           className={`selfcheck-btn selfcheck-btn--${item.tone}${active ? ' is-active' : ''}`}
                           onClick={() => handleSelfCheck(item.level)}
                         >
-                          <span aria-hidden="true">{item.icon} </span>
-                          {item.label}
+                          <span className="selfcheck-btn__main">
+                            <Icon name={item.icon} size={17} />
+                            <span>{item.label}</span>
+                          </span>
+                          <span className="selfcheck-btn__hint" aria-hidden="true">
+                            {item.hint}
+                          </span>
                         </button>
                       );
                     })}
@@ -571,11 +622,12 @@ export function QuizSession({ spec, store, actions, onExit, onFinish }: QuizSess
           disabled={safeIndex === 0}
           onClick={handlePrev}
         >
+          <Icon name="arrowLeft" size={16} />
           上一题
         </button>
 
         <span className="shortcut-hint">
-          快捷键：← / → 切题 · 1–4 / A–D 选项 · T/F 判断 · Space 看答案
+          快捷键：<kbd>←</kbd> / <kbd>→</kbd> 切题 · <kbd>1–4</kbd> / <kbd>A–D</kbd> 选项 · <kbd>T</kbd>/<kbd>F</kbd> 判断 · <kbd>Space</kbd> 看答案
         </span>
 
         <button
@@ -585,6 +637,7 @@ export function QuizSession({ spec, store, actions, onExit, onFinish }: QuizSess
           onClick={handleNext}
         >
           {isLast ? '看结果' : '下一题'}
+          <Icon name="arrowRight" size={16} />
         </button>
       </div>
 

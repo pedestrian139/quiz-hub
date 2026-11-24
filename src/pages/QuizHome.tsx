@@ -1,4 +1,4 @@
-import { useMemo, useRef, type ChangeEvent } from 'react';
+import { useMemo, useRef, type ChangeEvent, type KeyboardEvent } from 'react';
 import type { HomeStats, QuestionOrigin, QuestionType, UserStore } from '../types/quiz';
 import { buildQueue, computeModeStats } from '../core/quizEngine';
 import { exportStoreJson, importStoreJson } from '../core/storage';
@@ -9,6 +9,7 @@ import {
   QUESTIONS,
 } from '../data/catalog';
 import type { Route } from '../router/useHashRoute';
+import { Icon, type IconName } from '../components/Icons';
 import type { CountOption, FilterState, Notify } from './quizTypes';
 import { safeAlert, safeConfirm } from './quizTypes';
 
@@ -17,7 +18,7 @@ interface ModeCardDef {
   title: string;
   subtitle: string;
   badgeTone: string;
-  icon: string;
+  icon: IconName;
   wide?: boolean;
 }
 
@@ -27,7 +28,7 @@ const MODE_CARDS: ModeCardDef[] = [
     title: '总体刷题',
     subtitle: '混合单选、多选、判断、简答与综合分析，模拟真实考卷结构全面演练',
     badgeTone: 'brand',
-    icon: '🎯',
+    icon: 'target',
     wide: true,
   },
   {
@@ -35,35 +36,35 @@ const MODE_CARDS: ModeCardDef[] = [
     title: '单选题',
     subtitle: '四选一概念与方法辨析，点击或按数字键即时判分',
     badgeTone: 'brand',
-    icon: '🔘',
+    icon: 'circleDot',
   },
   {
     mode: 'multi',
     title: '多选题',
     subtitle: '多维度特征与要素组合判断，少选、多选或错选均判错',
     badgeTone: 'teal',
-    icon: '☑️',
+    icon: 'checkSquare',
   },
   {
     mode: 'tf',
     title: '判断题',
     subtitle: '高频易混命题正误速判，精准扫除概念盲区',
     badgeTone: 'ok',
-    icon: '⚖️',
+    icon: 'scale',
   },
   {
     mode: 'short',
     title: '简答题',
     subtitle: '对照标准参考答案与采分要点，三级掌握度自我评估',
     badgeTone: 'warn',
-    icon: '📝',
+    icon: 'fileText',
   },
   {
     mode: 'analysis',
     title: '综合分析题',
     subtitle: '跨章节系统流程设计、模型优劣对比与场景应用深度剖析',
     badgeTone: 'purple',
-    icon: '🧠',
+    icon: 'network',
   },
 ];
 
@@ -91,12 +92,16 @@ export function QuizHome({
   notify,
 }: QuizHomeProps) {
   const fileInputRef = useRef<HTMLInputElement | null>(null);
+  const searchInputRef = useRef<HTMLInputElement | null>(null);
 
   const selectedChapterSet = useMemo(() => new Set(filters.chapters), [filters.chapters]);
   const allChaptersSelected = filters.chapters.length === CHAPTERS.length;
+  const searchQuery = filters.search ?? '';
+  const hasSearch = searchQuery.trim().length > 0;
 
   const matchingCounts = useMemo(() => {
     const origins = filters.origin === 'all' ? undefined : [filters.origin];
+    const search = searchQuery.trim() || undefined;
     const result: Record<'all' | QuestionType, number> = {
       all: 0,
       choice: 0,
@@ -110,12 +115,13 @@ export function QuizHome({
         mode: def.mode,
         chapters: filters.chapters,
         origins,
+        search,
         count: 0,
         order: 'seq',
       }).length;
     }
     return result;
-  }, [filters.chapters, filters.origin]);
+  }, [filters.chapters, filters.origin, searchQuery]);
 
   const modeStatsMap = useMemo(() => {
     return {
@@ -158,12 +164,32 @@ export function QuizHome({
   const handleModeClick = (mode: 'all' | QuestionType) => {
     const count = matchingCounts[mode];
     if (count <= 0) {
-      const msg = '当前章节与题目来源筛选组合下暂无该题型题目，请调整筛选条件。';
+      const msg = hasSearch
+        ? `当前章节、来源与关键词“${searchQuery.trim()}”组合下暂无该题型题目，请调整筛选条件或清除关键词。`
+        : '当前章节与题目来源筛选组合下暂无该题型题目，请调整筛选条件。';
       notify(msg, 'info');
       safeAlert(msg);
       return;
     }
     onStartMode(mode, count);
+  };
+
+  const handleSearchChange = (e: ChangeEvent<HTMLInputElement>) => {
+    onChangeFilters({ ...filters, search: e.target.value });
+  };
+
+  const handleSearchClear = () => {
+    onChangeFilters({ ...filters, search: '' });
+    searchInputRef.current?.focus();
+  };
+
+  const handleSearchKeyDown = (e: KeyboardEvent<HTMLInputElement>) => {
+    // Keep typing isolated from any global shortcut listeners.
+    e.stopPropagation();
+    if (e.key === 'Escape' && searchQuery.length > 0) {
+      e.preventDefault();
+      handleSearchClear();
+    }
   };
 
   const handleExport = () => {
@@ -223,9 +249,14 @@ export function QuizHome({
             题库共 {COUNTS.total} 道题
           </span>
           <span className="pill pill--neutral">{CHAPTERS.length} 章全覆盖</span>
-          <span className="pill pill--subtle">💾 本地保存进度</span>
+          <span className="pill pill--subtle">
+            <Icon name="shield" size={13} />
+            本地保存进度
+          </span>
         </div>
-        <h1 className="hero-title">人工智能导论 · 自助刷题工具</h1>
+        <h1 className="hero-title">
+          人工智能导论 · <span className="hero-title__accent">自助刷题工具</span>
+        </h1>
         <p className="hero-subtitle">
           先在下方按需筛选章节、题目来源与单次题量，再点击任一题型卡片即可开始练习。支持键盘快捷键（1–4 / A–D、T/F、空格看答案、方向键切题）。
         </p>
@@ -262,7 +293,8 @@ export function QuizHome({
         <div className="section-head">
           <h2 className="section-head__title">选择刷题模式</h2>
           <span className="section-head__hint">
-            当前筛选范围：{filters.chapters.length === CHAPTERS.length ? '全部 9 章' : `已选 ${filters.chapters.length} 章`} · 匹配{' '}
+            当前筛选范围：{filters.chapters.length === CHAPTERS.length ? '全部 9 章' : `已选 ${filters.chapters.length} 章`}
+            {hasSearch ? ` · 关键词“${searchQuery.trim()}”` : ''} · 匹配{' '}
             <strong>{matchingCounts.all}</strong> 题
           </span>
         </div>
@@ -283,7 +315,7 @@ export function QuizHome({
                 <div className="mode-card__header">
                   <div className="mode-card__title-group">
                     <span className="mode-card__icon" aria-hidden="true">
-                      {card.icon}
+                      <Icon name={card.icon} size={20} />
                     </span>
                     <span className="mode-card__title">{card.title}</span>
                   </div>
@@ -303,7 +335,7 @@ export function QuizHome({
                     </span>
                   )}
                   <span className="mode-card__arrow" aria-hidden="true">
-                    开始 →
+                    开始 <Icon name="arrowRight" size={15} />
                   </span>
                 </div>
               </button>
@@ -313,6 +345,55 @@ export function QuizHome({
       </section>
 
       <section className="filter-panel" aria-label="出题筛选与数据管理">
+        <div className="filter-group filter-group--search">
+          <div className="filter-group__head">
+            <label className="filter-group__label" htmlFor="filter-search-input">
+              关键词检索
+            </label>
+            <span className="filter-group__meta" aria-live="polite">
+              {hasSearch ? (
+                <>
+                  命中 <strong>{matchingCounts.all}</strong> 题
+                </>
+              ) : (
+                '匹配题干、选项、解析与标签'
+              )}
+            </span>
+          </div>
+          <div className={`search-field${hasSearch ? ' has-value' : ''}`}>
+            <span className="search-field__icon" aria-hidden="true">
+              <Icon name="search" size={17} />
+            </span>
+            <input
+              ref={searchInputRef}
+              id="filter-search-input"
+              data-testid="filter-search"
+              type="search"
+              inputMode="search"
+              enterKeyHint="search"
+              autoComplete="off"
+              spellCheck={false}
+              className="search-field__input"
+              placeholder="搜索题干、选项或解析关键词…"
+              value={searchQuery}
+              onChange={handleSearchChange}
+              onKeyDown={handleSearchKeyDown}
+            />
+            {searchQuery.length > 0 && (
+              <button
+                type="button"
+                data-testid="filter-search-clear"
+                className="search-field__clear"
+                aria-label="清除搜索关键词"
+                title="清除关键词（Esc）"
+                onClick={handleSearchClear}
+              >
+                <Icon name="x" size={16} />
+              </button>
+            )}
+          </div>
+        </div>
+
         <div className="filter-group">
           <div className="filter-group__head">
             <span className="filter-group__label">章节范围（可多选，至少保留 1 章）</span>
@@ -426,7 +507,7 @@ export function QuizHome({
               className="btn btn--soft-bad"
               onClick={() => onNavigate('wrong')}
             >
-              📕 错题本 ({stats.wrongCount})
+              <Icon name="bookX" size={16} />错题本 ({stats.wrongCount})
             </button>
             <button
               type="button"
@@ -434,7 +515,7 @@ export function QuizHome({
               className="btn btn--soft-warn"
               onClick={() => onNavigate('fav')}
             >
-              ⭐ 收藏夹 ({stats.favCount})
+              <Icon name="star" size={16} />收藏夹 ({stats.favCount})
             </button>
           </div>
 
@@ -445,7 +526,7 @@ export function QuizHome({
               className="btn btn--ghost"
               onClick={handleExport}
             >
-              ⬇️ 导出进度
+              <Icon name="download" size={16} />导出进度
             </button>
             <button
               type="button"
@@ -453,7 +534,7 @@ export function QuizHome({
               className="btn btn--ghost"
               onClick={() => fileInputRef.current?.click()}
             >
-              ⬆️ 导入进度
+              <Icon name="upload" size={16} />导入进度
             </button>
             <input
               ref={fileInputRef}
@@ -469,7 +550,7 @@ export function QuizHome({
               className="btn btn--danger-outline"
               onClick={handleReset}
             >
-              🗑️ 清空记录
+              <Icon name="trash" size={16} />清空记录
             </button>
           </div>
         </div>
