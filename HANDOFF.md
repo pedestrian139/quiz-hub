@@ -51,7 +51,7 @@
 - GitHub Pages 首次上线前，需仓库管理员在 GitHub 仓库 `Settings -> Pages -> Build and deployment -> Source` 中选择 **GitHub Actions**，随后推送 `main` 或手动触发工作流即可生成在线站点链接。
 
 ## 4. 下一步可选接力任务（To-Do）
-1. **开启 GitHub Pages 发布**：在 GitHub 仓库开启 Pages（Source: GitHub Actions），核验 `https://zzm13920690395.github.io/quiz-hub/` 在线访问正常后即可分享给同学使用。
+1. **开启 GitHub Pages 发布**：在 GitHub 仓库开启 Pages（Source: GitHub Actions），核验 `https://pedestrian139.github.io/quiz-hub/` 在线访问正常后即可分享给同学使用。
 2. **可选功能扩展**：如需支持同目录下 `材料导论/` 课程，可复用当前架构接入新题库模块。
 
 ## 5. 架构约定与避坑提示
