@@ -19,10 +19,16 @@ playwright-report/
 test-results/
 blob-report/
 
+# Secrets & local env
+.env
+.env.*
+*.secret
+
 # Python corpus tooling (M2)
 __pycache__/
 *.py[cod]
 .venv/
+.tmp_pdf_pages/
 
 # OS / Editor
 .DS_Store
