@@ -10,6 +10,7 @@ import {
 import { computeSessionResult } from '../core/quizEngine';
 import { CHAPTER_BY_ID, TYPE_NAME } from '../data/catalog';
 import { Icon, type IconName } from '../components/Icons';
+import { AiQuestionTutor } from '../components/ApiSettings';
 import type { QuizActions, ResultSpec, SessionSpec } from './quizTypes';
 
 interface QuizSessionProps {
@@ -612,6 +613,7 @@ export function QuizSession({ spec, store, actions, onExit, onFinish }: QuizSess
             )}
           </div>
         )}
+        <AiQuestionTutor key={q.id} question={q} userRecord={currentRecord} isGraded={isGraded} isRevealed={isRevealed} chapterTitle={chMeta?.short} onSuggestedMastery={!isObjectiveQuestion(q.type) ? handleSelfCheck : undefined} />
       </article>
 
       <div className="session-nav-bar">
