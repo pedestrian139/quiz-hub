@@ -34,6 +34,7 @@ import {
 } from './data/catalog';
 import { TopNav } from './components/TopNav';
 import { QuizImportPortal } from './components/QuizImport';
+import { AuthModal, UserMenu } from './components/Auth';
 import { Icon } from './components/Icons';
 import { usePersistentStore } from './hooks/usePersistentStore';
 import { useHashRoute, type Route } from './router/useHashRoute';
@@ -989,6 +990,8 @@ export default function App() {
         favCount={homeStats.favCount}
         onNavClick={handleNavClick}
       />
+      <UserMenu />
+      <AuthModal />
       <QuizImportPortal />
 
       {toast && (
