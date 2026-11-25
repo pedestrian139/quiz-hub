@@ -10,7 +10,17 @@ import { getBankDb } from '../../src/utils/bankDb';
 import type { AccountProfile } from '../../src/services/db/cloudData';
 
 const mock = vi.hoisted(() => ({
-  auth: { getUser: vi.fn(), getSession: vi.fn(), signUp: vi.fn(), signInWithPassword: vi.fn(), setSession: vi.fn(), updateUser: vi.fn(), onAuthStateChange: vi.fn() },
+  auth: {
+    getUser: vi.fn(),
+    getSession: vi.fn(),
+    signUp: vi.fn(),
+    signInWithPassword: vi.fn(),
+    signInWithOtp: vi.fn(),
+    verifyOtp: vi.fn(),
+    resend: vi.fn(),
+    signOut: vi.fn(),
+    onAuthStateChange: vi.fn(),
+  },
   invoke: vi.fn(),
   loadProfile: vi.fn(),
   upload: vi.fn(),
@@ -21,12 +31,23 @@ vi.mock('../../src/services/db/client', () => ({
 }));
 vi.mock('../../src/services/db/cloudData', () => ({ loadProfile: mock.loadProfile, uploadGuestData: mock.upload }));
 
-import { getCurrentUser, loginAsGuest, loginWithAccount, registerWithAccount, resumeGuestUpgrade, syncLocalData, upgradeGuestToAccount } from '../../src/services/authService';
+import {
+  getCurrentUser,
+  loginAsGuest,
+  loginWithAccount,
+  registerWithAccount,
+  resendSignupOtp,
+  resumeGuestUpgrade,
+  sendLoginOtp,
+  syncLocalData,
+  upgradeGuestToAccount,
+  verifyEmailOtp,
+} from '../../src/services/authService';
 import { endGuest, GUEST_KEY } from '../../src/services/db/guestData';
 import { readPendingUpgrade } from '../../src/services/db/guestUpgrade';
 
 const emailUser: AccountProfile = { id: 'email-owner', email: 'target@example.com', phone: null, nickname: '邮箱', isGuest: false };
-const phoneUser: AccountProfile = { id: 'phone-owner', email: null, phone: '00123456789', nickname: '手机号', isGuest: false };
+const otherEmailUser: AccountProfile = { id: 'other-owner', email: 'other@example.com', phone: null, nickname: '另一位', isGuest: false };
 const emailScope = accountPracticeScope(emailUser.id);
 
 function signInAs(user: AccountProfile) {
@@ -44,6 +65,7 @@ describe('auth service and account-bound guest upgrades', () => {
     endGuest();
     mock.auth.getSession.mockResolvedValue({ data: { session: null }, error: null });
     mock.auth.getUser.mockResolvedValue({ data: { user: null }, error: { name: 'AuthSessionMissingError' } });
+    mock.auth.signOut.mockResolvedValue({ error: null });
     mock.upload.mockResolvedValue({ skippedBankIds: [], skippedApiConfig: false });
   });
 
@@ -58,13 +80,13 @@ describe('auth service and account-bound guest upgrades', () => {
     const guest = await loginAsGuest();
     const progress = { records: { q1: { ok: 1 as const, ts: 123 } }, fav: {}, mastery: {} };
     saveStore(progress);
-    mock.auth.signUp.mockResolvedValue({ data: { session: null }, error: null });
+    mock.auth.signUp.mockResolvedValue({ data: { user: { id: emailUser.id, identities: [{ id: '1' }] }, session: null }, error: null });
     expect(await upgradeGuestToAccount({ account: emailUser.email!, password: 'secret-password' }))
       .toEqual({ status: 'email_confirmation_required', user: null });
     expect(await getCurrentUser()).toEqual(guest);
 
-    signInAs(phoneUser);
-    expect(await getCurrentUser()).toEqual(phoneUser);
+    signInAs(otherEmailUser);
+    expect(await getCurrentUser()).toEqual(otherEmailUser);
     expect(mock.upload).not.toHaveBeenCalled();
     expect(readPendingUpgrade()?.account.value).toBe(emailUser.email);
 
@@ -185,34 +207,79 @@ describe('auth service and account-bound guest upgrades', () => {
     expect(await getCurrentUser()).toBeNull();
   });
 
-  it('starts dual registration with one phone account and requests email verification for that same account', async () => {
-    signInAs(phoneUser);
-    mock.invoke.mockImplementation(async (_service, body: { action: string }) => body.action === 'login'
-      ? { access_token: 'access', refresh_token: 'refresh' } : { ok: true });
-    mock.auth.setSession.mockResolvedValue({ data: { user: { id: phoneUser.id } }, error: null });
-    mock.auth.updateUser.mockResolvedValue({ data: { user: { id: phoneUser.id } }, error: null });
-
-    expect(await registerWithAccount({ account: 'real@example.com', secondaryAccount: phoneUser.phone!,
-      password: 'secret-password', nickname: phoneUser.nickname })).toEqual({
-      status: 'authenticated', user: phoneUser, pendingEmail: 'real@example.com',
+  it('registers with email + password and activates via verifyOtp with type email', async () => {
+    mock.auth.signUp.mockResolvedValue({ data: { user: { id: emailUser.id, identities: [{ id: '1' }] }, session: null }, error: null });
+    expect(await registerWithAccount({ account: ' Target@Example.com ', password: 'secret-password', nickname: '邮箱' })).toEqual({
+      status: 'email_confirmation_required', user: null,
     });
-    expect(mock.auth.signUp).not.toHaveBeenCalled();
-    expect(mock.auth.updateUser).toHaveBeenCalledWith({ email: 'real@example.com' }, { emailRedirectTo: expect.any(String) });
-    expect(mock.invoke).toHaveBeenCalledWith('phone-auth', expect.objectContaining({
-      action: 'authorize_email_link', ownerId: phoneUser.id, email: 'real@example.com',
-    }), 'test-token');
+    expect(mock.auth.signUp).toHaveBeenCalledWith({
+      email: emailUser.email, password: 'secret-password', options: { data: { nickname: '邮箱' }, emailRedirectTo: expect.any(String) },
+    });
+
+    await expect(verifyEmailOtp({ account: emailUser.email!, code: '123' })).rejects.toThrow('6–8 位');
+    expect(mock.auth.verifyOtp).not.toHaveBeenCalled();
+
+    signInAs(emailUser);
+    mock.auth.verifyOtp.mockResolvedValue({ data: { user: { id: emailUser.id }, session: { user: { id: emailUser.id } } }, error: null });
+    expect(await verifyEmailOtp({ account: emailUser.email!, code: ' 123456 ' })).toEqual({
+      status: 'authenticated', user: emailUser,
+    });
+    expect(mock.auth.verifyOtp).toHaveBeenCalledWith({ email: emailUser.email, token: '123456', type: 'email' });
   });
 
-  it('preserves the successful phone registration when email verification cannot start', async () => {
-    signInAs(phoneUser);
-    mock.invoke.mockImplementation(async (_service, body: { action: string }) => body.action === 'login'
-      ? { access_token: 'access', refresh_token: 'refresh' } : { ok: true });
-    mock.auth.setSession.mockResolvedValue({ data: { user: { id: phoneUser.id } }, error: null });
-    mock.auth.updateUser.mockResolvedValue({ data: { user: null }, error: new Error('SMTP unavailable') });
+  it('rejects duplicate email signup when Supabase returns empty identities', async () => {
+    mock.auth.signUp.mockResolvedValue({ data: { user: { id: emailUser.id, identities: [] }, session: null }, error: null });
+    await expect(registerWithAccount({ account: emailUser.email!, password: 'secret-password', nickname: '邮箱' }))
+      .rejects.toThrow('该邮箱已注册');
+  });
 
-    await expect(registerWithAccount({ account: 'real@example.com', secondaryAccount: phoneUser.phone!,
-      password: 'secret-password', nickname: phoneUser.nickname })).resolves.toEqual({
-      status: 'authenticated', user: phoneUser, failedSecondaryAccount: 'real@example.com',
+  it('resends signup OTP via auth.resend with type signup', async () => {
+    mock.auth.resend.mockResolvedValue({ data: { user: null, session: null }, error: null });
+    await resendSignupOtp({ account: ' Target@Example.com ' });
+    expect(mock.auth.resend).toHaveBeenCalledWith({
+      type: 'signup', email: emailUser.email, options: { emailRedirectTo: expect.any(String) },
     });
+  });
+
+  it('sends login OTP with shouldCreateUser false and imports guest data only after OTP verifies', async () => {
+    await loginAsGuest();
+    saveStore({ records: {}, fav: { localQuestion: true }, mastery: {} });
+    mock.auth.signInWithOtp.mockResolvedValue({ data: { user: null, session: null }, error: null });
+    await sendLoginOtp({ account: emailUser.email! });
+    expect(mock.auth.signInWithOtp).toHaveBeenCalledWith({
+      email: emailUser.email, options: { shouldCreateUser: false, emailRedirectTo: expect.any(String) },
+    });
+
+    mock.auth.verifyOtp.mockResolvedValueOnce({ data: { user: null, session: null }, error: new Error('otp_expired') });
+    await expect(verifyEmailOtp({ account: emailUser.email!, code: '000000', importGuestData: true })).rejects.toThrow();
+    expect(readPendingUpgrade()).toBeNull();
+    expect(mock.upload).not.toHaveBeenCalled();
+
+    signInAs(emailUser);
+    mock.auth.verifyOtp.mockResolvedValueOnce({ data: { user: { id: emailUser.id }, session: { user: { id: emailUser.id } } }, error: null });
+    expect(await verifyEmailOtp({ account: emailUser.email!, code: '246810', importGuestData: true })).toMatchObject({
+      status: 'authenticated', user: emailUser, guestDataSynced: true,
+    });
+    expect(mock.upload).toHaveBeenCalledWith(emailUser.id, expect.any(Object), expect.objectContaining({
+      progress: [{ bankId: 'builtin-ai-intro', store: { records: {}, fav: { localQuestion: true }, mastery: {} } }],
+    }));
+  });
+
+  it('completes guest-to-account upgrade migration after verifying signup OTP', async () => {
+    await loginAsGuest();
+    const progress = { records: { q2: { ok: 1 as const, ts: 456 } }, fav: {}, mastery: {} };
+    saveStore(progress);
+    mock.auth.signUp.mockResolvedValue({ data: { user: { id: emailUser.id, identities: [{ id: '1' }] }, session: null }, error: null });
+    expect(await upgradeGuestToAccount({ account: emailUser.email!, password: 'secret-password', nickname: '新同学' }))
+      .toEqual({ status: 'email_confirmation_required', user: null });
+
+    signInAs(emailUser);
+    mock.auth.verifyOtp.mockResolvedValue({ data: { user: { id: emailUser.id }, session: { user: { id: emailUser.id } } }, error: null });
+    expect(await verifyEmailOtp({ account: emailUser.email!, code: '123456' })).toMatchObject({
+      status: 'authenticated', user: emailUser, guestDataSynced: true,
+    });
+    expect(mock.upload).toHaveBeenCalledWith(emailUser.id, expect.any(Object), expect.objectContaining({
+      progress: [{ bankId: 'builtin-ai-intro', store: progress }],
+    }));
   });
 });

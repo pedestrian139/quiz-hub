@@ -31,7 +31,7 @@ function readUpgrade(key: string): PendingUpgrade | null {
     const raw = localStorage.getItem(key);
     const pending = raw ? JSON.parse(raw) as Partial<PendingUpgrade> | null : null;
     if (!pending || typeof pending.importId !== 'string' || typeof pending.account?.value !== 'string'
-      || (pending.account.kind !== 'email' && pending.account.kind !== 'phone')) return null;
+      || pending.account.kind !== 'email') return null;
     // A saved attempt from before snapshot versioning starts its lineage with its original ID.
     return {
       account: pending.account, importId: pending.importId, sourceId: pending.sourceId ?? pending.importId,
@@ -60,13 +60,9 @@ export function readPendingUpgrade(account?: AccountIdentifier): PendingUpgrade 
 }
 
 function findPendingUpgrade(user: AccountProfile): PendingUpgrade | null {
-  for (const kind of ['email', 'phone'] as const) {
-    const value = user[kind];
-    if (!value) continue;
-    const pending = readPendingUpgrade({ kind, value });
-    if (pending && (!pending.ownerId || pending.ownerId === user.id)) return pending;
-  }
-  return null;
+  if (!user.email) return null;
+  const pending = readPendingUpgrade({ kind: 'email', value: user.email });
+  return pending && (!pending.ownerId || pending.ownerId === user.id) ? pending : null;
 }
 
 function persistPending(pending: PendingUpgrade): PendingUpgrade {

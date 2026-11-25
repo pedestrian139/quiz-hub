@@ -139,6 +139,7 @@ export function AiQuestionTutor({
   const abortRef = useRef<AbortController | null>(null);
 
   useEffect(() => {
+    setConfig(loadApiConfig(scope));
     return subscribeApiConfig(setConfig, scope);
   }, [scope]);
 

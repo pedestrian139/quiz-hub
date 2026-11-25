@@ -23,6 +23,7 @@
 .auth-bar__status {
   display: inline-flex;
   align-items: center;
+  flex-wrap: wrap;
   gap: 8px;
   font-size: 12.5px;
   color: var(--sub);
@@ -45,6 +46,33 @@
 .auth-bar__dot--guest {
   background: var(--warn);
   box-shadow: 0 0 0 2px var(--warn-bg);
+}
+
+.auth-bar__dot--error {
+  background: var(--bad);
+  box-shadow: 0 0 0 2px var(--bad-bg);
+}
+
+.auth-inline-retry {
+  padding: 2px 8px;
+  border-radius: 999px;
+  border: 1px solid var(--bad-line);
+  background: var(--bad-bg);
+  color: var(--bad);
+  font-size: 11.5px;
+  font-weight: 650;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.auth-inline-retry:hover:not(:disabled) {
+  border-color: var(--bad);
+  filter: brightness(0.98);
+}
+
+.auth-inline-retry:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
 }
 
 .auth-bar__actions {
@@ -712,7 +740,125 @@
 
 .auth-notice {
   margin: 0;
-  color: var(--ink);
+  padding: 10px 12px;
+  border-radius: var(--radius-sm);
+  background: var(--brand-2);
+  border: 1px solid var(--brand-line);
+  color: var(--brand);
+  font-size: 12.5px;
+  font-weight: 600;
   line-height: 1.5;
   overflow-wrap: anywhere;
+}
+
+.auth-method-switch {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 6px;
+}
+
+.auth-method-btn {
+  height: 34px;
+  padding: 0 10px;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--line);
+  background: var(--surface-subtle);
+  color: var(--sub);
+  font-size: 12.5px;
+  font-weight: 600;
+  cursor: pointer;
+  white-space: nowrap;
+  transition: border-color 0.15s ease, color 0.15s ease, background 0.15s ease;
+}
+
+.auth-method-btn:hover:not(:disabled) {
+  color: var(--ink);
+  border-color: var(--line-strong);
+}
+
+.auth-method-btn.is-active {
+  border-color: var(--brand-line);
+  background: var(--brand-2);
+  color: var(--brand);
+  font-weight: 700;
+}
+
+.auth-method-btn:focus-visible,
+.auth-otp-send-btn:focus-visible {
+  outline: none;
+  box-shadow: 0 0 0 3px var(--ring-focus);
+}
+
+.auth-verify-banner {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 10px 12px;
+  border-radius: var(--radius-sm);
+  background: var(--surface-muted);
+  border: 1px solid var(--line);
+  min-width: 0;
+}
+
+.auth-verify-banner__info {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.auth-verify-banner__label {
+  font-size: 11.5px;
+  color: var(--sub);
+  font-weight: 600;
+}
+
+.auth-verify-banner__email {
+  font-size: 13.5px;
+  font-weight: 700;
+  color: var(--ink);
+  overflow-wrap: anywhere;
+}
+
+.auth-otp-group {
+  display: flex;
+  align-items: stretch;
+  gap: 8px;
+  min-width: 0;
+}
+
+.auth-otp-input {
+  letter-spacing: 0.14em;
+  font-variant-numeric: tabular-nums;
+  font-weight: 650;
+}
+
+.auth-otp-send-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  height: 42px;
+  min-width: 104px;
+  padding: 0 12px;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--brand-line);
+  background: var(--brand-2);
+  color: var(--brand);
+  font-size: 12.5px;
+  font-weight: 650;
+  white-space: nowrap;
+  flex-shrink: 0;
+  cursor: pointer;
+  transition: border-color 0.15s ease, background 0.15s ease, opacity 0.15s ease;
+}
+
+.auth-otp-send-btn:hover:not(:disabled) {
+  border-color: var(--brand);
+  background: var(--surface-hover);
+}
+
+.auth-otp-send-btn:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
 }
