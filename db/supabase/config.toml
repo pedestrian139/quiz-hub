@@ -1,0 +1,21 @@
+project_id = "quizhub"
+
+[auth]
+enable_anonymous_sign_ins = false
+minimum_password_length = 8
+
+[auth.email]
+enable_signup = true
+enable_confirmations = true
+# A database guard requires a password-authorized first email binding for this one-mailbox flow.
+double_confirm_changes = false
+
+[auth.hook.before_user_created]
+enabled = true
+uri = "pg-functions://postgres/public/quizhub_before_user_created"
+
+[functions.phone-auth]
+verify_jwt = false
+
+[functions.user-data]
+verify_jwt = false

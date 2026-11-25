@@ -4,5 +4,6 @@ export {
   closeAuthModal,
   openAuthModal,
   setAuthModalMode,
+  OPEN_AUTH_MODAL_EVENT,
   type AuthModalMode,
 } from './authState';

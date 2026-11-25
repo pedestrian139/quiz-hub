@@ -1,666 +1,263 @@
-export type AuthAccountType = 'phone' | 'email';
-export type AuthUserMode = 'guest' | 'account';
+import { getDatabaseClient, invokeDatabaseFunction, isDatabaseConfigured } from './db/client';
+import { normalizeAccount, validatePassword } from './db/account';
+import type { AccountIdentifier } from './db/account';
+import { loadProfile } from './db/cloudData';
+import type { AccountProfile, GuestImportConflicts } from './db/cloudData';
+import { endGuest, GUEST_KEY, getGuestId, startGuest } from './db/guestData';
+import { hasPendingGuestUpgrade, readPendingUpgrade, runGuestUpgrade, savePendingUpgrade } from './db/guestUpgrade';
 
-export type AuthErrorCode =
-  | 'INVALID_ACCOUNT'
-  | 'INVALID_PASSWORD'
-  | 'ACCOUNT_EXISTS'
-  | 'ACCOUNT_NOT_FOUND'
-  | 'WRONG_PASSWORD'
-  | 'NOT_A_GUEST'
-  | 'STORAGE_ERROR';
+interface Credentials { account: string; password: string }
+interface LoginCredentials extends Credentials { importGuestData?: boolean }
+interface AccountSelection extends Credentials { secondaryAccount?: string }
+interface Registration extends AccountSelection { nickname: string }
 
-export interface AuthUser {
+export interface GuestProfile {
   id: string;
-  mode: AuthUserMode;
-  isGuest: boolean;
-  accountType?: AuthAccountType;
-  /** Normalized 11-digit phone number when bound via phone. */
-  phone?: string;
-  /** Normalized lowercase email when bound via email. */
-  email?: string;
+  email: null;
+  phone: null;
   nickname: string;
-  createdAt: number;
-  updatedAt: number;
-  /** Preserved when a guest upgrades to a formal account for cloud progress sync. */
-  upgradedFromGuestId?: string;
+  isGuest: true;
 }
 
-export interface RegisterAccountInput {
-  account: string;
-  password: string;
-  nickname?: string;
+export type CurrentUser = AccountProfile | GuestProfile;
+export interface AuthenticatedResult {
+  status: 'authenticated' | 'migration_pending';
+  user: AccountProfile;
+  guestDataSynced?: true;
+  pendingEmail?: string;
+  failedSecondaryAccount?: string;
+  migrationConflicts?: GuestImportConflicts;
+}
+export type AuthResult = { status: 'email_confirmation_required'; user: null } | AuthenticatedResult;
+export type LinkResult = { status: 'authenticated' | 'email_confirmation_required'; user: AccountProfile };
+
+export { detectAccountInput, validatePassword } from './db/account';
+export { isDatabaseConfigured as isAuthConfigured } from './db/client';
+
+type AuthChange = { type: 'session_changed' } | { type: 'guest_migration'; result: AuthenticatedResult };
+const authListeners = new Set<(change: AuthChange) => void>();
+
+function publishAuthChange(change: AuthChange): void {
+  for (const listener of authListeners) listener(change);
 }
 
-export interface LoginAccountInput {
-  account: string;
-  password: string;
-}
-
-export interface UpgradeGuestInput {
-  account: string;
-  password: string;
-  nickname?: string;
-}
-
-export type AuthResult =
-  | { ok: true; user: AuthUser }
-  | { ok: false; code: AuthErrorCode; message: string };
-
-export interface AccountDetectionResult {
-  kind: AuthAccountType | 'unknown';
-  valid: boolean;
-  normalized: string;
-  message?: string;
-}
-
-export interface PasswordValidationResult {
-  valid: boolean;
-  message?: string;
-}
-
-export const AUTH_SESSION_STORAGE_KEY = 'ai-intro-quiz-auth-session-v1';
-export const AUTH_USERS_STORAGE_KEY = 'ai-intro-quiz-auth-users-v1';
-export const AUTH_CHANGE_EVENT = 'quiz-hub:auth-change';
-export const OPEN_AUTH_MODAL_EVENT = 'quiz-hub:open-auth-modal';
-
-interface StoredAuthRecord {
-  user: AuthUser;
-  passwordHash: string;
-}
-
-const DANGEROUS_KEYS = new Set(['__proto__', 'constructor', 'prototype']);
-const PHONE_DIGITS_RE = /^\d+$/;
-const PHONE_11_RE = /^\d{11}$/;
-const EMAIL_LOCAL_RE = /^[a-z0-9.!#$%&'*+/=?^_`{|}~-]+$/i;
-const EMAIL_DOMAIN_RE =
-  /^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?(?:\.[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?)*\.[a-z]{2,}$/i;
-
-/**
- * In-memory fallback used when `localStorage` is inaccessible (SecurityError)
- * or throws on write (QuotaExceededError). Scoped by Storage reference so
- * test suites stubbing fresh `localStorage` instances stay isolated.
- */
-let memorySession: AuthUser | null = null;
-let memorySessionFallbackActive = false;
-let memorySessionStorageRef: Storage | null = null;
-
-let memoryUsers: StoredAuthRecord[] = [];
-let memoryUsersFallbackActive = false;
-let memoryUsersStorageRef: Storage | null = null;
-
-function getSafeStorage(): Storage | null {
-  try {
-    const storage = (globalThis as { localStorage?: Storage }).localStorage;
-    if (
-      storage &&
-      typeof storage.getItem === 'function' &&
-      typeof storage.setItem === 'function' &&
-      typeof storage.removeItem === 'function'
-    ) {
-      return storage;
-    }
-    return null;
-  } catch {
-    return null;
-  }
-}
-
-function isPlainObject(value: unknown): value is Record<string, unknown> {
-  if (typeof value !== 'object' || value === null || Array.isArray(value)) {
-    return false;
-  }
-  const proto = Object.getPrototypeOf(value);
-  return proto === Object.prototype || proto === null;
-}
-
-function hasDangerousOwnKey(obj: Record<string, unknown>): boolean {
-  return Object.getOwnPropertyNames(obj).some((key) => DANGEROUS_KEYS.has(key));
-}
-
-function sanitizeAuthUser(raw: unknown): AuthUser | null {
-  if (!isPlainObject(raw) || hasDangerousOwnKey(raw)) {
-    return null;
-  }
-  if (typeof raw.id !== 'string' || !raw.id.trim()) {
-    return null;
-  }
-  if (raw.mode !== 'guest' && raw.mode !== 'account') {
-    return null;
-  }
-  if (typeof raw.isGuest !== 'boolean') {
-    return null;
-  }
-  if (typeof raw.nickname !== 'string' || !raw.nickname.trim()) {
-    return null;
-  }
-  if (
-    typeof raw.createdAt !== 'number' ||
-    !Number.isFinite(raw.createdAt) ||
-    typeof raw.updatedAt !== 'number' ||
-    !Number.isFinite(raw.updatedAt)
-  ) {
-    return null;
-  }
-
-  const user: AuthUser = {
-    id: raw.id,
-    mode: raw.mode,
-    isGuest: raw.isGuest,
-    nickname: raw.nickname,
-    createdAt: raw.createdAt,
-    updatedAt: raw.updatedAt,
+export function subscribeAuthChange(listener: (change: AuthChange) => void): () => void {
+  authListeners.add(listener);
+  const onStorage = (event: StorageEvent) => {
+    if (event.key === null || event.key === GUEST_KEY) listener({ type: 'session_changed' });
   };
+  globalThis.window?.addEventListener('storage', onStorage);
+  return () => {
+    authListeners.delete(listener);
+    globalThis.window?.removeEventListener('storage', onStorage);
+  };
+}
 
-  if (raw.accountType === 'phone' || raw.accountType === 'email') {
-    user.accountType = raw.accountType;
-  }
-  if (typeof raw.phone === 'string' && PHONE_11_RE.test(raw.phone)) {
-    user.phone = raw.phone;
-  }
-  if (typeof raw.email === 'string' && raw.email.includes('@')) {
-    user.email = raw.email;
-  }
-  if (typeof raw.upgradedFromGuestId === 'string' && raw.upgradedFromGuestId.trim()) {
-    user.upgradedFromGuestId = raw.upgradedFromGuestId;
-  }
+const observedAuthClients = new WeakSet<object>();
 
+function authClient() {
+  const { auth } = getDatabaseClient();
+  if (!observedAuthClients.has(auth)) {
+    observedAuthClients.add(auth);
+    let resumedUserId: string | null = null;
+    auth.onAuthStateChange((event, session) => {
+      if (!['INITIAL_SESSION', 'SIGNED_IN', 'SIGNED_OUT', 'USER_UPDATED'].includes(event)) return;
+      if (!session) resumedUserId = null;
+      const shouldResume = (event === 'INITIAL_SESSION' || event === 'SIGNED_IN') && session
+        && session.user.id !== resumedUserId && readPendingUpgrade();
+      if (shouldResume && session) resumedUserId = session.user.id;
+      // Auth callbacks hold the SDK session lock. Defer refresh and database calls.
+      setTimeout(() => {
+        publishAuthChange({ type: 'session_changed' });
+        if (shouldResume && session) {
+          void auth.getSession().then(({ data }) => {
+            if (data.session?.user.id === session.user.id) return completeSignIn(session.user.id);
+          }).catch(() => { /* The pending snapshot remains available. */ });
+        }
+      }, 0);
+    });
+  }
+  return auth;
+}
+
+function guestProfile(id: string): GuestProfile {
+  return { id, email: null, phone: null, nickname: '游客', isGuest: true };
+}
+
+function confirmationRedirect(): string {
+  return import.meta.env.VITE_SUPABASE_AUTH_REDIRECT_URL?.trim() || `${location.origin}${location.pathname}`;
+}
+
+function matchesAccount(user: AccountProfile, account: AccountIdentifier): boolean {
+  return (account.kind === 'email' ? user.email : user.phone) === account.value;
+}
+
+function registrationIdentifiers(account: string, secondaryAccount?: string): {
+  registrationAccount: AccountIdentifier; accountToLink?: AccountIdentifier;
+} {
+  const primary = normalizeAccount(account);
+  if (secondaryAccount === undefined) return { registrationAccount: primary };
+  const secondary = normalizeAccount(secondaryAccount);
+  if (primary.kind === secondary.kind) throw new Error('同时注册时，请提供一个邮箱和一个手机号。');
+  return primary.kind === 'phone' ? { registrationAccount: primary, accountToLink: secondary }
+    : { registrationAccount: secondary, accountToLink: primary };
+}
+
+async function tryLinkSecondaryAccount(result: AuthResult, password: string, accountToLink?: AccountIdentifier): Promise<AuthResult> {
+  if (!result.user || !accountToLink || matchesAccount(result.user, accountToLink)) return result;
+  try {
+    const link = await linkAccount({ account: accountToLink.value, password });
+    return { ...result, user: link.user,
+      ...(link.status === 'email_confirmation_required' && { pendingEmail: accountToLink.value }) };
+  } catch {
+    return { ...result, failedSecondaryAccount: accountToLink.value };
+  }
+}
+
+async function loadAuthenticatedProfile(): Promise<AccountProfile | null> {
+  if (!isDatabaseConfigured()) return null;
+  const { data, error } = await authClient().getUser();
+  if (error && error.name !== 'AuthSessionMissingError') throw error;
+  if (!data.user) return null;
+  return loadProfile(data.user.id);
+}
+
+async function finishGuestUpgrade(user: AccountProfile): Promise<AuthenticatedResult> {
+  const migration = await runGuestUpgrade(user);
+  const result: AuthenticatedResult = { status: migration.pending ? 'migration_pending' : 'authenticated', user,
+    ...(migration.synced && { guestDataSynced: true }),
+    ...(migration.conflicts && { migrationConflicts: migration.conflicts }) };
+  if (migration.pending || migration.synced) publishAuthChange({ type: 'guest_migration', result });
+  return result;
+}
+
+async function completeSignIn(userId: string, importAccount?: AccountIdentifier): Promise<AuthenticatedResult> {
+  const user = await loadProfile(userId);
+  if (importAccount && matchesAccount(user, importAccount)) savePendingUpgrade(importAccount);
+  endGuest();
+  return finishGuestUpgrade(user);
+}
+
+async function signInPhone(phone: string, password: string, importAccount?: AccountIdentifier): Promise<AuthResult> {
+  const tokens = await invokeDatabaseFunction<{ access_token: string; refresh_token: string }>(
+    'phone-auth', { action: 'login', phone, password },
+  );
+  const { data, error } = await authClient().setSession(tokens);
+  if (error) throw error;
+  if (!data.user) throw new Error('手机号登录未完成，请重试。');
+  return completeSignIn(data.user.id, importAccount);
+}
+
+async function register(account: AccountIdentifier, password: string, nickname: string): Promise<AuthResult> {
+  const name = nickname.trim();
+  if (!name || Array.from(name).length > 80) throw new Error('昵称须为 1–80 个字符。');
+  const validation = validatePassword(password, true);
+  if (!validation.valid) throw new Error(validation.message);
+  if (account.kind === 'phone') {
+    await invokeDatabaseFunction('phone-auth', { action: 'register', phone: account.value, password, nickname: name });
+    return signInPhone(account.value, password);
+  }
+  const { data, error } = await authClient().signUp({
+    email: account.value, password, options: { data: { nickname: name }, emailRedirectTo: confirmationRedirect() },
+  });
+  if (error) throw error;
+  return data.session ? completeSignIn(data.session.user.id) : { status: 'email_confirmation_required', user: null };
+}
+
+export async function registerWithAccount({ account, password, nickname, secondaryAccount }: Registration): Promise<AuthResult> {
+  const { registrationAccount, accountToLink } = registrationIdentifiers(account, secondaryAccount);
+  return tryLinkSecondaryAccount(await register(registrationAccount, password, nickname), password, accountToLink);
+}
+
+export async function loginWithAccount({ account, password, importGuestData }: LoginCredentials): Promise<AuthResult> {
+  const identifier = normalizeAccount(account);
+  const importAccount = importGuestData && getGuestId() ? identifier : undefined;
+  if (identifier.kind === 'phone') return signInPhone(identifier.value, password, importAccount);
+  const { data, error } = await authClient().signInWithPassword({ email: identifier.value, password });
+  if (error) throw error;
+  if (!data.user) throw new Error('邮箱登录未完成，请重试。');
+  return completeSignIn(data.user.id, importAccount);
+}
+
+export async function loginAsGuest(): Promise<GuestProfile> {
+  if (isDatabaseConfigured()) {
+    const auth = authClient();
+    const { data, error } = await auth.getSession();
+    if (error) throw error;
+    if (data.session) {
+      const { error: signOutError } = await auth.signOut({ scope: 'local' });
+      if (signOutError) throw signOutError;
+    }
+  }
+  const user = guestProfile(startGuest());
+  publishAuthChange({ type: 'session_changed' });
   return user;
 }
 
-function cloneUser(user: AuthUser): AuthUser {
-  return { ...user };
-}
-
-function sanitizeStoredRecord(raw: unknown): StoredAuthRecord | null {
-  if (!isPlainObject(raw) || hasDangerousOwnKey(raw)) {
-    return null;
-  }
-  if (typeof raw.passwordHash !== 'string' || !raw.passwordHash) {
-    return null;
-  }
-  const user = sanitizeAuthUser(raw.user);
+export async function upgradeGuestToAccount({ account, password, secondaryAccount }: AccountSelection): Promise<AuthResult> {
+  const { registrationAccount, accountToLink } = registrationIdentifiers(account, secondaryAccount);
+  const user = await loadAuthenticatedProfile();
   if (!user) {
-    return null;
+    savePendingUpgrade(registrationAccount);
+    return tryLinkSecondaryAccount(await register(registrationAccount, password, '刷题用户'), password, accountToLink);
   }
-  return {
-    user,
-    passwordHash: raw.passwordHash,
-  };
+  const matchedAccount = [registrationAccount, accountToLink].find((candidate) => candidate && matchesAccount(user, candidate));
+  if (!matchedAccount) throw new Error('请退出当前账号后再升级游客资料。');
+  savePendingUpgrade(matchedAccount);
+  const secondAccount = matchedAccount === registrationAccount ? accountToLink : registrationAccount;
+  return tryLinkSecondaryAccount(await completeSignIn(user.id), password, secondAccount);
 }
 
-function readSession(): AuthUser | null {
-  const storage = getSafeStorage();
-  if (!storage) {
-    return memorySession ? cloneUser(memorySession) : null;
-  }
-  if (memorySessionFallbackActive && memorySessionStorageRef === storage) {
-    return memorySession ? cloneUser(memorySession) : null;
-  }
-  try {
-    const raw = storage.getItem(AUTH_SESSION_STORAGE_KEY);
-    if (!raw) {
-      return null;
-    }
-    const parsed: unknown = JSON.parse(raw);
-    return sanitizeAuthUser(parsed);
-  } catch {
-    return null;
-  }
+/** Import this browser's data on explicit request, or retry a pending guest upgrade. */
+export async function syncLocalData(): Promise<AuthResult> {
+  const user = await loadAuthenticatedProfile();
+  if (!user) throw new Error('请先登录正式账号。');
+  const account = user.email || user.phone;
+  if (!account) throw new Error('请先完成账号验证。');
+  if (!hasPendingGuestUpgrade(user)) savePendingUpgrade(normalizeAccount(account));
+  return finishGuestUpgrade(user);
 }
 
-function writeSession(user: AuthUser | null): void {
-  const snapshot = user ? cloneUser(user) : null;
-  memorySession = snapshot;
-  const storage = getSafeStorage();
-  if (!storage) {
-    memorySessionFallbackActive = true;
-    memorySessionStorageRef = null;
-    return;
-  }
-  try {
-    if (snapshot) {
-      storage.setItem(AUTH_SESSION_STORAGE_KEY, JSON.stringify(snapshot));
-    } else {
-      storage.removeItem(AUTH_SESSION_STORAGE_KEY);
-    }
-    memorySessionFallbackActive = false;
-    memorySessionStorageRef = storage;
-  } catch {
-    memorySessionFallbackActive = true;
-    memorySessionStorageRef = storage;
-  }
+export async function resumeGuestUpgrade(): Promise<AuthResult | null> {
+  const user = await loadAuthenticatedProfile();
+  return user && hasPendingGuestUpgrade(user) ? finishGuestUpgrade(user) : null;
 }
 
-function readUsers(): StoredAuthRecord[] {
-  const storage = getSafeStorage();
-  if (!storage) {
-    return memoryUsers.map((r) => ({ user: cloneUser(r.user), passwordHash: r.passwordHash }));
-  }
-  if (memoryUsersFallbackActive && memoryUsersStorageRef === storage) {
-    return memoryUsers.map((r) => ({ user: cloneUser(r.user), passwordHash: r.passwordHash }));
-  }
-  try {
-    const raw = storage.getItem(AUTH_USERS_STORAGE_KEY);
-    if (!raw) {
-      return [];
-    }
-    const parsed: unknown = JSON.parse(raw);
-    if (!Array.isArray(parsed)) {
-      return [];
-    }
-    const records: StoredAuthRecord[] = [];
-    for (const item of parsed) {
-      const record = sanitizeStoredRecord(item);
-      if (record) {
-        records.push(record);
-      }
-    }
-    return records;
-  } catch {
-    return [];
-  }
+/** Add a second sign-in identifier to the current account. The password and user ID stay the same. */
+export async function linkAccount({ account, password }: Credentials): Promise<LinkResult> {
+  const identifier = normalizeAccount(account);
+  const user = await loadAuthenticatedProfile();
+  if (!user) throw new Error('请先登录正式账号。');
+  if (matchesAccount(user, identifier)) return { status: 'authenticated', user };
+  if (user[identifier.kind]) throw new Error('此账号已绑定同类型的登录方式。');
+  const auth = authClient();
+  const { data, error } = await auth.getSession();
+  if (error) throw error;
+  if (data.session?.user.id !== user.id) throw new Error('登录账号已变更，请重试。');
+  const linkRequest = identifier.kind === 'phone' ? { action: 'link', phone: identifier.value }
+    : { action: 'authorize_email_link', email: identifier.value };
+  await invokeDatabaseFunction('phone-auth', { ...linkRequest, ownerId: user.id, password }, data.session.access_token);
+  if (identifier.kind === 'phone') return { status: 'authenticated', user: await loadProfile(user.id) };
+  const current = await auth.getSession();
+  if (current.error) throw current.error;
+  if (current.data.session?.user.id !== user.id) throw new Error('登录账号已变更，请重试。');
+  const { error: updateError } = await auth.updateUser({ email: identifier.value }, { emailRedirectTo: confirmationRedirect() });
+  if (updateError) throw updateError;
+  return { status: 'email_confirmation_required', user };
 }
 
-function writeUsers(records: StoredAuthRecord[]): void {
-  const cloned = records.map((r) => ({
-    user: cloneUser(r.user),
-    passwordHash: r.passwordHash,
-  }));
-  memoryUsers = cloned;
-  const storage = getSafeStorage();
-  if (!storage) {
-    memoryUsersFallbackActive = true;
-    memoryUsersStorageRef = null;
-    return;
-  }
-  try {
-    storage.setItem(AUTH_USERS_STORAGE_KEY, JSON.stringify(cloned));
-    memoryUsersFallbackActive = false;
-    memoryUsersStorageRef = storage;
-  } catch {
-    memoryUsersFallbackActive = true;
-    memoryUsersStorageRef = storage;
-  }
-}
-
-function emitAuthChange(user: AuthUser | null): void {
-  if (typeof window === 'undefined' || typeof window.dispatchEvent !== 'function') {
-    return;
-  }
-  window.dispatchEvent(
-    new CustomEvent<AuthUser | null>(AUTH_CHANGE_EVENT, {
-      detail: user ? cloneUser(user) : null,
-    }),
-  );
-}
-
-function generateId(prefix: 'usr' | 'guest'): string {
-  if (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function') {
-    return `${prefix}_${crypto.randomUUID().replace(/-/g, '').slice(0, 12)}`;
-  }
-  const timePart = Date.now().toString(36);
-  const randPart = Math.random().toString(36).slice(2, 8);
-  return `${prefix}_${timePart}${randPart}`;
-}
-
-/**
- * Deterministic salted mock digest so plaintext passwords are never persisted.
- * Intended to be replaced by real backend hashing/JWT in `feat/database`.
- */
-function hashPasswordMock(password: string, salt: string): string {
-  const input = `quizhub-v2:${salt}:${password}`;
-  let h1 = 0x811c9dc5;
-  let h2 = 0x9e3779b9;
-  for (let i = 0; i < input.length; i++) {
-    const code = input.charCodeAt(i);
-    h1 ^= code;
-    h1 = Math.imul(h1, 0x01000193);
-    h2 ^= code + ((i + 1) & 0xff);
-    h2 = Math.imul(h2, 0x85ebca6b);
-  }
-  const p1 = (h1 >>> 0).toString(16).padStart(8, '0');
-  const p2 = (h2 >>> 0).toString(16).padStart(8, '0');
-  return `mock_${p1}${p2}`;
-}
-
-function buildDefaultNickname(
-  detection: AccountDetectionResult,
-  explicitNickname?: string,
-): string {
-  const custom = explicitNickname?.trim();
-  if (custom) {
-    return custom.slice(0, 24);
-  }
-  if (detection.kind === 'phone') {
-    return `手机用户_${detection.normalized.slice(-4)}`;
-  }
-  if (detection.kind === 'email') {
-    const atIndex = detection.normalized.indexOf('@');
-    const localPart = atIndex > 0 ? detection.normalized.slice(0, atIndex) : '用户';
-    return localPart.slice(0, 20) || '邮箱用户';
-  }
-  return 'QuizHub用户';
-}
-
-function matchesAccount(record: StoredAuthRecord, detection: AccountDetectionResult): boolean {
-  if (detection.kind === 'phone') {
-    return record.user.phone === detection.normalized;
-  }
-  if (detection.kind === 'email') {
-    return record.user.email === detection.normalized;
-  }
-  return false;
-}
-
-export function detectAccountInput(raw: string): AccountDetectionResult {
-  const trimmed = raw.trim();
-  if (!trimmed) {
-    return {
-      kind: 'unknown',
-      valid: false,
-      normalized: '',
-      message: '请输入手机号或邮箱',
-    };
-  }
-
-  if (trimmed.includes('@')) {
-    const normalized = trimmed.toLowerCase();
-    const parts = normalized.split('@');
-    if (parts.length !== 2) {
-      return {
-        kind: 'email',
-        valid: false,
-        normalized,
-        message: '邮箱格式不正确，请输入有效邮箱（如 name@example.com）',
-      };
-    }
-    const [localPart, domainPart] = parts;
-    const valid =
-      Boolean(localPart) &&
-      Boolean(domainPart) &&
-      !localPart.startsWith('.') &&
-      !localPart.endsWith('.') &&
-      !normalized.includes('..') &&
-      EMAIL_LOCAL_RE.test(localPart) &&
-      EMAIL_DOMAIN_RE.test(domainPart);
-
-    return valid
-      ? { kind: 'email', valid: true, normalized }
-      : {
-          kind: 'email',
-          valid: false,
-          normalized,
-          message: '邮箱格式不正确，请输入有效邮箱（如 name@example.com）',
-        };
-  }
-
-  if (PHONE_DIGITS_RE.test(trimmed)) {
-    if (PHONE_11_RE.test(trimmed)) {
-      return {
-        kind: 'phone',
-        valid: true,
-        normalized: trimmed,
-      };
-    }
-    return {
-      kind: 'phone',
-      valid: false,
-      normalized: trimmed,
-      message: '手机号需为 11 位数字',
-    };
-  }
-
-  return {
-    kind: 'unknown',
-    valid: false,
-    normalized: trimmed,
-    message: '请输入有效的 11 位手机号或邮箱地址',
-  };
-}
-
-export function validatePassword(
-  password: string,
-  requireMinLength: boolean,
-): PasswordValidationResult {
-  if (!password) {
-    return { valid: false, message: '请输入密码' };
-  }
-  if (requireMinLength && password.length < 6) {
-    return { valid: false, message: '密码长度不能少于 6 位' };
-  }
-  return { valid: true };
-}
-
-export function getCachedCurrentUser(): AuthUser | null {
-  return readSession();
-}
-
-export function subscribeAuthChange(listener: (user: AuthUser | null) => void): () => void {
-  if (typeof window === 'undefined') {
-    return () => {};
-  }
-
-  const onAuthChange = (event: Event) => {
-    const customEvent = event as CustomEvent<AuthUser | null>;
-    if (customEvent.detail !== undefined) {
-      listener(customEvent.detail ? cloneUser(customEvent.detail) : null);
-      return;
-    }
-    listener(readSession());
-  };
-
-  const onStorage = (event: StorageEvent) => {
-    if (event.key === null || event.key === AUTH_SESSION_STORAGE_KEY) {
-      listener(readSession());
-    }
-  };
-
-  window.addEventListener(AUTH_CHANGE_EVENT, onAuthChange);
-  window.addEventListener('storage', onStorage);
-
-  return () => {
-    window.removeEventListener(AUTH_CHANGE_EVENT, onAuthChange);
-    window.removeEventListener('storage', onStorage);
-  };
-}
-
-export async function getCurrentUser(): Promise<AuthUser | null> {
-  return readSession();
-}
-
-export async function registerWithAccount(input: RegisterAccountInput): Promise<AuthResult> {
-  const detection = detectAccountInput(input.account);
-  if (!detection.valid || detection.kind === 'unknown') {
-    return {
-      ok: false,
-      code: 'INVALID_ACCOUNT',
-      message: detection.message ?? '请输入有效的 11 位手机号或邮箱地址',
-    };
-  }
-
-  const pwdCheck = validatePassword(input.password, true);
-  if (!pwdCheck.valid) {
-    return {
-      ok: false,
-      code: 'INVALID_PASSWORD',
-      message: pwdCheck.message ?? '密码长度不能少于 6 位',
-    };
-  }
-
-  const users = readUsers();
-  if (users.some((r) => matchesAccount(r, detection))) {
-    return {
-      ok: false,
-      code: 'ACCOUNT_EXISTS',
-      message: '该账号已注册，请直接登录',
-    };
-  }
-
-  const now = Date.now();
-  const user: AuthUser = {
-    id: generateId('usr'),
-    mode: 'account',
-    isGuest: false,
-    accountType: detection.kind,
-    ...(detection.kind === 'phone'
-      ? { phone: detection.normalized }
-      : { email: detection.normalized }),
-    nickname: buildDefaultNickname(detection, input.nickname),
-    createdAt: now,
-    updatedAt: now,
-  };
-
-  const record: StoredAuthRecord = {
-    user,
-    passwordHash: hashPasswordMock(input.password, user.id),
-  };
-
-  writeUsers([...users, record]);
-  writeSession(user);
-  emitAuthChange(user);
-
-  return { ok: true, user: cloneUser(user) };
-}
-
-export async function loginWithAccount(input: LoginAccountInput): Promise<AuthResult> {
-  const detection = detectAccountInput(input.account);
-  if (!detection.valid || detection.kind === 'unknown') {
-    return {
-      ok: false,
-      code: 'INVALID_ACCOUNT',
-      message: detection.message ?? '请输入有效的 11 位手机号或邮箱地址',
-    };
-  }
-
-  const pwdCheck = validatePassword(input.password, false);
-  if (!pwdCheck.valid) {
-    return {
-      ok: false,
-      code: 'INVALID_PASSWORD',
-      message: pwdCheck.message ?? '请输入密码',
-    };
-  }
-
-  const users = readUsers();
-  const matched = users.find((r) => matchesAccount(r, detection));
-  if (!matched) {
-    return {
-      ok: false,
-      code: 'ACCOUNT_NOT_FOUND',
-      message: '该账号尚未注册，请先注册',
-    };
-  }
-
-  const expectedHash = hashPasswordMock(input.password, matched.user.id);
-  if (matched.passwordHash !== expectedHash) {
-    return {
-      ok: false,
-      code: 'WRONG_PASSWORD',
-      message: '密码错误，请重新输入',
-    };
-  }
-
-  const updatedUser: AuthUser = {
-    ...matched.user,
-    updatedAt: Date.now(),
-  };
-
-  writeSession(updatedUser);
-  emitAuthChange(updatedUser);
-
-  return { ok: true, user: cloneUser(updatedUser) };
-}
-
-export async function loginAsGuest(): Promise<AuthResult> {
-  const current = readSession();
-  if (current && current.isGuest) {
-    return { ok: true, user: cloneUser(current) };
-  }
-
-  const now = Date.now();
-  const id = generateId('guest');
-  const shortCode = id.slice(-4).toUpperCase();
-  const guestUser: AuthUser = {
-    id,
-    mode: 'guest',
-    isGuest: true,
-    nickname: `游客_${shortCode}`,
-    createdAt: now,
-    updatedAt: now,
-  };
-
-  writeSession(guestUser);
-  emitAuthChange(guestUser);
-
-  return { ok: true, user: cloneUser(guestUser) };
-}
-
-export async function upgradeGuestToAccount(input: UpgradeGuestInput): Promise<AuthResult> {
-  const current = readSession();
-  if (!current || !current.isGuest) {
-    return {
-      ok: false,
-      code: 'NOT_A_GUEST',
-      message: '当前非游客模式，无法绑定升级',
-    };
-  }
-
-  const detection = detectAccountInput(input.account);
-  if (!detection.valid || detection.kind === 'unknown') {
-    return {
-      ok: false,
-      code: 'INVALID_ACCOUNT',
-      message: detection.message ?? '请输入有效的 11 位手机号或邮箱地址',
-    };
-  }
-
-  const pwdCheck = validatePassword(input.password, true);
-  if (!pwdCheck.valid) {
-    return {
-      ok: false,
-      code: 'INVALID_PASSWORD',
-      message: pwdCheck.message ?? '密码长度不能少于 6 位',
-    };
-  }
-
-  const users = readUsers();
-  if (users.some((r) => matchesAccount(r, detection))) {
-    return {
-      ok: false,
-      code: 'ACCOUNT_EXISTS',
-      message: '该手机号或邮箱已被注册，请直接切换账号登录',
-    };
-  }
-
-  const now = Date.now();
-  const upgradedUser: AuthUser = {
-    id: current.id,
-    mode: 'account',
-    isGuest: false,
-    accountType: detection.kind,
-    ...(detection.kind === 'phone'
-      ? { phone: detection.normalized }
-      : { email: detection.normalized }),
-    nickname: buildDefaultNickname(detection, input.nickname),
-    createdAt: current.createdAt,
-    updatedAt: now,
-    upgradedFromGuestId: current.id,
-  };
-
-  const record: StoredAuthRecord = {
-    user: upgradedUser,
-    passwordHash: hashPasswordMock(input.password, upgradedUser.id),
-  };
-
-  writeUsers([...users, record]);
-  writeSession(upgradedUser);
-  emitAuthChange(upgradedUser);
-
-  return { ok: true, user: cloneUser(upgradedUser) };
+export async function getCurrentUser(): Promise<CurrentUser | null> {
+  const user = await loadAuthenticatedProfile();
+  if (user) return user;
+  const id = getGuestId();
+  return id ? guestProfile(id) : null;
 }
 
 export async function logout(): Promise<void> {
-  writeSession(null);
-  emitAuthChange(null);
+  if (isDatabaseConfigured()) {
+    const { error } = await authClient().signOut({ scope: 'local' });
+    if (error) throw error;
+  }
+  endGuest();
+  publishAuthChange({ type: 'session_changed' });
 }

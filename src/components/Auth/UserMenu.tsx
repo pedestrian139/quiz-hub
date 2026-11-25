@@ -1,19 +1,22 @@
 import { useEffect, useRef, useState } from 'react';
-import { logout } from '../../services/authService';
+import { isAuthConfigured, logout, resumeGuestUpgrade, syncLocalData } from '../../services/authService';
 import { AuthIcon } from './AuthIcons';
-import { openAuthModal, useAuthUiState } from './authState';
+import { applyAuthResult, openAuthModal, setAuthUser, useAuthUiState } from './authState';
 import './Auth.css';
 
 export function UserMenu() {
-  const { user } = useAuthUiState();
+  const { user, migrationStatus } = useAuthUiState();
   const [menuOpen, setMenuOpen] = useState(false);
+  const [syncing, setSyncing] = useState(false);
+  const [accountError, setAccountError] = useState<string | null>(null);
   const menuRef = useRef<HTMLDivElement | null>(null);
 
   useEffect(() => {
+    setAccountError(null);
     if (!user || user.isGuest) {
       setMenuOpen(false);
     }
-  }, [user]);
+  }, [user?.id, user?.isGuest]);
 
   useEffect(() => {
     if (!menuOpen) return;
@@ -45,13 +48,35 @@ export function UserMenu() {
   };
 
   const handleLogout = async () => {
-    setMenuOpen(false);
-    await logout();
+    try {
+      await logout();
+      setAuthUser(null);
+      setMenuOpen(false);
+    } catch {
+      setAccountError('退出登录失败，请稍后重试。');
+    }
   };
 
+  const handleSync = async () => {
+    setSyncing(true);
+    setAccountError(null);
+    try {
+      const result = migrationStatus === 'pending' || migrationStatus === 'conflict'
+        ? await resumeGuestUpgrade() : await syncLocalData();
+      if (result?.user) applyAuthResult(result);
+    } catch {
+      setAccountError('同步未完成，请稍后重试。');
+    } finally {
+      setSyncing(false);
+    }
+  };
+
+  const configured = isAuthConfigured();
   const avatarInitial = user?.nickname ? user.nickname.slice(0, 1).toUpperCase() : 'U';
-  const boundAccountLabel = user?.accountType === 'phone' ? '已绑手机' : '已绑邮箱';
-  const boundAccountValue = user?.phone ?? user?.email ?? '';
+  const boundAccountValue = [user?.phone, user?.email].filter(Boolean).join(' · ');
+  const syncLabel = syncing ? '正在同步本机进度' : migrationStatus === 'pending' ? '同步待重试'
+    : migrationStatus === 'conflict' ? '部分本机数据与云端冲突'
+      : migrationStatus === 'synced' ? '游客数据已同步' : '账号已登录';
 
   return (
     <div className="auth-bar" role="region" aria-label="账户与云端同步状态">
@@ -60,17 +85,18 @@ export function UserMenu() {
           <>
             <div className="auth-bar__status">
               <span className="auth-bar__dot" aria-hidden="true" />
-              <span>本地刷题模式 · 登录后可云端同步进度</span>
+              <span>本地刷题模式</span>
             </div>
             <div className="auth-bar__actions">
               <button
                 type="button"
                 className="auth-btn auth-btn--primary"
                 data-testid="auth-open-btn"
+                data-auth-dialog-trigger
                 onClick={() => openAuthModal('login')}
               >
                 <AuthIcon name="user" size={14} />
-                <span>登录 / 注册</span>
+                <span>{configured ? '登录 / 注册' : '游客入口'}</span>
               </button>
             </div>
           </>
@@ -80,18 +106,19 @@ export function UserMenu() {
           <>
             <div className="auth-bar__status">
               <span className="auth-bar__dot auth-bar__dot--guest" aria-hidden="true" />
-              <span>游客试用中 · 可随时绑定账号保存进度</span>
+              <span>游客模式 · 数据保存在当前浏览器</span>
             </div>
             <div className="auth-bar__actions">
               <button
                 type="button"
                 className="auth-guest-pill"
                 data-testid="auth-guest-mode-btn"
+                data-auth-dialog-trigger
                 onClick={() => openAuthModal('upgrade')}
               >
                 <AuthIcon name="shield" size={14} />
                 <span className="auth-guest-pill__tag">游客模式</span>
-                <span className="auth-guest-pill__cta">点击绑定账号保存云端进度</span>
+                {configured && <span className="auth-guest-pill__cta">绑定账号</span>}
               </button>
             </div>
           </>
@@ -101,7 +128,7 @@ export function UserMenu() {
           <>
             <div className="auth-bar__status">
               <span className="auth-bar__dot auth-bar__dot--ready" aria-hidden="true" />
-              <span>账号已登录 · 云端进度已关联</span>
+              <span data-testid="auth-sync-status" role="status">{syncLabel}</span>
             </div>
             <div className="auth-bar__actions">
               <div className="auth-user-menu" ref={menuRef}>
@@ -109,6 +136,7 @@ export function UserMenu() {
                   type="button"
                   className="auth-user-trigger"
                   data-testid="user-menu-trigger"
+                  data-auth-dialog-trigger
                   aria-expanded={menuOpen}
                   aria-haspopup="menu"
                   onClick={() => setMenuOpen((prev) => !prev)}
@@ -130,10 +158,17 @@ export function UserMenu() {
                     <div className="auth-dropdown__profile">
                       <div className="auth-dropdown__nick">{user.nickname}</div>
                       <div className="auth-dropdown__account-row">
-                        <span className="auth-dropdown__badge">{boundAccountLabel}</span>
+                        <span className="auth-dropdown__badge">已绑定</span>
                         <span data-testid="user-menu-bound-account">{boundAccountValue}</span>
                       </div>
                     </div>
+                    {accountError && <p role="alert" className="auth-alert">{accountError}</p>}
+                    {migrationStatus !== 'synced' && (
+                      <button type="button" role="menuitem" className="auth-dropdown__item" data-testid="auth-sync-btn"
+                        onClick={handleSync} disabled={syncing}>
+                        {migrationStatus === 'pending' || migrationStatus === 'conflict' ? '重试同步' : '同步本机进度'}
+                      </button>
+                    )}
                     <button
                       type="button"
                       role="menuitem"

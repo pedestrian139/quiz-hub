@@ -51,7 +51,8 @@ export default defineConfig({
       ? 'npx vite --host 127.0.0.1 --port 4173 --strictPort'
       : 'npm run build && npx vite preview --host 127.0.0.1 --port 4173 --strictPort',
     url: 'http://127.0.0.1:4173',
-    reuseExistingServer: !process.env.CI,
+    env: { VITE_SUPABASE_URL: process.env.PW_AUTH_DISABLED === '1' ? '' : 'http://127.0.0.1:49391', VITE_SUPABASE_PUBLISHABLE_KEY: 'sb_publishable_playwright', VITE_SUPABASE_AUTH_REDIRECT_URL: '' },
+    reuseExistingServer: false,
     timeout: 120_000,
   },
 });
