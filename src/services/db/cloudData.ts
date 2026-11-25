@@ -26,6 +26,7 @@ interface BankRow {
   revision: number;
 }
 interface ProgressRow { store: UserStore; revision: number; reset_at: string | null }
+interface BankProgressRow extends ProgressRow { bank_id: string }
 interface ApiConfigRow {
   provider: ApiConfig['provider'];
   base_url: string;
@@ -114,6 +115,19 @@ export async function deleteCloudBank(bankId: string, revision: number): Promise
   const { error } = await getDatabaseClient().rpc('quizhub_delete_bank', { p_bank_id: bankId, p_revision: revision })
     .setHeader('Authorization', `Bearer ${session.access_token}`);
   if (error) throw error;
+}
+
+export async function listCloudProgress(): Promise<Record<string, VersionedProgress>> {
+  const session = await currentSession();
+  const { data, error } = await getDatabaseClient().from('quiz_progress')
+    .select('bank_id,store,revision,reset_at')
+    .eq('user_id', session.user.id);
+  if (error) throw error;
+  const result: Record<string, VersionedProgress> = {};
+  for (const row of (data ?? []) as BankProgressRow[]) {
+    result[row.bank_id] = toProgress(row);
+  }
+  return result;
 }
 
 export async function loadCloudProgress(bankId: string): Promise<VersionedProgress> {

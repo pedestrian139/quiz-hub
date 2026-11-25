@@ -110,7 +110,7 @@
   box-shadow: var(--shadow-hover);
   display: flex;
   flex-direction: column;
-  overflow: hidden;
+  overflow-y: auto;
 }
 
 .api-modal__header {
@@ -168,16 +168,12 @@
 .api-modal__form {
   display: flex;
   flex-direction: column;
-  flex: 1 1 auto;
-  min-height: 0;
-  overflow: hidden;
+  flex: 1 0 auto;
 }
 
 .api-modal__body {
-  flex: 1 1 auto;
-  min-height: 0;
+  flex: 1 0 auto;
   padding: 16px 20px;
-  overflow-y: auto;
   display: flex;
   flex-direction: column;
   gap: 15px;
@@ -395,11 +391,30 @@
 
 .api-radio-label {
   display: inline-flex;
-  align-items: center;
+  align-items: flex-start;
   gap: 6px;
   font-size: 12.5px;
+  line-height: 1.4;
   color: var(--ink-2);
   cursor: pointer;
+}
+
+.api-storage-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 10px 12px;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--brand-line);
+  background: var(--surface-subtle);
+}
+
+.api-storage-panel__status {
+  font-size: 12px;
+  font-weight: 650;
+  color: var(--brand);
+  line-height: 1.45;
+  overflow-wrap: anywhere;
 }
 
 .api-banner {

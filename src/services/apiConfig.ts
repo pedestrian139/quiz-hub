@@ -275,6 +275,8 @@ export function sanitizeApiConfig(raw: unknown, fallbackScope: ApiStorageScope =
   };
 }
 
+const memoryCloudApiConfigs = new Map<PracticeScope, ApiConfig>();
+
 function readRawFromScope(scope: ApiStorageScope, owner: PracticeScope): string | null {
   const storage = getStorageByScope(scope);
   if (!storage) return null;
@@ -285,14 +287,71 @@ function readRawFromScope(scope: ApiStorageScope, owner: PracticeScope): string 
   }
 }
 
+export function hasSessionApiConfig(owner: PracticeScope): boolean {
+  const raw = readRawFromScope('session', owner);
+  if (!raw) return false;
+  try {
+    return isPlainObject(JSON.parse(raw));
+  } catch {
+    return false;
+  }
+}
+
+export function getCloudMemoryApiConfig(owner: PracticeScope): ApiConfig | null {
+  const cached = memoryCloudApiConfigs.get(owner);
+  return cached ? { ...cached } : null;
+}
+
+export function setCloudMemoryApiConfig(owner: PracticeScope, config: ApiConfig | null): void {
+  if (!config) {
+    memoryCloudApiConfigs.delete(owner);
+  } else {
+    memoryCloudApiConfigs.set(owner, sanitizeApiConfig({ ...config, storageScope: 'local' }, 'local'));
+  }
+  emitApiConfigChange(loadApiConfig(owner), owner);
+}
+
+export function clearLocalApiConfigStorage(
+  owner: PracticeScope,
+  scopes: readonly ApiStorageScope[] = ['local', 'session'],
+): void {
+  const key = practiceStorageKey(API_CONFIG_STORAGE_KEY, owner);
+  for (const scope of scopes) {
+    try {
+      getStorageByScope(scope)?.removeItem(key);
+    } catch {
+      // ignore storage cleanup errors
+    }
+  }
+}
+
+export function clearCloudMemoryApiConfigs(owner?: PracticeScope): void {
+  if (owner !== undefined) {
+    if (memoryCloudApiConfigs.delete(owner)) {
+      emitApiConfigChange(loadApiConfig(owner), owner);
+    }
+    return;
+  }
+  const owners = Array.from(memoryCloudApiConfigs.keys());
+  memoryCloudApiConfigs.clear();
+  for (const clearedOwner of owners) {
+    emitApiConfigChange(loadApiConfig(clearedOwner), clearedOwner);
+  }
+}
+
 export function loadApiConfig(owner: PracticeScope = LEGACY_GUEST_SCOPE): ApiConfig {
   const sessionRaw = readRawFromScope('session', owner);
   if (sessionRaw) {
     try {
       return sanitizeApiConfig(JSON.parse(sessionRaw), 'session');
     } catch {
-      // Fall through to localStorage
+      // Fall through to memory / localStorage
     }
+  }
+
+  const memoryCloud = memoryCloudApiConfigs.get(owner);
+  if (memoryCloud) {
+    return { ...memoryCloud };
   }
 
   const localRaw = readRawFromScope('local', owner);
@@ -345,6 +404,7 @@ export function saveApiConfig(input: ApiConfig, owner: PracticeScope = LEGACY_GU
 }
 
 export function clearApiConfig(owner: PracticeScope = LEGACY_GUEST_SCOPE): ApiConfig {
+  memoryCloudApiConfigs.delete(owner);
   const key = practiceStorageKey(API_CONFIG_STORAGE_KEY, owner);
   const local = getStorageByScope('local');
   const session = getStorageByScope('session');

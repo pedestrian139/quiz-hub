@@ -23,6 +23,7 @@ blob-report/
 .env
 .env.*
 *.secret
+db/supabase/.temp/
 
 # Python corpus tooling (M2)
 __pycache__/

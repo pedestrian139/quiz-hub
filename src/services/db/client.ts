@@ -16,7 +16,7 @@ export function isDatabaseConfigured(): boolean {
 }
 
 export async function invokeDatabaseFunction<T>(
-  name: 'phone-auth' | 'user-data',
+  name: 'user-data',
   body: Record<string, unknown>,
   accessToken?: string,
 ): Promise<T> {

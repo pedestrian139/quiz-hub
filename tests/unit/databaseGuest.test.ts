@@ -2,7 +2,7 @@ import 'fake-indexeddb/auto';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { resetStore, saveStore } from '../../src/core/storage';
 import { API_CONFIG_STORAGE_KEY, createDefaultApiConfig } from '../../src/services/apiConfig';
-import { normalizeAccount } from '../../src/services/db/account';
+import { normalizeAccount, validateEmailOtp } from '../../src/services/db/account';
 import { readGuestData } from '../../src/services/db/guestData';
 import { savePendingUpgrade, readPendingUpgrade } from '../../src/services/db/guestUpgrade';
 import { closeQuizHubDb, createCustomBank, initBankDb, resetBankProgress, saveBankProgress } from '../../src/utils/bankDb';
@@ -14,18 +14,24 @@ describe('database accounts and guest migration', () => {
     sessionStorage.clear();
   });
 
-  it('normalizes alternate sign-in identifiers and rejects reserved aliases', () => {
+  it('normalizes email identifiers and rejects phone numbers and reserved aliases', () => {
     expect(normalizeAccount(' USER@example.COM ')).toEqual({ kind: 'email', value: 'user@example.com' });
-    expect(normalizeAccount('00123456789')).toEqual({ kind: 'phone', value: '00123456789' });
+    expect(() => normalizeAccount('00123456789')).toThrow();
     expect(() => normalizeAccount('00123456789@phone.quizhub.local')).toThrow();
     expect(() => normalizeAccount('123abc')).toThrow();
+    expect(validateEmailOtp(' 123456 ')).toEqual({ valid: true, normalized: '123456' });
+    expect(validateEmailOtp('12345678')).toEqual({ valid: true, normalized: '12345678' });
+    expect(validateEmailOtp('')).toMatchObject({ valid: false });
+    expect(validateEmailOtp('12345')).toMatchObject({ valid: false });
+    expect(validateEmailOtp('123456789')).toMatchObject({ valid: false });
+    expect(validateEmailOtp('12ab56')).toMatchObject({ valid: false });
   });
 
-  it('binds a pending migration to the selected identity without saving its password', () => {
+  it('binds a pending migration to the selected email without saving its password', () => {
     const pending = savePendingUpgrade(normalizeAccount('user@example.com'));
     expect(readPendingUpgrade()).toEqual(pending);
     expect(savePendingUpgrade(normalizeAccount('USER@example.com'))).toEqual(pending);
-    expect(savePendingUpgrade(normalizeAccount('00123456789')).importId).not.toBe(pending.importId);
+    expect(savePendingUpgrade(normalizeAccount('other@example.com')).importId).not.toBe(pending.importId);
   });
 
   it('reads legacy progress, imported banks and only the locally persistent API configuration', async () => {

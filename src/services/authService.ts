@@ -1,5 +1,5 @@
-import { getDatabaseClient, invokeDatabaseFunction, isDatabaseConfigured } from './db/client';
-import { normalizeAccount, validatePassword } from './db/account';
+import { getDatabaseClient, isDatabaseConfigured } from './db/client';
+import { normalizeAccount, validateEmailOtp, validatePassword } from './db/account';
 import type { AccountIdentifier } from './db/account';
 import { loadProfile } from './db/cloudData';
 import type { AccountProfile, GuestImportConflicts } from './db/cloudData';
@@ -8,11 +8,14 @@ import { hasPendingGuestUpgrade, readPendingUpgrade, runGuestUpgrade, savePendin
 import { getActiveGuestPracticeScope } from './db/guestOwnership';
 import { accountPracticeScope } from '../core/practiceScope';
 import type { GuestPracticeScope } from '../core/practiceScope';
+import { clearCloudSyncSession, flushPendingCloudWrites } from './cloudSync';
 
 interface Credentials { account: string; password: string }
 interface LoginCredentials extends Credentials { importGuestData?: boolean }
-interface AccountSelection extends Credentials { secondaryAccount?: string }
-interface Registration extends AccountSelection { nickname: string }
+interface Registration extends Credentials { nickname: string }
+interface UpgradeCredentials extends Credentials { nickname?: string }
+export interface EmailOtpRequest { account: string }
+export interface EmailOtpVerification { account: string; code: string; importGuestData?: boolean }
 interface GuestLoginImport { account: AccountIdentifier; scope: GuestPracticeScope }
 
 export interface GuestProfile {
@@ -28,14 +31,11 @@ export interface AuthenticatedResult {
   status: 'authenticated' | 'migration_pending';
   user: AccountProfile;
   guestDataSynced?: true;
-  pendingEmail?: string;
-  failedSecondaryAccount?: string;
   migrationConflicts?: GuestImportConflicts;
 }
 export type AuthResult = { status: 'email_confirmation_required'; user: null } | AuthenticatedResult;
-export type LinkResult = { status: 'authenticated' | 'email_confirmation_required'; user: AccountProfile };
 
-export { detectAccountInput, validatePassword } from './db/account';
+export { detectAccountInput, validateEmailOtp, validatePassword } from './db/account';
 export { isDatabaseConfigured as isAuthConfigured } from './db/client';
 
 type AuthChange = { type: 'session_changed'; accountId?: string | null } | { type: 'guest_migration'; result: AuthenticatedResult };
@@ -93,29 +93,7 @@ function confirmationRedirect(): string {
 }
 
 function matchesAccount(user: AccountProfile, account: AccountIdentifier): boolean {
-  return (account.kind === 'email' ? user.email : user.phone) === account.value;
-}
-
-function registrationIdentifiers(account: string, secondaryAccount?: string): {
-  registrationAccount: AccountIdentifier; accountToLink?: AccountIdentifier;
-} {
-  const primary = normalizeAccount(account);
-  if (secondaryAccount === undefined) return { registrationAccount: primary };
-  const secondary = normalizeAccount(secondaryAccount);
-  if (primary.kind === secondary.kind) throw new Error('同时注册时，请提供一个邮箱和一个手机号。');
-  return primary.kind === 'phone' ? { registrationAccount: primary, accountToLink: secondary }
-    : { registrationAccount: secondary, accountToLink: primary };
-}
-
-async function tryLinkSecondaryAccount(result: AuthResult, password: string, accountToLink?: AccountIdentifier): Promise<AuthResult> {
-  if (!result.user || !accountToLink || matchesAccount(result.user, accountToLink)) return result;
-  try {
-    const link = await linkAccount({ account: accountToLink.value, password });
-    return { ...result, user: link.user,
-      ...(link.status === 'email_confirmation_required' && { pendingEmail: accountToLink.value }) };
-  } catch {
-    return { ...result, failedSecondaryAccount: accountToLink.value };
-  }
+  return user.email === account.value;
 }
 
 async function loadAuthenticatedProfile(): Promise<AccountProfile | null> {
@@ -142,42 +120,74 @@ async function completeSignIn(userId: string, guestImport?: GuestLoginImport): P
   return finishGuestUpgrade(user);
 }
 
-async function signInPhone(phone: string, password: string, guestImport?: GuestLoginImport): Promise<AuthResult> {
-  const tokens = await invokeDatabaseFunction<{ access_token: string; refresh_token: string }>(
-    'phone-auth', { action: 'login', phone, password },
-  );
-  const { data, error } = await authClient().setSession(tokens);
-  if (error) throw error;
-  if (!data.user) throw new Error('手机号登录未完成，请重试。');
-  return completeSignIn(data.user.id, guestImport);
-}
-
-async function register(account: AccountIdentifier, password: string, nickname: string): Promise<AuthResult> {
+async function register(
+  account: AccountIdentifier,
+  password: string,
+  nickname: string,
+  guestImport?: GuestLoginImport,
+): Promise<AuthResult> {
   const name = nickname.trim();
   if (!name || Array.from(name).length > 80) throw new Error('昵称须为 1–80 个字符。');
   const validation = validatePassword(password, true);
   if (!validation.valid) throw new Error(validation.message);
-  if (account.kind === 'phone') {
-    await invokeDatabaseFunction('phone-auth', { action: 'register', phone: account.value, password, nickname: name });
-    return signInPhone(account.value, password);
-  }
   const { data, error } = await authClient().signUp({
-    email: account.value, password, options: { data: { nickname: name }, emailRedirectTo: confirmationRedirect() },
+    email: account.value,
+    password,
+    options: { data: { nickname: name }, emailRedirectTo: confirmationRedirect() },
   });
   if (error) throw error;
-  return data.session ? completeSignIn(data.session.user.id) : { status: 'email_confirmation_required', user: null };
+  if (!data.session && data.user && Array.isArray(data.user.identities) && data.user.identities.length === 0) {
+    throw new Error('该邮箱已注册，请直接登录或使用邮箱验证码登录。');
+  }
+  if (data.session) return completeSignIn(data.session.user.id, guestImport);
+  if (guestImport) savePendingUpgrade(guestImport.account, guestImport.scope);
+  return { status: 'email_confirmation_required', user: null };
 }
 
-export async function registerWithAccount({ account, password, nickname, secondaryAccount }: Registration): Promise<AuthResult> {
-  const { registrationAccount, accountToLink } = registrationIdentifiers(account, secondaryAccount);
-  return tryLinkSecondaryAccount(await register(registrationAccount, password, nickname), password, accountToLink);
+export async function registerWithAccount({ account, password, nickname }: Registration): Promise<AuthResult> {
+  return register(normalizeAccount(account), password, nickname);
 }
 
-export async function loginWithAccount({ account, password, importGuestData }: LoginCredentials): Promise<AuthResult> {
+export async function resendSignupOtp({ account }: EmailOtpRequest): Promise<void> {
+  const identifier = normalizeAccount(account);
+  const { error } = await authClient().resend({
+    type: 'signup',
+    email: identifier.value,
+    options: { emailRedirectTo: confirmationRedirect() },
+  });
+  if (error) throw error;
+}
+
+export async function sendLoginOtp({ account }: EmailOtpRequest): Promise<void> {
+  const identifier = normalizeAccount(account);
+  const { error } = await authClient().signInWithOtp({
+    email: identifier.value,
+    options: { shouldCreateUser: false, emailRedirectTo: confirmationRedirect() },
+  });
+  if (error) throw error;
+}
+
+export async function verifyEmailOtp({ account, code, importGuestData }: EmailOtpVerification): Promise<AuthenticatedResult> {
+  const identifier = normalizeAccount(account);
+  const otp = validateEmailOtp(code);
+  if (!otp.valid) throw new Error(otp.message);
+  const guestImport = importGuestData && getGuestId()
+    ? { account: identifier, scope: await getActiveGuestPracticeScope() } : undefined;
+  const { data, error } = await authClient().verifyOtp({
+    email: identifier.value,
+    token: otp.normalized,
+    type: 'email',
+  });
+  if (error) throw error;
+  const userId = data.user?.id ?? data.session?.user.id;
+  if (!userId) throw new Error('邮箱验证码验证未完成，请重试。');
+  return completeSignIn(userId, guestImport);
+}
+
+export async function loginWithAccount({ account, password, importGuestData }: LoginCredentials): Promise<AuthenticatedResult> {
   const identifier = normalizeAccount(account);
   const guestImport = importGuestData && getGuestId()
     ? { account: identifier, scope: await getActiveGuestPracticeScope() } : undefined;
-  if (identifier.kind === 'phone') return signInPhone(identifier.value, password, guestImport);
   const { data, error } = await authClient().signInWithPassword({ email: identifier.value, password });
   if (error) throw error;
   if (!data.user) throw new Error('邮箱登录未完成，请重试。');
@@ -185,73 +195,54 @@ export async function loginWithAccount({ account, password, importGuestData }: L
 }
 
 export async function loginAsGuest(): Promise<GuestProfile> {
+  let signedOutUserId: string | null = null;
   if (isDatabaseConfigured()) {
     const auth = authClient();
     const { data, error } = await auth.getSession();
     if (error) throw error;
     if (data.session) {
+      signedOutUserId = data.session.user.id;
+      await flushPendingCloudWrites().catch(() => undefined);
       const { error: signOutError } = await auth.signOut({ scope: 'local' });
       if (signOutError) throw signOutError;
     }
   }
+  clearCloudSyncSession(signedOutUserId);
   const user = guestProfile(startGuest());
-  publishAuthChange({ type: 'session_changed' });
+  publishAuthChange({ type: 'session_changed', accountId: null });
   return user;
 }
 
-export async function upgradeGuestToAccount({ account, password, secondaryAccount }: AccountSelection): Promise<AuthResult> {
-  const { registrationAccount, accountToLink } = registrationIdentifiers(account, secondaryAccount);
+export async function upgradeGuestToAccount({ account, password, nickname }: UpgradeCredentials): Promise<AuthResult> {
+  const identifier = normalizeAccount(account);
+  const displayName = nickname?.trim() || '刷题用户';
+  const validation = validatePassword(password, true);
+  if (!validation.valid) throw new Error(validation.message);
   const user = await loadAuthenticatedProfile();
   if (!user) {
-    savePendingUpgrade(registrationAccount, await getActiveGuestPracticeScope());
-    return tryLinkSecondaryAccount(await register(registrationAccount, password, '刷题用户'), password, accountToLink);
+    const scope = await getActiveGuestPracticeScope();
+    return register(identifier, password, displayName, { account: identifier, scope });
   }
-  const matchedAccount = [registrationAccount, accountToLink].find((candidate) => candidate && matchesAccount(user, candidate));
-  if (!matchedAccount) throw new Error('请退出当前账号后再升级游客资料。');
-  savePendingUpgrade(matchedAccount, await getActiveGuestPracticeScope(), user.id);
-  const secondAccount = matchedAccount === registrationAccount ? accountToLink : registrationAccount;
-  return tryLinkSecondaryAccount(await completeSignIn(user.id), password, secondAccount);
+  if (!matchesAccount(user, identifier)) throw new Error('请退出当前账号后再升级游客资料。');
+  savePendingUpgrade(identifier, await getActiveGuestPracticeScope(), user.id);
+  return completeSignIn(user.id);
 }
 
 /** Sync the current account namespace, or explicitly import the current unclaimed guest data. */
-export async function syncLocalData({ includeGuest = false }: { includeGuest?: boolean } = {}): Promise<AuthResult> {
+export async function syncLocalData({ includeGuest = false }: { includeGuest?: boolean } = {}): Promise<AuthenticatedResult> {
   const user = await loadAuthenticatedProfile();
   if (!user) throw new Error('请先登录正式账号。');
-  const account = user.email || user.phone;
-  if (!account) throw new Error('请先完成账号验证。');
+  if (!user.email) throw new Error('请先完成邮箱验证。');
   if (!hasPendingGuestUpgrade(user)) {
     const scope = includeGuest ? await getActiveGuestPracticeScope() : accountPracticeScope(user.id);
-    savePendingUpgrade(normalizeAccount(account), scope, user.id);
+    savePendingUpgrade(normalizeAccount(user.email), scope, user.id);
   }
   return finishGuestUpgrade(user, { retryConflicts: true });
 }
 
-export async function resumeGuestUpgrade(): Promise<AuthResult | null> {
+export async function resumeGuestUpgrade(): Promise<AuthenticatedResult | null> {
   const user = await loadAuthenticatedProfile();
   return user && hasPendingGuestUpgrade(user) ? finishGuestUpgrade(user, { retryConflicts: true }) : null;
-}
-
-/** Add a second sign-in identifier to the current account. The password and user ID stay the same. */
-export async function linkAccount({ account, password }: Credentials): Promise<LinkResult> {
-  const identifier = normalizeAccount(account);
-  const user = await loadAuthenticatedProfile();
-  if (!user) throw new Error('请先登录正式账号。');
-  if (matchesAccount(user, identifier)) return { status: 'authenticated', user };
-  if (user[identifier.kind]) throw new Error('此账号已绑定同类型的登录方式。');
-  const auth = authClient();
-  const { data, error } = await auth.getSession();
-  if (error) throw error;
-  if (data.session?.user.id !== user.id) throw new Error('登录账号已变更，请重试。');
-  const linkRequest = identifier.kind === 'phone' ? { action: 'link', phone: identifier.value }
-    : { action: 'authorize_email_link', email: identifier.value };
-  await invokeDatabaseFunction('phone-auth', { ...linkRequest, ownerId: user.id, password }, data.session.access_token);
-  if (identifier.kind === 'phone') return { status: 'authenticated', user: await loadProfile(user.id) };
-  const current = await auth.getSession();
-  if (current.error) throw current.error;
-  if (current.data.session?.user.id !== user.id) throw new Error('登录账号已变更，请重试。');
-  const { error: updateError } = await auth.updateUser({ email: identifier.value }, { emailRedirectTo: confirmationRedirect() });
-  if (updateError) throw updateError;
-  return { status: 'email_confirmation_required', user };
 }
 
 export async function getCurrentUser(): Promise<CurrentUser | null> {
@@ -262,10 +253,18 @@ export async function getCurrentUser(): Promise<CurrentUser | null> {
 }
 
 export async function logout(): Promise<void> {
+  let signedOutUserId: string | null = null;
   if (isDatabaseConfigured()) {
-    const { error } = await authClient().signOut({ scope: 'local' });
+    const auth = authClient();
+    const { data } = await auth.getSession().catch(() => ({ data: { session: null } }));
+    signedOutUserId = data.session?.user.id ?? null;
+    if (signedOutUserId) {
+      await flushPendingCloudWrites().catch(() => undefined);
+    }
+    const { error } = await auth.signOut({ scope: 'local' });
     if (error) throw error;
   }
+  clearCloudSyncSession(signedOutUserId);
   endGuest();
-  publishAuthChange({ type: 'session_changed' });
+  publishAuthChange({ type: 'session_changed', accountId: null });
 }
