@@ -2,6 +2,7 @@ import type { Route } from '../router/useHashRoute';
 import { ROUTE_HASH } from '../router/useHashRoute';
 import { Icon, type IconName } from './Icons';
 import { useTheme } from './useTheme';
+import { ApiSettingsButton } from './ApiSettings';
 
 interface NavItem {
   route: Route;
@@ -70,6 +71,8 @@ export function TopNav({ route, wrongCount, favCount, onNavClick }: TopNavProps)
             );
           })}
         </nav>
+
+        <ApiSettingsButton />
 
         <button
           type="button"

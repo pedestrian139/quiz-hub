@@ -1,5 +1,5 @@
 import { test as base, expect } from '@playwright/test';
-import type { TestInfo } from '@playwright/test';
+import type { ConsoleMessage, TestInfo } from '@playwright/test';
 
 export interface RequestFailureEntry {
   url: string;
@@ -19,6 +19,7 @@ export interface RuntimeHealthTrap {
   requestFailed: RequestFailureEntry[];
   httpErrors: HttpErrorEntry[];
   allowUrlOnce(pattern: string | RegExp): void;
+  expectHttpError(pattern: string | RegExp, status: number): void;
 }
 
 function matchesPattern(url: string, pattern: string | RegExp): boolean {
@@ -89,6 +90,7 @@ export const test = base.extend<{
       const requestFailed: RequestFailureEntry[] = [];
       const httpErrors: HttpErrorEntry[] = [];
       const allowedOnce: Array<string | RegExp> = [];
+      const expectedHttpErrors: { pattern: string | RegExp; status: number; response: boolean; console: boolean }[] = [];
 
       const consumeAllowed = (url: string): boolean => {
         const idx = allowedOnce.findIndex((p) => matchesPattern(url, p));
@@ -99,10 +101,13 @@ export const test = base.extend<{
         return false;
       };
 
-      const onConsole = (msg: { type(): string; text(): string }) => {
-        if (msg.type() === 'error') {
-          consoleErrors.push(msg.text());
-        }
+      const onConsole = (msg: ConsoleMessage) => {
+        if (msg.type() !== 'error') return;
+        const status = msg.text().match(/^Failed to load resource: the server responded with a status of (\d{3})(?:\s|$)/)?.[1];
+        const expected = expectedHttpErrors.find((entry) => !entry.console && entry.status === Number(status)
+          && matchesPattern(msg.location().url, entry.pattern));
+        if (expected) expected.console = true;
+        else consoleErrors.push(msg.text());
       };
 
       const onPageError = (err: Error) => {
@@ -132,6 +137,12 @@ export const test = base.extend<{
       }) => {
         if (res.status() >= 400) {
           const url = res.url();
+          const expected = expectedHttpErrors.find((entry) => !entry.response && entry.status === res.status()
+            && matchesPattern(url, entry.pattern));
+          if (expected) {
+            expected.response = true;
+            return;
+          }
           if (consumeAllowed(url)) {
             return;
           }
@@ -156,6 +167,9 @@ export const test = base.extend<{
         allowUrlOnce(pattern: string | RegExp) {
           allowedOnce.push(pattern);
         },
+        expectHttpError(pattern, status) {
+          expectedHttpErrors.push({ pattern, status, response: false, console: false });
+        },
       };
 
       await use(trap);
@@ -166,6 +180,7 @@ export const test = base.extend<{
       page.off('response', onResponse);
 
       assertRuntimeClean(trap);
+      expect(expectedHttpErrors.filter((error) => !error.response), 'Expected HTTP errors').toEqual([]);
     },
     { auto: true },
   ],

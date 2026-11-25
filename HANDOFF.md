@@ -1,5 +1,24 @@
 # 项目开发交接文档（HANDOFF.md）
 
+## V2 本机账号隔离与迁移回归（2026-11-25）
+
+- 本轮在 `origin/dev` 的 `c773ac4` 基础上整合鉴权基线 `8e5a27f` 与四项修复，交接分支为 `dev`。
+- 正式账号按 Supabase 用户 ID 读写本机答题记录、收藏、自建题库和 API 配置。切换身份时重新加载当前身份的数据。「同步当前账号进度」读取该账号自己的数据。「导入此浏览器的游客数据」可将未绑定的游客数据导入已验证的账号。
+- 原有共享存储作为未绑定的游客数据保留。首次导入由 IndexedDB 事务绑定归属并切换到新的游客存储，已归属的数据仅供原账号续传。迁移重试保留源数据，不会重新创建账号已删除的题库。仅当前标签页有效的 API 配置继续留在该标签页。
+- 手动重试已提交的冲突时使用新批次重新评估，网络失败仍先复用原批次。迁移日志写入遇到配额限制时会保留登录状态，当前页面可在存储恢复后重试。若配额未恢复就刷新，待重试提示可能消失，原始游客数据仍可从菜单发起导入。其他标签页结束游客身份后，本页不会再用旧的游客 ID 恢复会话。
+- 关键文件包括 `src/components/Auth/AuthPracticeRoot.tsx`、`src/core/practiceScope.ts`、`src/utils/bankDb.ts`、`src/services/authService.ts` 和 `src/services/db/guestOwnership.ts`、`guestData.ts`、`guestUpgrade.ts`。回归用例见 `tests/unit/practiceScope.test.ts`、`tests/unit/authService.test.ts`、`tests/e2e/tier6-auth-ui.spec.ts` 和 `db/tests/auth-and-guest-upgrade.sql`。
+- 本地类型检查、生产构建、78 项单元测试、254 项全量浏览器用例、2 项无 Supabase 配置的游客与跨标签页用例、PGlite SQL 回归和 Edge Functions 类型检查均通过。全量浏览器用例有 234 项按视口或配置跳过。原有移动端单选布局用例已改为检查实际渲染的选项，兼容少于四个选项的题目。
+- 后续在目标 Supabase 项目验证邮件回跳和跨设备读取。部署配置见 `HANDOFF_database.md`。
+
+## V2 登录与数据库集成（2026-11-25）
+
+- 本地 `feat/database` 已合入 `origin/dev` 的 `c773ac4`（PR #3），合并提交为 `146c304`。两个功能入口都已挂载，题库导入继续保留。
+- 登录界面现在使用 `src/services/authService.ts` 的 Supabase 鉴权、会话事件和共享校验。注册支持邮箱、手机号或两者。邮箱验证未完成时显示等待状态。未配置 Supabase 时只提供本地游客入口。原 PR 的浏览器模拟账号和密码摘要已退出运行路径。
+- 游客从绑定窗口登录已有账号时，会在验证账号密码成功后将本机数据同步给该账号。云端回执确认前显示待重试或冲突，原始本地数据保留。登录弹窗会移入并限制键盘焦点，关闭后恢复到登录入口。
+- 现有刷题页面继续使用原有本地存储。云端迁移和数据库服务已接通，刷题页面的持续跨设备读写仍是后续集成事项。
+- 本地验证覆盖真实 Supabase SDK 与模拟 HTTP 网关的交互。目标 Supabase 项目仍需验证实际邮件回跳和跨设备数据读取。环境变量、建表和部署设置见 `HANDOFF_database.md`。
+- 本地类型检查、生产构建、71 项单测、252 项全量浏览器用例、2 项无配置游客用例、SQL 回归和 Edge Functions 类型检查均通过。全量浏览器回归另有 234 项按视口或配置跳过。
+
 ## 1. 当前完成进度（M1 + M2 + M3 + 视觉精修 + Ground-Truth 审计 + CI/CD 全量验收通过）
 - **M1 工程骨架与核心刷题引擎**：
   - 完成 Vite 8 + React 19 + TypeScript + Vitest + Playwright 工程配置。
