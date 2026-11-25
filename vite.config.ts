@@ -9,6 +9,8 @@ export default defineConfig({
     rolldownOptions: {
       output: {
         manualChunks(id) {
+          if (id.includes('node_modules/xlsx') || id.includes('node_modules\\xlsx')) return 'importer-xlsx';
+          if (id.includes('node_modules/mammoth') || id.includes('node_modules\\mammoth')) return 'importer-docx';
           if (id.includes('node_modules')) {
             return 'vendor';
           }
