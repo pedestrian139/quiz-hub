@@ -2,7 +2,7 @@ import react from '@vitejs/plugin-react';
 import { defineConfig } from 'vite';
 
 export default defineConfig({
-  base: './',
+  base: process.env.CF_PAGES === '1' ? '/' : './',
   plugins: [react()],
   build: {
     chunkSizeWarningLimit: 600,
