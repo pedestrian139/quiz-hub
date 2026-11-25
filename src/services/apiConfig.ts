@@ -1,3 +1,6 @@
+import { LEGACY_GUEST_SCOPE, practiceStorageKey } from '../core/practiceScope';
+import type { PracticeScope } from '../core/practiceScope';
+
 export type ApiProviderId =
   | 'deepseek'
   | 'openai'
@@ -272,18 +275,18 @@ export function sanitizeApiConfig(raw: unknown, fallbackScope: ApiStorageScope =
   };
 }
 
-function readRawFromScope(scope: ApiStorageScope): string | null {
+function readRawFromScope(scope: ApiStorageScope, owner: PracticeScope): string | null {
   const storage = getStorageByScope(scope);
   if (!storage) return null;
   try {
-    return storage.getItem(API_CONFIG_STORAGE_KEY);
+    return storage.getItem(practiceStorageKey(API_CONFIG_STORAGE_KEY, owner));
   } catch {
     return null;
   }
 }
 
-export function loadApiConfig(): ApiConfig {
-  const sessionRaw = readRawFromScope('session');
+export function loadApiConfig(owner: PracticeScope = LEGACY_GUEST_SCOPE): ApiConfig {
+  const sessionRaw = readRawFromScope('session', owner);
   if (sessionRaw) {
     try {
       return sanitizeApiConfig(JSON.parse(sessionRaw), 'session');
@@ -292,7 +295,7 @@ export function loadApiConfig(): ApiConfig {
     }
   }
 
-  const localRaw = readRawFromScope('local');
+  const localRaw = readRawFromScope('local', owner);
   if (localRaw) {
     try {
       return sanitizeApiConfig(JSON.parse(localRaw), 'local');
@@ -304,73 +307,75 @@ export function loadApiConfig(): ApiConfig {
   return createDefaultApiConfig();
 }
 
-function emitApiConfigChange(config: ApiConfig): void {
+function emitApiConfigChange(config: ApiConfig, owner: PracticeScope): void {
   if (typeof window === 'undefined' || typeof window.dispatchEvent !== 'function') return;
   try {
-    window.dispatchEvent(new CustomEvent<ApiConfig>(API_CONFIG_CHANGE_EVENT, { detail: config }));
+    window.dispatchEvent(new CustomEvent(API_CONFIG_CHANGE_EVENT, { detail: { owner, config } }));
   } catch {
     // Ignore event dispatch errors in restricted environments
   }
 }
 
-export function saveApiConfig(input: ApiConfig): boolean {
+export function saveApiConfig(input: ApiConfig, owner: PracticeScope = LEGACY_GUEST_SCOPE): boolean {
   const clean = sanitizeApiConfig(input, input.storageScope);
+  const key = practiceStorageKey(API_CONFIG_STORAGE_KEY, owner);
   const target = getStorageByScope(clean.storageScope);
   const other = getStorageByScope(clean.storageScope === 'session' ? 'local' : 'session');
 
   if (other) {
     try {
-      other.removeItem(API_CONFIG_STORAGE_KEY);
+      other.removeItem(key);
     } catch {
       // Ignore cleanup errors
     }
   }
 
   if (!target) {
-    emitApiConfigChange(clean);
+    emitApiConfigChange(clean, owner);
     return false;
   }
 
   try {
-    target.setItem(API_CONFIG_STORAGE_KEY, JSON.stringify(clean));
-    emitApiConfigChange(clean);
+    target.setItem(key, JSON.stringify(clean));
+    emitApiConfigChange(clean, owner);
     return true;
   } catch {
     return false;
   }
 }
 
-export function clearApiConfig(): ApiConfig {
+export function clearApiConfig(owner: PracticeScope = LEGACY_GUEST_SCOPE): ApiConfig {
+  const key = practiceStorageKey(API_CONFIG_STORAGE_KEY, owner);
   const local = getStorageByScope('local');
   const session = getStorageByScope('session');
   try {
-    local?.removeItem(API_CONFIG_STORAGE_KEY);
+    local?.removeItem(key);
   } catch {
     // ignore
   }
   try {
-    session?.removeItem(API_CONFIG_STORAGE_KEY);
+    session?.removeItem(key);
   } catch {
     // ignore
   }
   const fresh = createDefaultApiConfig();
-  emitApiConfigChange(fresh);
+  emitApiConfigChange(fresh, owner);
   return fresh;
 }
 
-export function subscribeApiConfig(listener: (config: ApiConfig) => void): () => void {
+export function subscribeApiConfig(listener: (config: ApiConfig) => void, owner: PracticeScope = LEGACY_GUEST_SCOPE): () => void {
   if (typeof window === 'undefined' || typeof window.addEventListener !== 'function') {
     return () => {};
   }
 
   const onCustom = (event: Event) => {
-    const custom = event as CustomEvent<ApiConfig>;
-    listener(custom.detail ? sanitizeApiConfig(custom.detail) : loadApiConfig());
+    const custom = event as CustomEvent<{ owner: PracticeScope; config: ApiConfig }>;
+    if (custom.detail?.owner === owner) listener(sanitizeApiConfig(custom.detail.config));
   };
 
   const onStorage = (event: StorageEvent) => {
-    if (event.key === null || event.key === API_CONFIG_STORAGE_KEY) {
-      listener(loadApiConfig());
+    if (event.key === null || event.key === practiceStorageKey(API_CONFIG_STORAGE_KEY, owner)) {
+      listener(loadApiConfig(owner));
     }
   };
 

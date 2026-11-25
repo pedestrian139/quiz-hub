@@ -1,18 +1,10 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { createEmptyStore } from '../core/storage';
 import type { StoreApi } from '../hooks/usePersistentStore';
+import { usePracticeScope } from '../hooks/practiceScope';
 import type { UserStore } from '../types/quiz';
 import { BUILTIN_AI_BANK, buildBankViewModel, type BankViewModel } from './bankCatalog';
-import {
-  createCustomBank,
-  deleteCustomBank,
-  initBankDb,
-  renameCustomBank,
-  resetBankProgress,
-  saveBankProgress,
-  setActiveBankId as persistActiveBankId,
-  type CreateCustomBankInput,
-} from './bankDb';
+import { getBankDb, type CreateCustomBankInput } from './bankDb';
 import { BUILTIN_AI_BANK_ID, type BankRecord } from './quizImportTypes';
 
 export interface BankLibraryApi {
@@ -40,6 +32,7 @@ function sortLibraryBanks(customBanks: BankRecord[]): BankRecord[] {
 }
 
 export function useBankLibrary(): BankLibraryApi {
+  const bankDb = getBankDb(usePracticeScope());
   const [ready, setReady] = useState(false);
   const [migratedFromV1, setMigratedFromV1] = useState(false);
   const [banks, setBanks] = useState<BankRecord[]>(() => [BUILTIN_AI_BANK]);
@@ -56,7 +49,7 @@ export function useBankLibrary(): BankLibraryApi {
 
   useEffect(() => {
     let cancelled = false;
-    void initBankDb(BUILTIN_AI_BANK).then((res) => {
+    void bankDb.initBankDb(BUILTIN_AI_BANK).then((res) => {
       if (cancelled) return;
 
       const mergedBanksMap = new Map<string, BankRecord>();
@@ -76,7 +69,7 @@ export function useBankLibrary(): BankLibraryApi {
       for (const dirtyId of dirtyProgressRef.current) {
         if (progressRef.current[dirtyId]) {
           nextProgress[dirtyId] = progressRef.current[dirtyId]!;
-          void saveBankProgress(dirtyId, nextProgress[dirtyId]!);
+          void bankDb.saveBankProgress(dirtyId, nextProgress[dirtyId]!);
         }
       }
       for (const b of nextBanks) {
@@ -104,7 +97,7 @@ export function useBankLibrary(): BankLibraryApi {
     return () => {
       cancelled = true;
     };
-  }, []);
+  }, [bankDb]);
 
   const getProgressFor = useCallback((bankId: string): UserStore => {
     return progressRef.current[bankId] ?? createEmptyStore();
@@ -115,9 +108,9 @@ export function useBankLibrary(): BankLibraryApi {
     const nextMap = { ...progressRef.current, [bankId]: next };
     progressRef.current = nextMap;
     setProgressByBank(nextMap);
-    void saveBankProgress(bankId, next);
+    void bankDb.saveBankProgress(bankId, next);
     return true;
-  }, []);
+  }, [bankDb]);
 
   const updateFor = useCallback(
     (bankId: string, fn: (prev: UserStore) => UserStore): UserStore => {
@@ -135,8 +128,8 @@ export function useBankLibrary(): BankLibraryApi {
     const nextMap = { ...progressRef.current, [bankId]: empty };
     progressRef.current = nextMap;
     setProgressByBank(nextMap);
-    void resetBankProgress(bankId);
-  }, []);
+    void bankDb.resetBankProgress(bankId);
+  }, [bankDb]);
 
   const storeApiFor = useCallback(
     (bankId: string): StoreApi => ({
@@ -160,12 +153,12 @@ export function useBankLibrary(): BankLibraryApi {
       progressRef.current = nextMap;
       setProgressByBank(nextMap);
     }
-    await persistActiveBankId(targetId);
-  }, []);
+    await bankDb.setActiveBankId(targetId);
+  }, [bankDb]);
 
   const importNewBank = useCallback(
     async (input: CreateCustomBankInput, activate = true): Promise<BankRecord> => {
-      const created = await createCustomBank(input);
+      const created = await bankDb.createCustomBank(input);
       const nextBanks = sortLibraryBanks([...banksRef.current, created]);
       banksRef.current = nextBanks;
       setBanks(nextBanks);
@@ -181,17 +174,17 @@ export function useBankLibrary(): BankLibraryApi {
         activeTouchedRef.current = true;
         activeBankIdRef.current = created.id;
         setActiveBankIdState(created.id);
-        await persistActiveBankId(created.id);
+        await bankDb.setActiveBankId(created.id);
       }
 
       return created;
     },
-    [],
+    [bankDb],
   );
 
   const renameBank = useCallback(
     async (bankId: string, name: string, description?: string): Promise<boolean> => {
-      const updated = await renameCustomBank(bankId, name, description);
+      const updated = await bankDb.renameCustomBank(bankId, name, description);
       if (!updated) return false;
       const nextBanks = sortLibraryBanks(
         banksRef.current.map((b) => (b.id === bankId ? updated : b)),
@@ -200,11 +193,11 @@ export function useBankLibrary(): BankLibraryApi {
       setBanks(nextBanks);
       return true;
     },
-    [],
+    [bankDb],
   );
 
   const deleteBank = useCallback(async (bankId: string): Promise<boolean> => {
-    const ok = await deleteCustomBank(bankId);
+    const ok = await bankDb.deleteCustomBank(bankId);
     if (!ok) return false;
 
     const nextBanks = banksRef.current.filter((b) => b.id !== bankId);
@@ -220,10 +213,10 @@ export function useBankLibrary(): BankLibraryApi {
       activeTouchedRef.current = true;
       activeBankIdRef.current = BUILTIN_AI_BANK_ID;
       setActiveBankIdState(BUILTIN_AI_BANK_ID);
-      await persistActiveBankId(BUILTIN_AI_BANK_ID);
+      await bankDb.setActiveBankId(BUILTIN_AI_BANK_ID);
     }
     return true;
-  }, []);
+  }, [bankDb]);
 
   const clearBankProgress = useCallback(
     async (bankId: string): Promise<void> => {

@@ -5,6 +5,9 @@ import type {
   UserStore,
 } from '../types/quiz';
 
+import { LEGACY_GUEST_SCOPE, practiceStorageKey } from './practiceScope';
+import type { PracticeScope } from './practiceScope';
+
 export const STORAGE_KEY = 'ai-intro-quiz-v1';
 
 const DANGEROUS_KEYS = new Set(['__proto__', 'constructor', 'prototype']);
@@ -94,7 +97,7 @@ function isValidMastery(value: unknown): value is MasteryLevel {
   return value === 0 || value === 1 || value === 2;
 }
 
-export function loadStore(): UserStore {
+export function loadStore(scope: PracticeScope = LEGACY_GUEST_SCOPE): UserStore {
   const storage = getSafeStorage();
   if (!storage) {
     return createEmptyStore();
@@ -102,7 +105,7 @@ export function loadStore(): UserStore {
 
   let raw: string | null = null;
   try {
-    raw = storage.getItem(STORAGE_KEY);
+    raw = storage.getItem(practiceStorageKey(STORAGE_KEY, scope));
   } catch {
     return createEmptyStore();
   }
@@ -157,24 +160,24 @@ export function loadStore(): UserStore {
   return store;
 }
 
-export function saveStore(store: UserStore): boolean {
+export function saveStore(store: UserStore, scope: PracticeScope = LEGACY_GUEST_SCOPE): boolean {
   const storage = getSafeStorage();
   if (!storage) {
     return false;
   }
   try {
-    storage.setItem(STORAGE_KEY, JSON.stringify(store));
+    storage.setItem(practiceStorageKey(STORAGE_KEY, scope), JSON.stringify(store));
     return true;
   } catch {
     return false;
   }
 }
 
-export function resetStore(): UserStore {
+export function resetStore(scope: PracticeScope = LEGACY_GUEST_SCOPE): UserStore {
   const storage = getSafeStorage();
   if (storage) {
     try {
-      storage.removeItem(STORAGE_KEY);
+      storage.removeItem(practiceStorageKey(STORAGE_KEY, scope));
     } catch {
       // Ignore storage removal errors
     }

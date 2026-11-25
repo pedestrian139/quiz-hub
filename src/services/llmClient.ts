@@ -5,6 +5,7 @@ import {
   normalizeBaseUrl,
   type ApiConfig,
 } from './apiConfig';
+import type { PracticeScope } from '../core/practiceScope';
 
 export type ChatRole = 'system' | 'user' | 'assistant';
 
@@ -15,6 +16,7 @@ export interface ChatMessage {
 
 export interface LlmRequestOptions {
   config?: Partial<ApiConfig>;
+  practiceScope?: PracticeScope;
   temperature?: number;
   maxTokens?: number;
   timeoutMs?: number;
@@ -81,8 +83,8 @@ export function buildModelsUrl(baseUrl: string): string {
   return `${normalized}/models`;
 }
 
-function resolveEffectiveConfig(override?: Partial<ApiConfig>): ApiConfig {
-  const stored = loadApiConfig();
+function resolveEffectiveConfig(override?: Partial<ApiConfig>, practiceScope?: PracticeScope): ApiConfig {
+  const stored = loadApiConfig(practiceScope);
   const merged: ApiConfig = {
     ...stored,
     ...(override ?? {}),
@@ -336,7 +338,7 @@ export async function chatCompletion(
   messages: ChatMessage[],
   options: LlmRequestOptions = {},
 ): Promise<LlmCompletionResult> {
-  const config = resolveEffectiveConfig(options.config);
+  const config = resolveEffectiveConfig(options.config, options.practiceScope);
   assertReadyConfig(config);
 
   const timeoutMs = options.timeoutMs ?? config.timeoutMs;
@@ -390,7 +392,7 @@ export async function streamChatCompletion(
   options: LlmRequestOptions = {},
   onChunk?: (chunk: string, accumulated: string) => void,
 ): Promise<LlmCompletionResult> {
-  const config = resolveEffectiveConfig(options.config);
+  const config = resolveEffectiveConfig(options.config, options.practiceScope);
   assertReadyConfig(config);
 
   const timeoutMs = options.timeoutMs ?? config.timeoutMs;
@@ -518,8 +520,9 @@ export async function chatCompletionJson<T>(
 export async function testApiConnection(
   configOverride?: Partial<ApiConfig>,
   signal?: AbortSignal,
+  practiceScope?: PracticeScope,
 ): Promise<ApiConnectionTestResult> {
-  const config = resolveEffectiveConfig(configOverride);
+  const config = resolveEffectiveConfig(configOverride, practiceScope);
   const startedAt = Date.now();
   try {
     assertReadyConfig(config);
@@ -530,6 +533,7 @@ export async function testApiConnection(
       ],
       {
         config,
+        practiceScope,
         temperature: 0,
         maxTokens: 12,
         timeoutMs: Math.min(config.timeoutMs, 20000),
@@ -560,8 +564,9 @@ export async function testApiConnection(
 export async function fetchAvailableModels(
   configOverride?: Partial<ApiConfig>,
   signal?: AbortSignal,
+  practiceScope?: PracticeScope,
 ): Promise<string[]> {
-  const config = resolveEffectiveConfig(configOverride);
+  const config = resolveEffectiveConfig(configOverride, practiceScope);
   if (!isValidHttpUrl(config.baseUrl)) {
     throw new LlmApiError('INVALID_URL', '请先填写有效的 API Base URL。');
   }

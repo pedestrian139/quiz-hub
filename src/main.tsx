@@ -1,9 +1,10 @@
 import { StrictMode } from 'react';
 import { createRoot } from 'react-dom/client';
 import App from './App';
+import { AuthPracticeRoot } from './components/Auth/AuthPracticeRoot';
 
 createRoot(document.getElementById('root')!).render(
   <StrictMode>
-    <App />
+    <AuthPracticeRoot><App /></AuthPracticeRoot>
   </StrictMode>,
 );

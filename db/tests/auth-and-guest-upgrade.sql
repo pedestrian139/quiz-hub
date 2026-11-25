@@ -64,8 +64,14 @@ begin
     or public.quizhub_restore_api_config(phone_user) is not null then
     raise exception 'Independent cloud edits and explicit clears must survive a guest import';
   end if;
-  if public.quizhub_import_guest(phone_user, conflict_import, source_id, 3, '[]', '[]', null, null) is distinct from result then
+  delete from public.quiz_banks where user_id = phone_user and bank_id = 'test-bank';
+  delete from public.user_api_configs where user_id = phone_user;
+  if public.quizhub_import_guest(phone_user, conflict_import, source_id, 3, jsonb_build_array(bank), progress, config, null) is distinct from result then
     raise exception 'A retried import ID must return the original result';
+  end if;
+  result := public.quizhub_import_guest(phone_user, gen_random_uuid(), source_id, 4, jsonb_build_array(bank), progress, config, null);
+  if result is distinct from '{"skippedBankIds":[],"skippedApiConfig":false}'::jsonb then
+    raise exception 'A new version must evaluate conflicts again after they are resolved';
   end if;
 end;
 $$;

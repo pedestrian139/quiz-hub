@@ -7,7 +7,7 @@ import {
 } from '../../services/authService';
 import type { CurrentUser } from '../../services/authService';
 import { AuthIcon } from './AuthIcons';
-import { applyAuthResult, closeAuthModal, setAuthModalMode, setAuthUser, useAuthUiState } from './authState';
+import { applyAuthResult, closeAuthModal, refreshAuthIdentity, setAuthModalMode, useAuthUiState } from './authState';
 import type { AuthModalMode } from './authState';
 import { useDialogFocus } from './useDialogFocus';
 import './Auth.css';
@@ -117,7 +117,7 @@ export function AuthModal({ open: controlledOpen, initialMode, onClose, onAuthSu
     try {
       if (retryAccount) {
         const link = await linkAccount({ account: retryAccount, password });
-        setAuthUser(link.user);
+        await refreshAuthIdentity();
         setRetryAccount(null);
         setPassword('');
         setVerificationSent(true);
@@ -135,7 +135,7 @@ export function AuthModal({ open: controlledOpen, initialMode, onClose, onAuthSu
         setNotice('验证邮件已发送。确认邮箱后可登录。');
         return;
       }
-      applyAuthResult(result);
+      await applyAuthResult(result);
       onAuthSuccess?.(result.user);
       if (result.failedSecondaryAccount) {
         setRetryAccount(result.failedSecondaryAccount);
@@ -163,7 +163,7 @@ export function AuthModal({ open: controlledOpen, initialMode, onClose, onAuthSu
     setSubmitting(true);
     try {
       const user = await loginAsGuest();
-      setAuthUser(user);
+      await refreshAuthIdentity();
       onAuthSuccess?.(user);
       (onClose ?? closeAuthModal)();
     } catch (error) {

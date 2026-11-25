@@ -8,13 +8,14 @@ type MigrationStatus = 'pending' | 'conflict' | 'synced';
 
 interface AuthUiSnapshot {
   user: CurrentUser | null;
+  identityStatus: 'loading' | 'ready' | 'error';
   isOpen: boolean;
   mode: AuthModalMode;
   migrationStatus: MigrationStatus | null;
 }
 
 const listeners = new Set<() => void>();
-let snapshot: AuthUiSnapshot = { user: null, isOpen: false, mode: 'login', migrationStatus: null };
+let snapshot: AuthUiSnapshot = { user: null, identityStatus: 'loading', isOpen: false, mode: 'login', migrationStatus: null };
 let lastMigration: { userId: string; status: MigrationStatus } | null = null;
 let bridgeInitialized = false;
 let refreshVersion = 0;
@@ -24,9 +25,9 @@ function updateSnapshot(change: Partial<AuthUiSnapshot>): void {
   for (const listener of listeners) listener();
 }
 
-export function setAuthUser(user: CurrentUser | null): void {
+function setAuthUser(user: CurrentUser | null): void {
   refreshVersion += 1;
-  updateSnapshot({ user, migrationStatus: user?.id === lastMigration?.userId ? lastMigration?.status ?? null : null });
+  updateSnapshot({ user, identityStatus: 'ready', migrationStatus: user?.id === lastMigration?.userId ? lastMigration?.status ?? null : null });
 }
 
 function recordMigration(result: AuthenticatedResult): void {
@@ -37,17 +38,19 @@ function recordMigration(result: AuthenticatedResult): void {
   if (snapshot.user?.id === result.user.id) updateSnapshot({ migrationStatus: status });
 }
 
-export function applyAuthResult(result: AuthenticatedResult): void {
+export async function applyAuthResult(result: AuthenticatedResult): Promise<void> {
   recordMigration(result);
-  setAuthUser(result.user);
+  await refreshAuthIdentity();
 }
 
-async function refreshUser(): Promise<void> {
+export async function refreshAuthIdentity(): Promise<void> {
   const version = ++refreshVersion;
   try {
     const user = await getCurrentUser();
     if (version === refreshVersion) setAuthUser(user);
-  } catch { /* Keep the current view when the session cannot be fetched. */ }
+  } catch {
+    if (version === refreshVersion) updateSnapshot({ user: null, identityStatus: 'error', migrationStatus: null });
+  }
 }
 
 function ensureBridge(): void {
@@ -55,13 +58,19 @@ function ensureBridge(): void {
   bridgeInitialized = true;
   subscribeAuthChange((event) => {
     if (event.type === 'guest_migration') recordMigration(event.result);
-    else void refreshUser();
+    else {
+      const currentAccount = snapshot.user && !snapshot.user.isGuest ? snapshot.user.id : null;
+      if (event.accountId !== undefined && event.accountId !== currentAccount) {
+        updateSnapshot({ user: null, identityStatus: 'loading', migrationStatus: null });
+      }
+      void refreshAuthIdentity();
+    }
   });
   window.addEventListener(OPEN_AUTH_MODAL_EVENT, (event) => {
     const mode = (event as CustomEvent<{ mode?: AuthModalMode }>).detail?.mode;
     openAuthModal(mode === 'register' || mode === 'upgrade' || mode === 'guest-login' ? mode : 'login');
   });
-  void refreshUser();
+  void refreshAuthIdentity();
 }
 
 function subscribe(listener: () => void): () => void {

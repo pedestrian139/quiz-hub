@@ -1,8 +1,10 @@
-import { loadStore, STORAGE_KEY } from '../../core/storage';
-import { API_CONFIG_STORAGE_KEY, sanitizeApiConfig } from '../apiConfig';
+import { createEmptyStore, loadStore, saveStore, STORAGE_KEY } from '../../core/storage';
+import { LEGACY_GUEST_SCOPE, notifyPracticeDataChanged, practiceStorageKey } from '../../core/practiceScope';
+import type { AccountPracticeScope, GuestPracticeScope, PracticeScope } from '../../core/practiceScope';
+import { API_CONFIG_STORAGE_KEY, sanitizeApiConfig, saveApiConfig } from '../apiConfig';
 import type { ApiConfig } from '../apiConfig';
 import type { UserStore } from '../../types/quiz';
-import { closeQuizHubDb, getBankProgress, isStoreNonEmpty, listCustomBanks, openQuizHubDb, sanitizeUserStore } from '../../utils/bankDb';
+import { getBankDb, isStoreNonEmpty, mergeUserStores, sanitizeUserStore } from '../../utils/bankDb';
 import { BUILTIN_AI_BANK_ID } from '../../utils/quizImportTypes';
 import type { BankRecord } from '../../utils/quizImportTypes';
 
@@ -20,13 +22,19 @@ function readLocal(key: string): string | null {
 }
 
 export function getGuestId(): string | null {
-  return readLocal(GUEST_KEY) ?? memoryGuestId;
+  const persisted = readLocal(GUEST_KEY);
+  if (persisted !== null) memoryGuestId = null;
+  return persisted ?? memoryGuestId;
 }
 
 export function startGuest(): string {
   const id = getGuestId() ?? crypto.randomUUID();
-  memoryGuestId = id;
-  try { globalThis.localStorage.setItem(GUEST_KEY, id); } catch { /* Same-page guest remains available. */ }
+  try {
+    globalThis.localStorage.setItem(GUEST_KEY, id);
+    memoryGuestId = null;
+  } catch {
+    if (readLocal(GUEST_KEY) === null) memoryGuestId = id;
+  }
   return id;
 }
 
@@ -38,17 +46,18 @@ export function endGuest(): void {
 interface StoredProgress { bankId: string; store: unknown; updatedAt: number }
 interface BankSnapshot { banks: BankRecord[]; progress: StoredProgress[]; migratedAt?: number }
 
-async function readBankSnapshot(): Promise<BankSnapshot> {
-  const database = await openQuizHubDb();
+async function readBankSnapshot(scope: PracticeScope): Promise<BankSnapshot> {
+  const bankDb = getBankDb(scope);
+  const database = await bankDb.openQuizHubDb();
   if (!database) {
     if (globalThis.indexedDB) {
       // The normal app can fall back to memory. Migration must distinguish that from an empty disk snapshot.
-      closeQuizHubDb();
+      bankDb.closeQuizHubDb();
       throw new Error('浏览器暂时无法读取题库存储。');
     }
-    const banks = await listCustomBanks();
+    const banks = await bankDb.listCustomBanks();
     const progress = await Promise.all([BUILTIN_AI_BANK_ID, ...banks.map(({ id }) => id)].map(async (bankId) => ({
-      bankId, store: await getBankProgress(bankId), updatedAt: 0,
+      bankId, store: await bankDb.getBankProgress(bankId), updatedAt: 0,
     })));
     return { banks, progress };
   }
@@ -87,13 +96,13 @@ function mergeBuiltinProgress(
   return { records, fav: legacy.fav, mastery: { ...indexed.mastery, ...legacy.mastery } };
 }
 
-export async function readGuestData(): Promise<GuestData> {
-  const snapshot = await readBankSnapshot();
-  const hasLegacyData = globalThis.localStorage.getItem(STORAGE_KEY) !== null;
-  const apiConfigText = globalThis.localStorage.getItem(API_CONFIG_STORAGE_KEY);
+export async function readGuestData(scope: PracticeScope = LEGACY_GUEST_SCOPE): Promise<GuestData> {
+  const snapshot = await readBankSnapshot(scope);
+  const hasLegacyData = globalThis.localStorage.getItem(practiceStorageKey(STORAGE_KEY, scope)) !== null;
+  const apiConfigText = globalThis.localStorage.getItem(practiceStorageKey(API_CONFIG_STORAGE_KEY, scope));
   const banks = snapshot.banks.filter((bank) => !bank.builtin && bank.id !== BUILTIN_AI_BANK_ID);
   const progressByBank = new Map(snapshot.progress.map((entry) => [entry.bankId, entry]));
-  const builtin = mergeBuiltinProgress(loadStore(), hasLegacyData, progressByBank.get(BUILTIN_AI_BANK_ID), snapshot.migratedAt);
+  const builtin = mergeBuiltinProgress(loadStore(scope), hasLegacyData, progressByBank.get(BUILTIN_AI_BANK_ID), snapshot.migratedAt);
   const bankProgress = banks.map(({ id }) => ({ bankId: id, store: sanitizeUserStore(progressByBank.get(id)?.store) }));
   const progress = [{ bankId: BUILTIN_AI_BANK_ID, store: builtin }, ...bankProgress]
     .filter(({ store }) => isStoreNonEmpty(store));
@@ -102,4 +111,62 @@ export async function readGuestData(): Promise<GuestData> {
   const apiConfig = raw && typeof raw === 'object' && 'provider' in raw && 'baseUrl' in raw && 'model' in raw
     ? sanitizeApiConfig(raw) : null;
   return { banks, progress, apiConfig: apiConfig?.storageScope === 'local' ? apiConfig : null };
+}
+
+/** Copy a claimed guest snapshot to the account once. Keep the original available for cloud retry. */
+export async function adoptGuestData(snapshot: GuestData, source: GuestPracticeScope, target: AccountPracticeScope): Promise<void> {
+  const bankDb = getBankDb(target);
+  const database = await bankDb.openQuizHubDb();
+  if (!database) {
+    bankDb.closeQuizHubDb();
+    throw new Error('本机账号存储暂不可用。');
+  }
+  const copied = await new Promise<boolean>((resolve, reject) => {
+    const tx = database.transaction(['banks', 'progress', 'meta'], 'readwrite');
+    const banks = tx.objectStore('banks');
+    const progress = tx.objectStore('progress');
+    const meta = tx.objectStore('meta');
+    const marker = `adopted:${source}`;
+    const adopted = meta.get(marker);
+    const existingBanks = banks.getAll();
+    const existingProgress = progress.getAll();
+    let copied = false;
+    let remaining = 3;
+    let error: unknown;
+    const apply = () => {
+      if (--remaining !== 0 || adopted.result) return;
+      try {
+        const localBanks = new Map<string, BankRecord>((existingBanks.result as BankRecord[]).map((bank) => [bank.id, bank]));
+        const localProgress = new Map<string, StoredProgress>((existingProgress.result as StoredProgress[]).map((entry) => [entry.bankId, entry]));
+        const importedIds = new Set([BUILTIN_AI_BANK_ID]);
+        for (const bank of snapshot.banks) {
+          const existing = localBanks.get(bank.id);
+          if (!existing) banks.put(bank);
+          if (!existing || JSON.stringify(existing.data) === JSON.stringify(bank.data)) importedIds.add(bank.id);
+        }
+        for (const { bankId, store } of snapshot.progress) {
+          if (!importedIds.has(bankId)) continue;
+          const previous = localProgress.get(bankId);
+          if (previous && !isStoreNonEmpty(sanitizeUserStore(previous.store))) continue;
+          const merged = mergeUserStores(store, previous ? sanitizeUserStore(previous.store) : createEmptyStore());
+          if (bankId === BUILTIN_AI_BANK_ID && !saveStore(mergeUserStores(merged, loadStore(target)), target)) {
+            throw new Error('无法保存账号的本机进度。');
+          }
+          progress.put({ bankId, store: merged, updatedAt: Date.now() });
+        }
+        const apiConfigKey = practiceStorageKey(API_CONFIG_STORAGE_KEY, target);
+        if (snapshot.apiConfig && !localStorage.getItem(apiConfigKey) && !sessionStorage.getItem(apiConfigKey)
+          && !saveApiConfig(snapshot.apiConfig, target)) throw new Error('无法保存账号的本机 API 配置。');
+        meta.put({ key: marker, value: true });
+        copied = Boolean(snapshot.banks.length || snapshot.progress.length || snapshot.apiConfig);
+      } catch (failure) {
+        error = failure;
+        tx.abort();
+      }
+    };
+    for (const request of [adopted, existingBanks, existingProgress]) request.onsuccess = apply;
+    tx.oncomplete = () => resolve(copied);
+    tx.onabort = () => reject(error ?? tx.error ?? new Error('无法复制游客数据至本机账号。'));
+  });
+  if (copied) notifyPracticeDataChanged(target);
 }

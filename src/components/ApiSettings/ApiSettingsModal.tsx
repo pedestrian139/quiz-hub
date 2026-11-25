@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState, type FormEvent } from 'react';
 import { createPortal } from 'react-dom';
+import { usePracticeScope } from '../../hooks/practiceScope';
 import {
   API_PROVIDER_PRESETS,
   clearApiConfig,
@@ -25,7 +26,8 @@ export interface ApiSettingsModalProps {
 }
 
 export function ApiSettingsModal({ open, onClose, onSaved }: ApiSettingsModalProps) {
-  const [draft, setDraft] = useState<ApiConfig>(loadApiConfig);
+  const scope = usePracticeScope();
+  const [draft, setDraft] = useState<ApiConfig>(() => loadApiConfig(scope));
   const [showKey, setShowKey] = useState(false);
   const [showAdvanced, setShowAdvanced] = useState(false);
   const [testing, setTesting] = useState(false);
@@ -38,13 +40,13 @@ export function ApiSettingsModal({ open, onClose, onSaved }: ApiSettingsModalPro
 
   useEffect(() => {
     if (!open) return;
-    setDraft(loadApiConfig());
+    setDraft(loadApiConfig(scope));
     setShowKey(false);
     setShowAdvanced(false);
     setTestResult(null);
     setRemoteModels([]);
     setNotice(null);
-  }, [open]);
+  }, [open, scope]);
 
   useEffect(() => {
     return () => {
@@ -111,7 +113,7 @@ export function ApiSettingsModal({ open, onClose, onSaved }: ApiSettingsModalPro
     setLoadingModels(true);
     setNotice(null);
     try {
-      const list = await fetchAvailableModels(draft, controller.signal);
+      const list = await fetchAvailableModels(draft, controller.signal, scope);
       setRemoteModels(list);
       if (list.length === 0) {
         setNotice({ tone: 'info', text: '接口返回了空的模型列表，你可以直接手动输入模型名称。' });
@@ -139,7 +141,7 @@ export function ApiSettingsModal({ open, onClose, onSaved }: ApiSettingsModalPro
     setTestResult(null);
     setNotice(null);
     try {
-      const res = await testApiConnection(draft, controller.signal);
+      const res = await testApiConnection(draft, controller.signal, scope);
       setTestResult(res);
     } finally {
       setTesting(false);
@@ -172,7 +174,7 @@ export function ApiSettingsModal({ open, onClose, onSaved }: ApiSettingsModalPro
       model: draft.model.trim(),
     };
 
-    const ok = saveApiConfig(toSave);
+    const ok = saveApiConfig(toSave, scope);
     if (!ok) {
       setNotice({
         tone: 'bad',
@@ -187,7 +189,7 @@ export function ApiSettingsModal({ open, onClose, onSaved }: ApiSettingsModalPro
 
   const handleClear = () => {
     abortRef.current?.abort();
-    const cleared = clearApiConfig();
+    const cleared = clearApiConfig(scope);
     setDraft(cleared);
     setTestResult(null);
     setRemoteModels([]);

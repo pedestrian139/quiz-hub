@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState, type FormEvent, type ReactNode } from 'react';
 import type { MasteryLevel, Question, UserRecord } from '../../types/quiz';
 import { isObjectiveQuestion } from '../../core/questionUtils';
+import { usePracticeScope } from '../../hooks/practiceScope';
 import {
   askQuestionFollowUpStream,
   explainQuestionStream,
@@ -113,7 +114,8 @@ export function AiQuestionTutor({
   chapterTitle,
   onSuggestedMastery,
 }: AiQuestionTutorProps) {
-  const [config, setConfig] = useState<ApiConfig>(loadApiConfig);
+  const scope = usePracticeScope();
+  const [config, setConfig] = useState<ApiConfig>(() => loadApiConfig(scope));
   const [activeTab, setActiveTab] = useState<TutorTab>('none');
 
   // Deep explanation state
@@ -137,8 +139,8 @@ export function AiQuestionTutor({
   const abortRef = useRef<AbortController | null>(null);
 
   useEffect(() => {
-    return subscribeApiConfig((next) => setConfig(next));
-  }, []);
+    return subscribeApiConfig(setConfig, scope);
+  }, [scope]);
 
   useEffect(() => {
     return () => {
@@ -182,7 +184,7 @@ export function AiQuestionTutor({
         question,
         { userRecord, chapterTitle },
         (_chunk, accumulated) => setExplainText(accumulated),
-        { signal: controller.signal },
+        { signal: controller.signal, practiceScope: scope },
       );
     } catch (err) {
       if (err instanceof LlmApiError && err.code === 'ABORTED') return;
@@ -212,6 +214,7 @@ export function AiQuestionTutor({
     try {
       const { feedback } = await gradeSubjectiveDraft(question, draftAnswer, {
         signal: controller.signal,
+        practiceScope: scope,
       });
       setGradeResult(feedback);
     } catch (err) {
@@ -259,7 +262,7 @@ export function AiQuestionTutor({
             { role: 'assistant', content: accumulated },
           ]);
         },
-        { signal: controller.signal },
+        { signal: controller.signal, practiceScope: scope },
       );
       setChatHistory([
         ...historySnapshot,

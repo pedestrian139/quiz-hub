@@ -5,11 +5,15 @@ import { loadProfile } from './db/cloudData';
 import type { AccountProfile, GuestImportConflicts } from './db/cloudData';
 import { endGuest, GUEST_KEY, getGuestId, startGuest } from './db/guestData';
 import { hasPendingGuestUpgrade, readPendingUpgrade, runGuestUpgrade, savePendingUpgrade } from './db/guestUpgrade';
+import { getActiveGuestPracticeScope } from './db/guestOwnership';
+import { accountPracticeScope } from '../core/practiceScope';
+import type { GuestPracticeScope } from '../core/practiceScope';
 
 interface Credentials { account: string; password: string }
 interface LoginCredentials extends Credentials { importGuestData?: boolean }
 interface AccountSelection extends Credentials { secondaryAccount?: string }
 interface Registration extends AccountSelection { nickname: string }
+interface GuestLoginImport { account: AccountIdentifier; scope: GuestPracticeScope }
 
 export interface GuestProfile {
   id: string;
@@ -34,7 +38,7 @@ export type LinkResult = { status: 'authenticated' | 'email_confirmation_require
 export { detectAccountInput, validatePassword } from './db/account';
 export { isDatabaseConfigured as isAuthConfigured } from './db/client';
 
-type AuthChange = { type: 'session_changed' } | { type: 'guest_migration'; result: AuthenticatedResult };
+type AuthChange = { type: 'session_changed'; accountId?: string | null } | { type: 'guest_migration'; result: AuthenticatedResult };
 const authListeners = new Set<(change: AuthChange) => void>();
 
 function publishAuthChange(change: AuthChange): void {
@@ -68,7 +72,7 @@ function authClient() {
       if (shouldResume && session) resumedUserId = session.user.id;
       // Auth callbacks hold the SDK session lock. Defer refresh and database calls.
       setTimeout(() => {
-        publishAuthChange({ type: 'session_changed' });
+        publishAuthChange({ type: 'session_changed', accountId: session?.user.id ?? null });
         if (shouldResume && session) {
           void auth.getSession().then(({ data }) => {
             if (data.session?.user.id === session.user.id) return completeSignIn(session.user.id);
@@ -122,8 +126,8 @@ async function loadAuthenticatedProfile(): Promise<AccountProfile | null> {
   return loadProfile(data.user.id);
 }
 
-async function finishGuestUpgrade(user: AccountProfile): Promise<AuthenticatedResult> {
-  const migration = await runGuestUpgrade(user);
+async function finishGuestUpgrade(user: AccountProfile, options?: Parameters<typeof runGuestUpgrade>[1]): Promise<AuthenticatedResult> {
+  const migration = await runGuestUpgrade(user, options);
   const result: AuthenticatedResult = { status: migration.pending ? 'migration_pending' : 'authenticated', user,
     ...(migration.synced && { guestDataSynced: true }),
     ...(migration.conflicts && { migrationConflicts: migration.conflicts }) };
@@ -131,21 +135,21 @@ async function finishGuestUpgrade(user: AccountProfile): Promise<AuthenticatedRe
   return result;
 }
 
-async function completeSignIn(userId: string, importAccount?: AccountIdentifier): Promise<AuthenticatedResult> {
+async function completeSignIn(userId: string, guestImport?: GuestLoginImport): Promise<AuthenticatedResult> {
   const user = await loadProfile(userId);
-  if (importAccount && matchesAccount(user, importAccount)) savePendingUpgrade(importAccount);
+  if (guestImport && matchesAccount(user, guestImport.account)) savePendingUpgrade(guestImport.account, guestImport.scope, user.id);
   endGuest();
   return finishGuestUpgrade(user);
 }
 
-async function signInPhone(phone: string, password: string, importAccount?: AccountIdentifier): Promise<AuthResult> {
+async function signInPhone(phone: string, password: string, guestImport?: GuestLoginImport): Promise<AuthResult> {
   const tokens = await invokeDatabaseFunction<{ access_token: string; refresh_token: string }>(
     'phone-auth', { action: 'login', phone, password },
   );
   const { data, error } = await authClient().setSession(tokens);
   if (error) throw error;
   if (!data.user) throw new Error('手机号登录未完成，请重试。');
-  return completeSignIn(data.user.id, importAccount);
+  return completeSignIn(data.user.id, guestImport);
 }
 
 async function register(account: AccountIdentifier, password: string, nickname: string): Promise<AuthResult> {
@@ -171,12 +175,13 @@ export async function registerWithAccount({ account, password, nickname, seconda
 
 export async function loginWithAccount({ account, password, importGuestData }: LoginCredentials): Promise<AuthResult> {
   const identifier = normalizeAccount(account);
-  const importAccount = importGuestData && getGuestId() ? identifier : undefined;
-  if (identifier.kind === 'phone') return signInPhone(identifier.value, password, importAccount);
+  const guestImport = importGuestData && getGuestId()
+    ? { account: identifier, scope: await getActiveGuestPracticeScope() } : undefined;
+  if (identifier.kind === 'phone') return signInPhone(identifier.value, password, guestImport);
   const { data, error } = await authClient().signInWithPassword({ email: identifier.value, password });
   if (error) throw error;
   if (!data.user) throw new Error('邮箱登录未完成，请重试。');
-  return completeSignIn(data.user.id, importAccount);
+  return completeSignIn(data.user.id, guestImport);
 }
 
 export async function loginAsGuest(): Promise<GuestProfile> {
@@ -198,29 +203,32 @@ export async function upgradeGuestToAccount({ account, password, secondaryAccoun
   const { registrationAccount, accountToLink } = registrationIdentifiers(account, secondaryAccount);
   const user = await loadAuthenticatedProfile();
   if (!user) {
-    savePendingUpgrade(registrationAccount);
+    savePendingUpgrade(registrationAccount, await getActiveGuestPracticeScope());
     return tryLinkSecondaryAccount(await register(registrationAccount, password, '刷题用户'), password, accountToLink);
   }
   const matchedAccount = [registrationAccount, accountToLink].find((candidate) => candidate && matchesAccount(user, candidate));
   if (!matchedAccount) throw new Error('请退出当前账号后再升级游客资料。');
-  savePendingUpgrade(matchedAccount);
+  savePendingUpgrade(matchedAccount, await getActiveGuestPracticeScope(), user.id);
   const secondAccount = matchedAccount === registrationAccount ? accountToLink : registrationAccount;
   return tryLinkSecondaryAccount(await completeSignIn(user.id), password, secondAccount);
 }
 
-/** Import this browser's data on explicit request, or retry a pending guest upgrade. */
-export async function syncLocalData(): Promise<AuthResult> {
+/** Sync the current account namespace, or explicitly import the current unclaimed guest data. */
+export async function syncLocalData({ includeGuest = false }: { includeGuest?: boolean } = {}): Promise<AuthResult> {
   const user = await loadAuthenticatedProfile();
   if (!user) throw new Error('请先登录正式账号。');
   const account = user.email || user.phone;
   if (!account) throw new Error('请先完成账号验证。');
-  if (!hasPendingGuestUpgrade(user)) savePendingUpgrade(normalizeAccount(account));
-  return finishGuestUpgrade(user);
+  if (!hasPendingGuestUpgrade(user)) {
+    const scope = includeGuest ? await getActiveGuestPracticeScope() : accountPracticeScope(user.id);
+    savePendingUpgrade(normalizeAccount(account), scope, user.id);
+  }
+  return finishGuestUpgrade(user, { retryConflicts: true });
 }
 
 export async function resumeGuestUpgrade(): Promise<AuthResult | null> {
   const user = await loadAuthenticatedProfile();
-  return user && hasPendingGuestUpgrade(user) ? finishGuestUpgrade(user) : null;
+  return user && hasPendingGuestUpgrade(user) ? finishGuestUpgrade(user, { retryConflicts: true }) : null;
 }
 
 /** Add a second sign-in identifier to the current account. The password and user ID stay the same. */

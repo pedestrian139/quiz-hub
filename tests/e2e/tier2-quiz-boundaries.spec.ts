@@ -725,8 +725,10 @@ test.describe('Tier 2: Portal, Home, Modes & Objective Quiz Boundaries (T2-001..
     await selectQuizFilters(page, { count: 10 });
     await modeCard(page, 'choice').click();
     await assertFullLayoutAudit(page);
-    for (let i = 0; i < 4; i++) {
-      const box = await quizOption(page, i).boundingBox();
+    const options = page.getByRole('group', { name: '单选题选项' }).getByRole('button');
+    expect(await options.count()).toBeGreaterThanOrEqual(2);
+    for (const option of await options.all()) {
+      const box = await option.boundingBox();
       expect(box).not.toBeNull();
       expect(box!.width).toBeLessThanOrEqual(390);
     }

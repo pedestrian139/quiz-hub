@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { isAuthConfigured, logout, resumeGuestUpgrade, syncLocalData } from '../../services/authService';
 import { AuthIcon } from './AuthIcons';
-import { applyAuthResult, openAuthModal, setAuthUser, useAuthUiState } from './authState';
+import { openAuthModal, refreshAuthIdentity, useAuthUiState } from './authState';
 import './Auth.css';
 
 export function UserMenu() {
@@ -50,20 +50,19 @@ export function UserMenu() {
   const handleLogout = async () => {
     try {
       await logout();
-      setAuthUser(null);
+      await refreshAuthIdentity();
       setMenuOpen(false);
     } catch {
       setAccountError('退出登录失败，请稍后重试。');
     }
   };
 
-  const handleSync = async () => {
+  const handleSync = async (includeGuest = false) => {
     setSyncing(true);
     setAccountError(null);
     try {
-      const result = migrationStatus === 'pending' || migrationStatus === 'conflict'
-        ? await resumeGuestUpgrade() : await syncLocalData();
-      if (result?.user) applyAuthResult(result);
+      if (migrationStatus === 'pending' || migrationStatus === 'conflict') await resumeGuestUpgrade();
+      else await syncLocalData({ includeGuest });
     } catch {
       setAccountError('同步未完成，请稍后重试。');
     } finally {
@@ -163,10 +162,14 @@ export function UserMenu() {
                       </div>
                     </div>
                     {accountError && <p role="alert" className="auth-alert">{accountError}</p>}
-                    {migrationStatus !== 'synced' && (
-                      <button type="button" role="menuitem" className="auth-dropdown__item" data-testid="auth-sync-btn"
-                        onClick={handleSync} disabled={syncing}>
-                        {migrationStatus === 'pending' || migrationStatus === 'conflict' ? '重试同步' : '同步本机进度'}
+                    <button type="button" role="menuitem" className="auth-dropdown__item" data-testid="auth-sync-btn"
+                      onClick={() => { void handleSync(); }} disabled={syncing}>
+                      {migrationStatus === 'pending' || migrationStatus === 'conflict' ? '重试同步' : '同步当前账号进度'}
+                    </button>
+                    {migrationStatus !== 'pending' && migrationStatus !== 'conflict' && (
+                      <button type="button" role="menuitem" className="auth-dropdown__item" data-testid="auth-claim-guest-btn"
+                        onClick={() => { void handleSync(true); }} disabled={syncing}>
+                        导入此浏览器的游客数据
                       </button>
                     )}
                     <button

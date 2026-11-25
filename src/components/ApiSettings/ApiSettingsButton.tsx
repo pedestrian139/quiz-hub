@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react';
+import { usePracticeScope } from '../../hooks/practiceScope';
 import {
   isApiConfigReady,
   loadApiConfig,
@@ -11,18 +12,19 @@ import { ApiSettingsModal } from './ApiSettingsModal';
 import './ApiSettings.css';
 
 export function ApiSettingsButton() {
-  const [config, setConfig] = useState<ApiConfig>(loadApiConfig);
+  const scope = usePracticeScope();
+  const [config, setConfig] = useState<ApiConfig>(() => loadApiConfig(scope));
   const [open, setOpen] = useState(false);
 
   useEffect(() => {
-    const unsubscribe = subscribeApiConfig((next) => setConfig(next));
+    const unsubscribe = subscribeApiConfig(setConfig, scope);
     const onOpenRequest = () => setOpen(true);
     window.addEventListener(OPEN_API_SETTINGS_EVENT, onOpenRequest);
     return () => {
       unsubscribe();
       window.removeEventListener(OPEN_API_SETTINGS_EVENT, onOpenRequest);
     };
-  }, []);
+  }, [scope]);
 
   const ready = isApiConfigReady(config);
   const titleText = ready

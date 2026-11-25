@@ -1,9 +1,12 @@
 /// <reference types="node" />
 
 import 'fake-indexeddb/auto';
+import { IDBFactory } from 'fake-indexeddb';
 import { webcrypto } from 'node:crypto';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { saveStore } from '../../src/core/storage';
+import { accountPracticeScope, LEGACY_GUEST_SCOPE } from '../../src/core/practiceScope';
+import { getBankDb } from '../../src/utils/bankDb';
 import type { AccountProfile } from '../../src/services/db/cloudData';
 
 const mock = vi.hoisted(() => ({
@@ -19,11 +22,12 @@ vi.mock('../../src/services/db/client', () => ({
 vi.mock('../../src/services/db/cloudData', () => ({ loadProfile: mock.loadProfile, uploadGuestData: mock.upload }));
 
 import { getCurrentUser, loginAsGuest, loginWithAccount, registerWithAccount, resumeGuestUpgrade, syncLocalData, upgradeGuestToAccount } from '../../src/services/authService';
-import { endGuest } from '../../src/services/db/guestData';
+import { endGuest, GUEST_KEY } from '../../src/services/db/guestData';
 import { readPendingUpgrade } from '../../src/services/db/guestUpgrade';
 
 const emailUser: AccountProfile = { id: 'email-owner', email: 'target@example.com', phone: null, nickname: '邮箱', isGuest: false };
 const phoneUser: AccountProfile = { id: 'phone-owner', email: null, phone: '00123456789', nickname: '手机号', isGuest: false };
+const emailScope = accountPracticeScope(emailUser.id);
 
 function signInAs(user: AccountProfile) {
   mock.auth.getUser.mockResolvedValue({ data: { user: { id: user.id } }, error: null });
@@ -35,6 +39,7 @@ describe('auth service and account-bound guest upgrades', () => {
   beforeEach(() => {
     vi.resetAllMocks();
     vi.stubGlobal('crypto', webcrypto);
+    vi.stubGlobal('indexedDB', new IDBFactory());
     localStorage.clear();
     endGuest();
     mock.auth.getSession.mockResolvedValue({ data: { session: null }, error: null });
@@ -42,7 +47,12 @@ describe('auth service and account-bound guest upgrades', () => {
     mock.upload.mockResolvedValue({ skippedBankIds: [], skippedApiConfig: false });
   });
 
-  afterEach(() => { vi.unstubAllGlobals(); });
+  afterEach(() => {
+    getBankDb(LEGACY_GUEST_SCOPE).closeQuizHubDb();
+    getBankDb(emailScope).closeQuizHubDb();
+    vi.restoreAllMocks();
+    vi.unstubAllGlobals();
+  });
 
   it('keeps an email upgrade pending until the matching account signs in', async () => {
     const guest = await loginAsGuest();
@@ -71,7 +81,7 @@ describe('auth service and account-bound guest upgrades', () => {
 
   it('reuses the same import ID when a transfer is retried', async () => {
     signInAs(emailUser);
-    saveStore({ records: {}, fav: { q3: true }, mastery: {} });
+    saveStore({ records: {}, fav: { q3: true }, mastery: {} }, emailScope);
     mock.upload.mockRejectedValueOnce(new Error('offline'));
     expect((await syncLocalData()).status).toBe('migration_pending');
     const pending = readPendingUpgrade();
@@ -98,9 +108,9 @@ describe('auth service and account-bound guest upgrades', () => {
 
   it('resumes with a newer snapshot of the same import and exposes cloud conflicts', async () => {
     signInAs(emailUser);
-    saveStore({ records: {}, fav: { initial: true }, mastery: {} });
+    saveStore({ records: {}, fav: { initial: true }, mastery: {} }, emailScope);
     mock.upload.mockImplementationOnce(async () => {
-      saveStore({ records: {}, fav: { changed: true }, mastery: {} });
+      saveStore({ records: {}, fav: { changed: true }, mastery: {} }, emailScope);
       return { skippedBankIds: [], skippedApiConfig: false };
     });
     expect((await syncLocalData()).status).toBe('migration_pending');
@@ -111,6 +121,68 @@ describe('auth service and account-bound guest upgrades', () => {
     });
     expect(readPendingUpgrade()).toMatchObject({ sourceVersion: 2, sourceId: first?.sourceId });
     expect(readPendingUpgrade()?.importId).not.toBe(first?.importId);
+  });
+
+  it('evaluates a committed conflict again on explicit retry with an unchanged local snapshot', async () => {
+    signInAs(emailUser);
+    saveStore({ records: {}, fav: { q1: true }, mastery: {} }, emailScope);
+    mock.upload.mockResolvedValueOnce({ skippedBankIds: ['edited-in-cloud'], skippedApiConfig: true });
+    expect((await syncLocalData()).status).toBe('migration_pending');
+    expect((await resumeGuestUpgrade())?.status).toBe('authenticated');
+    const [initial, retry] = mock.upload.mock.calls.map(([, batch]) => batch);
+    expect(retry).toMatchObject({ sourceId: initial.sourceId, sourceVersion: initial.sourceVersion + 1 });
+    expect(retry.importId).not.toBe(initial.importId);
+  });
+
+  it('can renew a committed conflict after the previous response was lost', async () => {
+    signInAs(emailUser);
+    saveStore({ records: {}, fav: { q1: true }, mastery: {} }, emailScope);
+    mock.upload.mockRejectedValueOnce(new Error('response lost'));
+    expect((await syncLocalData()).status).toBe('migration_pending');
+    mock.upload.mockResolvedValueOnce({ skippedBankIds: ['edited-in-cloud'], skippedApiConfig: false });
+    expect(await resumeGuestUpgrade()).toMatchObject({ status: 'authenticated', guestDataSynced: true });
+    const [initial, replay, retry] = mock.upload.mock.calls.map(([, batch]) => batch);
+    expect(replay.importId).toBe(initial.importId);
+    expect(retry).toMatchObject({ sourceId: initial.sourceId, sourceVersion: initial.sourceVersion + 1 });
+    expect(retry.importId).not.toBe(initial.importId);
+  });
+
+  it('keeps a successful login when the migration journal exceeds storage quota and retries without losing intent', async () => {
+    await loginAsGuest();
+    saveStore({ records: {}, fav: { localQuestion: true }, mastery: {} });
+    signInAs(emailUser);
+    mock.auth.signInWithPassword.mockResolvedValue({ data: { user: { id: emailUser.id } }, error: null });
+    const setItem = Storage.prototype.setItem;
+    const quota = vi.spyOn(Storage.prototype, 'setItem').mockImplementation(function (this: Storage, key, value) {
+      if (key.startsWith('quizhub-v2:guest-upgrade:')) throw new DOMException('Full', 'QuotaExceededError');
+      setItem.call(this, key, value);
+    });
+    expect(await loginWithAccount({ account: emailUser.email!, password: 'secret-password', importGuestData: true }))
+      .toMatchObject({ status: 'migration_pending', user: emailUser });
+    expect(await getCurrentUser()).toEqual(emailUser);
+    expect(mock.upload).not.toHaveBeenCalled();
+
+    quota.mockRestore();
+    expect(await resumeGuestUpgrade()).toMatchObject({ status: 'authenticated', guestDataSynced: true });
+    expect(mock.upload).toHaveBeenCalledWith(emailUser.id, expect.any(Object), expect.objectContaining({
+      progress: [{ bankId: 'builtin-ai-intro', store: { records: {}, fav: { localQuestion: true }, mastery: {} } }],
+    }));
+  });
+
+  it('does not resurrect a persisted guest session removed in another tab', async () => {
+    const guest = await loginAsGuest();
+    expect(await getCurrentUser()).toEqual(guest);
+    localStorage.removeItem(GUEST_KEY);
+    expect(await getCurrentUser()).toBeNull();
+    expect((await loginAsGuest()).id).not.toBe(guest.id);
+  });
+
+  it('still allows a same-page guest session when storage writes are blocked', async () => {
+    vi.spyOn(Storage.prototype, 'setItem').mockImplementation(() => { throw new DOMException('Blocked', 'SecurityError'); });
+    const guest = await loginAsGuest();
+    expect(await getCurrentUser()).toEqual(guest);
+    endGuest();
+    expect(await getCurrentUser()).toBeNull();
   });
 
   it('starts dual registration with one phone account and requests email verification for that same account', async () => {
