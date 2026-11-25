@@ -1,5 +1,13 @@
 # 项目开发交接文档（HANDOFF.md）
 
+## V2 Cloudflare Pages 上线准备（2026-11-25）
+
+- Pages 的构建命令为 `npm run build`，输出目录为 `dist`。连接 GitHub 仓库后，V2 项目的生产分支选择 `dev`。本轮使用 Node.js 24.21.0 验证构建。
+- `public/_redirects` 包含请求的 SPA 回退规则，并随构建复制到 `dist`。Wrangler 会将这条规则判为循环而忽略。实测由 Pages 内置 SPA 回退响应深层地址。`vite.config.ts` 在 Pages 自动设置的 `CF_PAGES` 下从站点根路径加载静态资源。
+- 已将 Excel 导入使用的 SheetJS 升级到官方 0.20.3。现有导入、模板下载和分享回归通过，`npm audit` 报告零漏洞。Git 索引、`dev` 历史和前端源码的敏感文件与密钥扫描未发现问题。
+- `npm install`、生产构建、78 项单元测试、254 项浏览器测试和 296 处相对导入路径的大小写核对通过。全量浏览器测试按视口或配置跳过 234 项。Vite Preview 与本地 Pages 模拟器均通过深层链接、刷新和静态资源加载验收。
+- Pages 构建读取 `VITE_SUPABASE_URL`、`VITE_SUPABASE_PUBLISHABLE_KEY` 或备用 `VITE_SUPABASE_ANON_KEY`，以及可选的 `VITE_SUPABASE_AUTH_REDIRECT_URL`。正式站的 Auth 回跳和 Edge Functions 跨域白名单应使用实际 Pages 域名。迁移、函数部署和服务端密钥配置见 `HANDOFF_database.md`。真实 Supabase 登录、邮件回跳和游客云同步仍需在目标项目验收。
+
 ## V2 本机账号隔离与迁移回归（2026-11-25）
 
 - 本轮在 `origin/dev` 的 `c773ac4` 基础上整合鉴权基线 `8e5a27f` 与四项修复，交接分支为 `dev`。
