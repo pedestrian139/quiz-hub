@@ -3,11 +3,12 @@
 ## 已完成
 
 - `feat/database` 已合入题库导入，合并提交 `ae29d55`，基线同时包含 API 接入。本次开发完成 SQL、鉴权、数据库服务和游客迁移。
-- `db/supabase/migrations/202611250001_database.sql` 包含账号资料、API 配置及加密密钥、题库、进度、游客导入回执和手机号操作限流。公开表启用 RLS，题库和进度写入使用按用户校验的版本控制函数，密钥和迁移写入由 Edge Function 处理。手机号账号的首次邮箱绑定由服务端验证密码并授权，数据库在请求和确认时核对目标邮箱，确认后消耗授权。
-- `src/services/authService.ts` 现采用**纯邮箱 + 密码 + 邮箱验证码（OTP）**方案，已取消手机号注册、登录与双重账号绑定：
-  - 注册与游客绑定（`registerWithAccount` / `upgradeGuestToAccount`）：填写邮箱、昵称、密码提交 `signUp` 后发送激活验证码，用户在弹窗内调用 `verifyEmailOtp({ account, code })`（`verifyOtp({ email, token, type: 'email' })`）即可完成激活并同步数据；支持 `resendSignupOtp`（60 秒冷却重发）。
+- `db/supabase/migrations/202611250001_database.sql`（历史基线迁移，禁止篡改）建立账号资料、API 配置及加密密钥、题库、进度与游客导入回执表，公开表启用 RLS，题库和进度写入使用按用户校验的版本控制函数，密钥和迁移写入由 `user-data` Edge Function 处理。
+- `db/supabase/migrations/202611260001_cleanup_phone_auth.sql`（幂等清理迁移）移除历史手机号认证遗留的数据库函数、触发器与私有辅助表（`quizhub_before_user_created`、`quizhub_authorize_first_email`、`quizhub_take_phone_attempt`、`guard_email_link`、`check_reserved_auth_alias`、`private.first_email_links`、`private.phone_auth_rate_limits`），并将 `private.sync_auth_profile()` 简化为纯邮箱同步逻辑；`public.profiles.phone` 可空列继续保留以兼容 `src/services/db/cloudData.ts` 的现有查询字段。
+- `src/services/authService.ts` 现采用**纯邮箱 + 6 位验证码（Supabase Auth + Resend SMTP，有效期 300 秒）**方案：
+  - 注册与游客绑定（`registerWithAccount` / `upgradeGuestToAccount`）：填写邮箱、昵称、密码提交 `signUp` 后发送 6 位激活验证码，用户在弹窗内调用 `verifyEmailOtp({ account, code })`（`verifyOtp({ email, token, type: 'email' })`）即可完成激活并同步数据；支持 `resendSignupOtp`（60 秒冷却重发）。
   - 登录（`loginWithAccount` / `sendLoginOtp` + `verifyEmailOtp`）：支持「密码登录」（日常使用不消耗邮件发送额度）与「验证码登录」（`signInWithOtp` 且 `shouldCreateUser: false`）一键切换。
-  - 前端已仅使用 `user-data` Edge Function，不再调用 `phone-auth`。`profiles.phone` 与数据库兼容触发器保留以兼容历史迁移脚本。
+  - Edge Functions 仅保留 `db/supabase/functions/user-data`（已彻底删除废弃的 `phone-auth` 目录及前端死代码）。
 - `src/services/db/cloudData.ts` 提供资料、题库、进度和 API 配置的云端读写。API Key 使用 AES-256-GCM 加密。恢复函数返回当前页面可使用的 `ApiConfig`，调用方应将恢复结果保留在内存中。
 
 ## 登录界面对接
@@ -36,9 +37,9 @@ VITE_SUPABASE_AUTH_REDIRECT_URL=https://your-frontend.example/quiz-hub/
 
 在目标 Supabase 项目应用迁移后，启用 Email Provider 与邮箱确认（Confirm email）：
 1. 在 Supabase Dashboard -> **Authentication → Emails (Templates)** 中，确保 **Confirm signup** 与 **Magic Link** 邮件模板正文均包含 **`{{ .Token }}`**（例如：`<h2>您的验证码</h2><p>验证码：<strong>{{ .Token }}</strong></p>`），以便前端用户在弹窗内直接输入 6–8 位数字验证码完成注册激活或免密登录。
-2. 确认启用 `Email OTP`，将 `public.quizhub_before_user_created` 配置为 Before User Created Hook（禁止未授权保留域写入），并通过项目 SMTP 发送真实邮件。`db/supabase/config.toml` 包含对应的本地 Auth（含 `otp_length = 6`、`otp_expiry = 300` 即 5 分钟有效期）与 Functions 配置。
+2. 确认启用 `Email OTP`，在 Supabase Auth 中配置 **Resend SMTP** 发送真实验证码邮件（无需绑定旧的 Before User Created Hook）。`db/supabase/config.toml` 包含对应的本地 Auth（含 `otp_length = 6`、`otp_expiry = 300` 即 5 分钟有效期、`max_frequency = "60s"`）与 `user-data` Function 配置。
 
-前端已仅依赖 `db/supabase/functions/user-data`（无需部署或调用 `phone-auth`）。可从 `db` 运行 Supabase CLI 部署 `user-data`，并设置函数环境变量 `QUIZHUB_ALLOWED_ORIGINS` 为允许的前端 origin 列表（逗号分隔）以及 `QUIZHUB_API_KEY_ENCRYPTION_KEY_V1` 为安全生成的 32 字节 Base64 密钥。项目 URL 和 Supabase 网关密钥由函数运行环境注入。Service Key 与加密密钥仅由服务端读取。轮换加密密钥时需保留旧版本，直到已有密文完成迁移。
+云端 Edge Functions 仅需部署 `db/supabase/functions/user-data`。可从 `db` 运行 Supabase CLI 部署 `user-data`，并设置函数环境变量 `QUIZHUB_ALLOWED_ORIGINS` 为允许的前端 origin 列表（逗号分隔）以及 `QUIZHUB_API_KEY_ENCRYPTION_KEY_V1` 为安全生成的 32 字节 Base64 密钥。项目 URL 和 Supabase 网关密钥由函数运行环境自动注入。Service Key 与加密密钥仅由服务端读取。轮换加密密钥时需保留旧版本，直到已有密文完成迁移。
 
 ## 验证与当前状态
 
@@ -47,5 +48,5 @@ VITE_SUPABASE_AUTH_REDIRECT_URL=https://your-frontend.example/quiz-hub/
 - Playwright E2E（[tests/e2e/tier6-auth-ui.spec.ts](tests/e2e/tier6-auth-ui.spec.ts)、[tests/e2e/api-integration.spec.ts](tests/e2e/api-integration.spec.ts)）已扩展有状态的本地 Supabase 测试网关，覆盖纯邮箱注册与 OTP 激活/登录、云端 API 配置仅存内存与标签页模式覆盖、退出登录清空内存、清缓存刷新自动从云端恢复题库/进度、`40001` 并发冲突合并，以及 `PW_AUTH_DISABLED=1` 下的纯本地游客模式。
 - `db/tests/auth-and-guest-upgrade.sql` 是可回滚的数据库回归脚本，验证较新迁移快照、云端独立修改和显式清空保护。对已应用迁移的开发库，可使用 `psql -v ON_ERROR_STOP=1 -f db/tests/auth-and-guest-upgrade.sql` 执行。
 - **线上部署前最终验证清单**：
-  1. 确认已将 [db/supabase/migrations/202611250001_database.sql](db/supabase/migrations/202611250001_database.sql) 与 Edge Function `user-data` 部署至目标 Supabase 项目，并配置好 `QUIZHUB_ALLOWED_ORIGINS`、`QUIZHUB_API_KEY_ENCRYPTION_KEY_V1`、`quizhub_before_user_created` Hook 以及邮件模板中的 `{{ .Token }}`。
+  1. 确认已通过 `supabase db push` 应用全部迁移（[202611250001_database.sql](db/supabase/migrations/202611250001_database.sql) 与 [202611260001_cleanup_phone_auth.sql](db/supabase/migrations/202611260001_cleanup_phone_auth.sql)），已部署 Edge Function `user-data`，并配置好 `QUIZHUB_ALLOWED_ORIGINS`、`QUIZHUB_API_KEY_ENCRYPTION_KEY_V1`、Resend SMTP（OTP 有效期 300 秒）以及邮件模板中的 `{{ .Token }}`。
   2. 在真实线上站/预览站依次完成：邮箱注册 + OTP 激活 -> 保存 API 配置并检查 `localStorage` 无明文 Key -> 刷题/收藏/新建自定义题库 -> 强刷或无痕窗口登录同一账号验证跨设备恢复 -> 勾选「仅当前标签页有效」确认跨设备不受影响 -> 清除云端 API 配置并退出登录确认状态彻底清零。

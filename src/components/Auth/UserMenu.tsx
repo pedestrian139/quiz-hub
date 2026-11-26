@@ -96,7 +96,7 @@ export function UserMenu() {
 
   const configured = isAuthConfigured();
   const avatarInitial = user?.nickname ? user.nickname.slice(0, 1).toUpperCase() : 'U';
-  const boundAccountValue = user?.email || user?.phone || '';
+  const boundAccountValue = user?.email ?? '';
   const sameCloudAccount = Boolean(user && !user.isGuest && cloudSync.accountId === user.id);
   const showCloudBusy = sameCloudAccount && (cloudSync.status === 'hydrating' || cloudSync.status === 'syncing');
   const showCloudProblem = sameCloudAccount && (cloudSync.status === 'error' || cloudSync.status === 'conflict');

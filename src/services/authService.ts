@@ -21,7 +21,6 @@ interface GuestLoginImport { account: AccountIdentifier; scope: GuestPracticeSco
 export interface GuestProfile {
   id: string;
   email: null;
-  phone: null;
   nickname: string;
   isGuest: true;
 }
@@ -85,7 +84,7 @@ function authClient() {
 }
 
 function guestProfile(id: string): GuestProfile {
-  return { id, email: null, phone: null, nickname: '游客', isGuest: true };
+  return { id, email: null, nickname: '游客', isGuest: true };
 }
 
 function confirmationRedirect(): string {
