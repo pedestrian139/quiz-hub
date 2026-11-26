@@ -1,6 +1,12 @@
 import type { BankData, QuestionType } from '../types/quiz';
 
 export const BUILTIN_AI_BANK_ID = 'builtin-ai-intro';
+export const BUILTIN_GUIDE_BANK_ID = 'builtin-quizhub-guide';
+
+export function isBuiltinBankId(bankId: string): boolean {
+  return bankId === BUILTIN_AI_BANK_ID || bankId === BUILTIN_GUIDE_BANK_ID;
+}
+
 export const QUIZHUB_SHARE_SCHEMA = 'quizhub-bank-v2';
 
 export type ImportSourceFormat = 'xlsx' | 'csv' | 'docx' | 'txt' | 'json';

@@ -70,6 +70,12 @@ export function getCachedAiExplanation(question: Question, store?: UserStore): s
   return '';
 }
 
+interface AnalysisSave {
+  questionId: string;
+  content: string;
+  model?: string;
+}
+
 export interface AiQuestionTutorController {
   question: Question;
   objective: boolean;
@@ -82,6 +88,8 @@ export interface AiQuestionTutorController {
   explainText: string;
   explainLoading: boolean;
   explainError: string | null;
+  analysisSaveFailed: boolean;
+  retryAnalysisSave: () => Promise<void>;
   isCachedHit: boolean;
   gradeOpen: boolean;
   setGradeOpen: (open: boolean | ((prev: boolean) => boolean)) => void;
@@ -127,6 +135,7 @@ export function useAiQuestionTutor({
   const [explainText, setExplainText] = useState('');
   const [explainLoading, setExplainLoading] = useState(false);
   const [explainError, setExplainError] = useState<string | null>(null);
+  const [failedAnalysisSave, setFailedAnalysisSave] = useState<AnalysisSave | null>(null);
   const [isCachedHit, setIsCachedHit] = useState(false);
 
   // Subjective AI grader state
@@ -145,6 +154,7 @@ export function useAiQuestionTutor({
 
   const abortRef = useRef<AbortController | null>(null);
   const activeQuestionIdRef = useRef<string>(question.id);
+  const activeSaveRef = useRef<AnalysisSave | null>(null);
   const localSavedCacheRef = useRef<Record<string, string>>({});
   const chatInputRef = useRef<HTMLInputElement | null>(null);
 
@@ -156,6 +166,7 @@ export function useAiQuestionTutor({
   // Abort in-flight streams and reset transient state whenever question changes
   useEffect(() => {
     activeQuestionIdRef.current = question.id;
+    activeSaveRef.current = null;
     abortRef.current?.abort();
     abortRef.current = null;
 
@@ -163,6 +174,7 @@ export function useAiQuestionTutor({
     setExplainText('');
     setExplainLoading(false);
     setExplainError(null);
+    setFailedAnalysisSave(null);
     setIsCachedHit(false);
 
     setGradeOpen(false);
@@ -182,8 +194,25 @@ export function useAiQuestionTutor({
     return () => {
       abortRef.current?.abort();
       abortRef.current = null;
+      activeSaveRef.current = null;
     };
   }, []);
+
+  const saveAnalysis = useCallback(async (save: AnalysisSave) => {
+    activeSaveRef.current = save;
+    setFailedAnalysisSave(null);
+    try {
+      await onSaveAiAnalysis?.(save.questionId, save.content, save.model);
+    } catch {
+      if (activeSaveRef.current === save) setFailedAnalysisSave(save);
+    } finally {
+      if (activeSaveRef.current === save) activeSaveRef.current = null;
+    }
+  }, [onSaveAiAnalysis]);
+
+  const retryAnalysisSave = useCallback(async () => {
+    if (failedAnalysisSave?.questionId === question.id) await saveAnalysis(failedAnalysisSave);
+  }, [failedAnalysisSave, question.id, saveAnalysis]);
 
   const objective = isObjectiveQuestion(question.type);
   const ready = isApiConfigReady(config);
@@ -260,7 +289,7 @@ export function useAiQuestionTutor({
         setExplainText(finalContent);
         if (finalContent) {
           localSavedCacheRef.current[targetQuestionId] = finalContent;
-          void onSaveAiAnalysis?.(targetQuestionId, finalContent, result.model);
+          void saveAnalysis({ questionId: targetQuestionId, content: finalContent, model: result.model });
         }
       } catch (err) {
         if (controller.signal.aborted || activeQuestionIdRef.current !== targetQuestionId) {
@@ -284,9 +313,9 @@ export function useAiQuestionTutor({
       chapterTitle,
       explainError,
       explainText,
-      onSaveAiAnalysis,
       question,
       ready,
+      saveAnalysis,
       scope,
       stopActiveRequest,
       store,
@@ -478,6 +507,8 @@ export function useAiQuestionTutor({
     explainText,
     explainLoading,
     explainError,
+    analysisSaveFailed: failedAnalysisSave?.questionId === question.id,
+    retryAnalysisSave,
     isCachedHit,
     gradeOpen,
     setGradeOpen,
@@ -718,6 +749,8 @@ export function AiExplainDrawer({ tutor }: { tutor: AiQuestionTutorController })
     explainText,
     explainLoading,
     explainError,
+    analysisSaveFailed,
+    retryAnalysisSave,
     isCachedHit,
     chatHistory,
     chatInput,
@@ -779,6 +812,14 @@ export function AiExplainDrawer({ tutor }: { tutor: AiQuestionTutorController })
       </div>
 
       <div className="ai-tutor-card ai-explain-card" data-testid="ai-explain-card">
+        {analysisSaveFailed && (
+          <div className="api-banner api-banner--bad" role="alert">
+            <div>AI 解析保存失败，当前结果仍可查看。</div>
+            <button type="button" className="ai-tutor-link" onClick={() => void retryAnalysisSave()}>
+              重试保存
+            </button>
+          </div>
+        )}
         {explainError && (
           <div className="api-banner api-banner--bad">
             <div>{explainError}</div>

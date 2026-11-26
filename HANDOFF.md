@@ -1,5 +1,14 @@
 # 项目开发交接文档（HANDOFF.md）
 
+## Phase 2 刷题与云同步回归（2026-11-26）
+
+- 引导示例题使用 `builtin-quizhub-guide`。旧题库文件与 `v2.0-sync-ready` 原始数据一致，共 335 题。当前已登录账号在旧题库有对应题目的答题、收藏或掌握度记录时，题库切换器才提供旧库选项。两套题库各自保存进度。
+- 刷题工作台等待题库初始化完成后再开放操作。桌面导航和账号栏作为一组吸顶。题型沿用现有枚举，简答题的「有点模糊」和「不会」均进入错题本。
+- AI 解析生成后若本机保存失败，界面保留生成结果并提供重试保存。云同步重试期间继续作答或编辑题库时，后续写入也会带上已合并的远端变更。切换账号后按新账号重新加载题库、进度和 BYOK。
+- 关键改动在 `src/utils/useBankLibrary.ts`、`src/services/cloudSync.ts`、`src/components/ApiSettings/AiQuestionTutor.tsx` 和 `src/App.tsx`。新增迁移 `db/supabase/migrations/202611260002_add_quizhub_guide_bank.sql`，让原有进度和游客导入 RPC 支持新版引导题库，并在合并游客进度时保留 AI 解析。历史迁移、认证、加密和 Edge Function 接口沿用 Phase 1。
+- 本地验收通过主工程和 E2E 类型检查、Cloudflare Pages 生产构建、151 项单测、292 项非导入模块桌面及移动端 Playwright 回归、2 项无 Supabase 配置的游客回归，以及 PGlite 中的历史 SQL 与新增 SQL 回归。浏览器云端写入、恢复和冲突用例使用模拟网关。
+- 上线前先在目标 Supabase 项目应用新增迁移，再验证两台设备之间的引导题进度和解析恢复，以及旧账号恢复错题、收藏和掌握度。导入工作台与洗题仍由并行开发者验收。
+
 ## Phase 1 收尾与线上域名归档（2026-11-26）
 
 - **线上域名与部署架构**：

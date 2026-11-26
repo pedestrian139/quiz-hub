@@ -2,7 +2,7 @@ import 'fake-indexeddb/auto';
 import { IDBFactory } from 'fake-indexeddb';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { STORAGE_KEY, createEmptyStore, saveStore } from '../../src/core/storage';
-import { BUILTIN_AI_BANK } from '../../src/utils/bankCatalog';
+import { BUILTIN_AI_BANK, BUILTIN_GUIDE_BANK } from '../../src/utils/bankCatalog';
 import {
   closeQuizHubDb,
   createCustomBank,
@@ -67,7 +67,7 @@ describe('bankDb (IndexedDB multi-bank storage & V1 migration)', () => {
     expect(res.activeBankId).toBe(BUILTIN_AI_BANK_ID);
     expect(res.banks).toHaveLength(1);
     expect(res.banks[0]!.id).toBe(BUILTIN_AI_BANK_ID);
-    expect(res.banks[0]!.data.questions).toHaveLength(3);
+    expect(res.banks[0]!.data.questions).toHaveLength(335);
     expect(res.progressByBank[BUILTIN_AI_BANK_ID]).toEqual(createEmptyStore());
   });
 
@@ -195,7 +195,7 @@ describe('bankDb (IndexedDB multi-bank storage & V1 migration)', () => {
   });
 
   it('BD-05: exports valid .quizhub.json share package and degrades gracefully when indexedDB is blocked', async () => {
-    const shareJson = exportBankSharePackage(BUILTIN_AI_BANK);
+    const shareJson = exportBankSharePackage(BUILTIN_GUIDE_BANK);
     const parsed = JSON.parse(shareJson) as {
       schema: string;
       bank: { name: string; data: { questions: unknown[] } };

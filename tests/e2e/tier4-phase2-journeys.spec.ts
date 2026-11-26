@@ -8,7 +8,7 @@ import {
 import { assertFullLayoutAudit } from './helpers/audit.ts';
 import { installAuthGateway } from './helpers/authGateway.ts';
 import {
-  BUILTIN_AI_BANK_ID,
+  BUILTIN_GUIDE_BANK_ID,
   FIXTURE_BANK,
   FIXTURE_BANK_ID,
   LEGACY_PHASE1_BANK,
@@ -354,13 +354,11 @@ test.describe('Tier 4 Phase 2: Real-World Application Journeys (T4-P2-001..T4-P2
       targetHashRoute: '#/quiz',
       apiConfig: {},
     });
-    const stemMap = buildQuestionStemMap(MARKDOWN_LATEX_BANK);
     for (const anchor of ['能量与求和公式推导', '容错与 XSS 安全测试题', '向量算子']) {
       const matched = MARKDOWN_LATEX_BANK.questions.find((q) => q.stem.includes(anchor));
       expect(matched, `Expected MARKDOWN_LATEX_BANK question matching "${anchor}"`).toBeDefined();
-      stemMap.set(anchor, matched!);
     }
-
+    await expect(bankSwitcher(page)).toHaveValue(FIXTURE_BANK_ID);
     await filterOrder(page).selectOption('seq');
     await modeCard(page, 'all').click();
     await expect(qStem(page).locator('table')).toBeVisible();
@@ -368,7 +366,8 @@ test.describe('Tier 4 Phase 2: Real-World Application Journeys (T4-P2-001..T4-P2
     await assertFullLayoutAudit(page, { checkTables: true });
 
     await enableAutoExplain(page);
-    await answerCurrentQuestion(page, stemMap, 'wrong');
+    await quizOption(page, 1).click();
+    await expect(quizFeedback(page)).toContainText('回答错误');
 
     const explainArea = explanationContainer(page);
     await expect(explainArea).toContainText('核心考点');
@@ -432,7 +431,7 @@ test.describe('Tier 4 Phase 2: Real-World Application Journeys (T4-P2-001..T4-P2
     const stemMap = buildQuestionStemMap(FIXTURE_BANK);
 
     await assertFullLayoutAudit(page);
-    await switchActiveBank(page, BUILTIN_AI_BANK_ID, /QuizHub/);
+    await switchActiveBank(page, BUILTIN_GUIDE_BANK_ID, /QuizHub/);
     await expect(quizBadgeTotal(page)).toContainText('3');
     await switchActiveBank(page, FIXTURE_BANK_ID, /E2E 合成/);
     await expect(quizBadgeTotal(page)).toContainText('57');
@@ -523,6 +522,7 @@ test.describe('Tier 4 Phase 2: Real-World Application Journeys (T4-P2-001..T4-P2
         { timeout: 8_000 },
       )
       .toBe(true);
+    await expect.poll(() => Object.keys(gateway.getCloudProgress(email, legacyBankId)?.store.records ?? {}).length).toBe(2);
 
     // Clean reload (wipe localStorage/IDB except Supabase auth session) -> hit cached explanation with 0 LLM calls
     await wipeLocalCachesPreserveAuth(page);

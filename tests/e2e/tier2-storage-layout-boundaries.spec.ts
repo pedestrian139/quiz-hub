@@ -587,13 +587,15 @@ test.describe('Tier 2: Subjective, Nav, Sheet, Result, Storage & Responsive Boun
       { targetHashRoute: '#/quiz' },
     );
 
-    page.once('dialog', (d) => d.accept());
-    await importJsonFile(inputImportFile(page), '{not valid json');
-    await expect(statCard(page, 'done')).toContainText('1');
-
-    page.once('dialog', (d) => d.accept());
-    await importJsonFile(inputImportFile(page), '{"foo": 1}');
-    await expect(statCard(page, 'done')).toContainText('1');
+    for (const input of ['{not valid json', '{"foo": 1}']) {
+      const message = page.waitForEvent('dialog').then(async (dialog) => {
+        await dialog.accept();
+        return dialog.message();
+      });
+      await importJsonFile(inputImportFile(page), input);
+      expect(await message).toContain('导入失败');
+      await expect(statCard(page, 'done')).toContainText('1');
+    }
   });
 
   test('T2-086 [UF17] Importing JSON with invalid ok value rejects or sanitizes without corrupting store', async ({

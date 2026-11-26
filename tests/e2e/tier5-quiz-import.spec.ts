@@ -7,7 +7,12 @@ import {
   test,
 } from './helpers/fixtures.ts';
 import { assertFullLayoutAudit } from './helpers/audit.ts';
-import { BUILTIN_AI_BANK_ID } from './helpers/fixtureBank.ts';
+import {
+  BUILTIN_AI_BANK_ID,
+  BUILTIN_GUIDE_BANK_ID,
+  QUIZ_DB_NAME,
+  QUIZ_DB_VERSION,
+} from './helpers/fixtureBank.ts';
 import {
   bankCard,
   bankImportFileInput,
@@ -300,7 +305,7 @@ B. 错误选项
 
     // Switch to built-in onboarding bank via bankSwitcher and confirm isolated stats
     await navLink(page, 'quiz').click();
-    await switchBankViaSwitcher(page, BUILTIN_AI_BANK_ID, /QuizHub 使用引导示例题库/);
+    await switchBankViaSwitcher(page, BUILTIN_GUIDE_BANK_ID, /QuizHub 使用引导示例题库/);
     await expect(statCard(page, 'done')).toContainText('0');
     await expect(statCard(page, 'wrong')).toContainText('0');
     await expect(statCard(page, 'fav')).toContainText('0');
@@ -420,13 +425,47 @@ B. 错误选项
     await btnOpenQuizImport(page).click();
     await qiTab(page, 'banks').click();
 
-    // Built-in card reflects QuizHub onboarding title & lossless V1 migration
-    const builtinCard = bankCard(page, BUILTIN_AI_BANK_ID);
+    // Built-in guide card reflects QuizHub onboarding title & is non-deletable
+    const builtinCard = bankCard(page, BUILTIN_GUIDE_BANK_ID);
     await expect(builtinCard).toContainText('QuizHub 使用引导示例题库');
-    await expect(builtinCard).toContainText('已练 2');
-    await expect(builtinCard).toContainText('错题 1');
-    await expect(builtinCard).toContainText('收藏 1');
-    await expect(btnDeleteBank(page, BUILTIN_AI_BANK_ID)).toHaveCount(0);
+    await expect(btnDeleteBank(page, BUILTIN_GUIDE_BANK_ID)).toHaveCount(0);
+
+    // V1 localStorage progress auto-migrates losslessly into IndexedDB under hidden BUILTIN_AI_BANK_ID
+    const migratedV1Progress = await page.evaluate(
+      ({ dbName, dbVersion, bankId }) =>
+        new Promise<{ records: Record<string, { ok: number }>; fav: Record<string, boolean> } | null>(
+          (resolve) => {
+            const req = indexedDB.open(dbName, dbVersion);
+            req.onerror = () => resolve(null);
+            req.onsuccess = () => {
+              const db = req.result;
+              try {
+                const tx = db.transaction('progress', 'readonly');
+                const getReq = tx.objectStore('progress').get(bankId);
+                getReq.onerror = () => {
+                  db.close();
+                  resolve(null);
+                };
+                getReq.onsuccess = () => {
+                  const entry = getReq.result as
+                    | { store?: { records: Record<string, { ok: number }>; fav: Record<string, boolean> } }
+                    | undefined;
+                  db.close();
+                  resolve(entry?.store ?? null);
+                };
+              } catch {
+                db.close();
+                resolve(null);
+              }
+            };
+          },
+        ),
+      { dbName: QUIZ_DB_NAME, dbVersion: QUIZ_DB_VERSION, bankId: BUILTIN_AI_BANK_ID },
+    );
+    expect(migratedV1Progress).not.toBeNull();
+    expect(Object.keys(migratedV1Progress!.records)).toHaveLength(2);
+    expect(Object.values(migratedV1Progress!.records).filter((r) => r.ok === 0)).toHaveLength(1);
+    expect(Object.values(migratedV1Progress!.fav).filter(Boolean)).toHaveLength(1);
 
     // Create manual custom bank & rename it
     await page.getByTestId('btn-new-bank').click();

@@ -18,7 +18,7 @@ import { saveApiConfig } from '../../src/services/apiConfig';
 import type { ChapterMeta, Question, UserStore } from '../../src/types/quiz';
 import { BankLibraryProvider, useBankLibraryContext } from '../../src/utils/BankLibraryContext';
 import { closeQuizHubDb, resetFallbackMemoryDb } from '../../src/utils/bankDb';
-import { BUILTIN_AI_BANK_ID } from '../../src/utils/quizImportTypes';
+import { BUILTIN_GUIDE_BANK_ID } from '../../src/utils/quizImportTypes';
 
 function makeSseResponse(chunks: string[]): Response {
   const encoder = new TextEncoder();
@@ -441,7 +441,7 @@ describe('Quiz Workspace (M3)', () => {
 
     const switcher = container.querySelector('[data-testid="bank-switcher"]') as HTMLSelectElement;
     expect(switcher).not.toBeNull();
-    expect(switcher.value).toBe(BUILTIN_AI_BANK_ID);
+    expect(switcher.value).toBe(BUILTIN_GUIDE_BANK_ID);
 
     await act(async () => {
       switcher.value = customId;

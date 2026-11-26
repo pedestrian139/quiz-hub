@@ -14,6 +14,7 @@ import {
 
 export const FIXTURE_BANK_ID = 'e2e-fixture-bank';
 export const BUILTIN_AI_BANK_ID = 'builtin-ai-intro';
+export const BUILTIN_GUIDE_BANK_ID = 'builtin-quizhub-guide';
 export const QUIZ_DB_NAME = 'quizhub-v2';
 export const QUIZ_DB_VERSION = 1;
 
@@ -520,12 +521,15 @@ export async function seedFixtureBank(
     : null;
 
   await page.goto(target, { waitUntil: 'domcontentloaded' });
+  const app = page.locator('main.app-main');
+  await expect(app).toHaveAttribute('aria-busy', 'false');
   await page.evaluate(
     async ({
       dbName,
       dbVersion,
       targetBankId,
       isBuiltin,
+      isLegacyBank,
       shouldActivate,
       bankRec,
       userStore,
@@ -534,7 +538,7 @@ export async function seedFixtureBank(
       apiConfigJson,
       timestamp,
     }) => {
-      if (isBuiltin) {
+      if (isLegacyBank) {
         window.localStorage.setItem(storageKey, JSON.stringify(userStore));
       }
       if (apiConfigJson) {
@@ -588,7 +592,8 @@ export async function seedFixtureBank(
       dbName: QUIZ_DB_NAME,
       dbVersion: QUIZ_DB_VERSION,
       targetBankId: bankId,
-      isBuiltin: bankId === BUILTIN_AI_BANK_ID,
+      isBuiltin: bankId === BUILTIN_AI_BANK_ID || bankId === BUILTIN_GUIDE_BANK_ID,
+      isLegacyBank: bankId === BUILTIN_AI_BANK_ID,
       shouldActivate: activate,
       bankRec: bankRecord,
       userStore: store,
@@ -600,5 +605,5 @@ export async function seedFixtureBank(
   );
 
   await page.reload({ waitUntil: 'domcontentloaded' });
-  await expect(page.locator('#root')).not.toBeEmpty();
+  await expect(app).toHaveAttribute('aria-busy', 'false');
 }
