@@ -30,16 +30,17 @@
 ```dotenv
 VITE_SUPABASE_URL=https://your-project.supabase.co
 VITE_SUPABASE_PUBLISHABLE_KEY=your-public-key
-VITE_SUPABASE_AUTH_REDIRECT_URL=https://your-frontend.example/quiz-hub/
+# 可选：建议设为生产主域名 https://acequiz.xyz，或留空自动跟随当前访问域名（同时兼容 acequiz.xyz 与 quiz-hub-416.pages.dev）
+VITE_SUPABASE_AUTH_REDIRECT_URL=https://acequiz.xyz
 ```
 
-`VITE_SUPABASE_ANON_KEY` 可替代公开 Publishable Key。正式发布时需要把同名公开变量传入 Vite 构建环境。确认回跳地址列入 Supabase Auth Redirect URLs。
+`VITE_SUPABASE_ANON_KEY` 可替代公开 Publishable Key。正式发布时需要把同名公开变量传入 Cloudflare Pages 构建环境。确认 `https://acequiz.xyz`（以及过渡测试域 `https://quiz-hub-416.pages.dev`）均已列入 Supabase Auth `Site URL` / `Redirect URLs`。
 
 在目标 Supabase 项目应用迁移后，启用 Email Provider 与邮箱确认（Confirm email）：
-1. 在 Supabase Dashboard -> **Authentication → Emails (Templates)** 中，确保 **Confirm signup** 与 **Magic Link** 邮件模板正文均包含 **`{{ .Token }}`**（例如：`<h2>您的验证码</h2><p>验证码：<strong>{{ .Token }}</strong></p>`），以便前端用户在弹窗内直接输入 6–8 位数字验证码完成注册激活或免密登录。
-2. 确认启用 `Email OTP`，在 Supabase Auth 中配置 **Resend SMTP** 发送真实验证码邮件（无需绑定旧的 Before User Created Hook）。`db/supabase/config.toml` 包含对应的本地 Auth（含 `otp_length = 6`、`otp_expiry = 300` 即 5 分钟有效期、`max_frequency = "60s"`）与 `user-data` Function 配置。
+1. 在 Supabase Dashboard -> **Authentication → Emails (Templates)** 中，确保 **Confirm signup** 与 **Magic Link** 邮件模板正文均包含 **`{{ .Token }}`**（例如：`<h2>您的验证码</h2><p>验证码：<strong>{{ .Token }}</strong></p>`），以便前端用户在弹窗内直接输入 6 位数字验证码完成注册激活或免密登录。
+2. 确认启用 `Email OTP`，在 Supabase Auth 中配置 **Resend 自定义 SMTP**（发件人 `noreply@acequiz.xyz`，Port 465；无需绑定旧的 Before User Created Hook）。`db/supabase/config.toml` 包含对应的本地 Auth（含 `otp_length = 6`、`otp_expiry = 300` 即 5 分钟有效期、`max_frequency = "60s"`）与 `user-data` Function 配置。
 
-云端 Edge Functions 仅需部署 `db/supabase/functions/user-data`。可从 `db` 运行 Supabase CLI 部署 `user-data`，并设置函数环境变量 `QUIZHUB_ALLOWED_ORIGINS` 为允许的前端 origin 列表（逗号分隔）以及 `QUIZHUB_API_KEY_ENCRYPTION_KEY_V1` 为安全生成的 32 字节 Base64 密钥。项目 URL 和 Supabase 网关密钥由函数运行环境自动注入。Service Key 与加密密钥仅由服务端读取。轮换加密密钥时需保留旧版本，直到已有密文完成迁移。
+云端 Edge Functions 仅需部署 `db/supabase/functions/user-data`。可从 `db` 运行 Supabase CLI 部署 `user-data`，并设置函数环境变量 `QUIZHUB_ALLOWED_ORIGINS` 为允许的前端 origin 列表（逗号分隔、**末尾无斜杠**，例如 `https://acequiz.xyz,https://quiz-hub-416.pages.dev`）以及 `QUIZHUB_API_KEY_ENCRYPTION_KEY_V1` 为安全生成的 32 字节 Base64 密钥。项目 URL 和 Supabase 网关密钥由函数运行环境自动注入。Service Key 与加密密钥仅由服务端读取。轮换加密密钥时需保留旧版本，直到已有密文完成迁移。
 
 ## 验证与当前状态
 
@@ -47,6 +48,6 @@ VITE_SUPABASE_AUTH_REDIRECT_URL=https://your-frontend.example/quiz-hub/
 - 已完成 `typecheck`、E2E 类型检查、生产构建（`npm run build`）及 10 个文件共 88 项单元测试（其中新增 [tests/unit/cloudSync.test.ts](tests/unit/cloudSync.test.ts) 7 项测试覆盖初始化拉取、纯内存 API Key 隔离、防抖/重置、退出清理、`40001` 三路合并与失败重试）。
 - Playwright E2E（[tests/e2e/tier6-auth-ui.spec.ts](tests/e2e/tier6-auth-ui.spec.ts)、[tests/e2e/api-integration.spec.ts](tests/e2e/api-integration.spec.ts)）已扩展有状态的本地 Supabase 测试网关，覆盖纯邮箱注册与 OTP 激活/登录、云端 API 配置仅存内存与标签页模式覆盖、退出登录清空内存、清缓存刷新自动从云端恢复题库/进度、`40001` 并发冲突合并，以及 `PW_AUTH_DISABLED=1` 下的纯本地游客模式。
 - `db/tests/auth-and-guest-upgrade.sql` 是可回滚的数据库回归脚本，验证较新迁移快照、云端独立修改和显式清空保护。对已应用迁移的开发库，可使用 `psql -v ON_ERROR_STOP=1 -f db/tests/auth-and-guest-upgrade.sql` 执行。
-- **线上部署前最终验证清单**：
-  1. 确认已通过 `supabase db push` 应用全部迁移（[202611250001_database.sql](db/supabase/migrations/202611250001_database.sql) 与 [202611260001_cleanup_phone_auth.sql](db/supabase/migrations/202611260001_cleanup_phone_auth.sql)），已部署 Edge Function `user-data`，并配置好 `QUIZHUB_ALLOWED_ORIGINS`、`QUIZHUB_API_KEY_ENCRYPTION_KEY_V1`、Resend SMTP（OTP 有效期 300 秒）以及邮件模板中的 `{{ .Token }}`。
-  2. 在真实线上站/预览站依次完成：邮箱注册 + OTP 激活 -> 保存 API 配置并检查 `localStorage` 无明文 Key -> 刷题/收藏/新建自定义题库 -> 强刷或无痕窗口登录同一账号验证跨设备恢复 -> 勾选「仅当前标签页有效」确认跨设备不受影响 -> 清除云端 API 配置并退出登录确认状态彻底清零。
+- **Phase 1 线上部署与验收清单**：
+  1. 已完成线上应用全部迁移（[202611250001_database.sql](db/supabase/migrations/202611250001_database.sql) 与 [202611260001_cleanup_phone_auth.sql](db/supabase/migrations/202611260001_cleanup_phone_auth.sql)）、部署 Edge Function `user-data`、删除旧 `phone-auth` 并解绑旧 Auth Hook；核对 `QUIZHUB_ALLOWED_ORIGINS=https://acequiz.xyz,https://quiz-hub-416.pages.dev`（无尾斜杠）、`QUIZHUB_API_KEY_ENCRYPTION_KEY_V1`、Resend SMTP（`noreply@acequiz.xyz`，Port 465，OTP 有效期 300 秒）以及 `Confirm signup` / `Magic Link` 模板 `{{ .Token }}`。
+  2. 在主域名 `https://acequiz.xyz` 依次完成 9 项核心验收：新邮箱注册收码与退出后验证码登录 -> 300 秒过期拦截 -> 保存 API Key 返回 `200` 且数据库密文落库（`localStorage` 无明文 Key）-> 导入题库+刷题刷新不丢失且手机端登录自动拉取 -> 勾选「仅当前标签页有效」确认跨设备不受影响 -> 退出登录清空本地缓存无串号 -> 游客模式先刷题再登录/注册自动合并上云。
