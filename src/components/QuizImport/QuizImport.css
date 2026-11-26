@@ -575,8 +575,80 @@
 .qi-checkbox-label input[type='checkbox'] {
   width: 16px;
   height: 16px;
+  flex-shrink: 0;
   accent-color: var(--brand);
   cursor: pointer;
+}
+
+.qi-wash-types {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 10px 12px;
+  border-radius: 10px;
+  border: 1px solid var(--line);
+  background: var(--surface-subtle);
+  min-width: 0;
+}
+
+.qi-wash-types__head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.qi-wash-types__list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px 16px;
+  align-items: center;
+  min-width: 0;
+}
+
+.qi-wash-type-hint {
+  font-size: 12.5px;
+  font-weight: 600;
+  color: var(--bad);
+  overflow-wrap: anywhere;
+}
+
+.qi-json-intercept {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px 12px;
+  flex-wrap: wrap;
+  padding: 10px 12px;
+  border-radius: 10px;
+  border: 1px solid var(--brand-line);
+  background: var(--brand-2);
+  color: var(--ink);
+  min-width: 0;
+}
+
+.qi-json-intercept__text {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  flex: 1 1 220px;
+  min-width: 0;
+  font-size: 13px;
+  overflow-wrap: anywhere;
+}
+
+.qi-json-intercept__text span {
+  font-size: 12.5px;
+  color: var(--sub);
+}
+
+.qi-json-intercept__actions {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+  max-width: 100%;
 }
 
 .qi-config-guard {
@@ -752,6 +824,12 @@
   }
   .qi-sticky-confirm .qi-btn {
     width: 100%;
+  }
+  .qi-json-intercept__actions {
+    width: 100%;
+  }
+  .qi-json-intercept__actions .qi-btn {
+    flex: 1 1 120px;
   }
 }
 

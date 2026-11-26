@@ -228,6 +228,11 @@ test.describe('Tier 1 (Phase 2): QuizHub Brand, Smart Import Workbench, Unified 
     expect(onboardingBank.questions.length).toBeLessThanOrEqual(3);
 
     const stemMap = buildQuestionStemMap(onboardingBank);
+    for (const anchor of ['在 QuizHub 刷题工作台中', '以下哪些特性是受支持的', '两点分布']) {
+      const matched = onboardingBank.questions.find((q) => q.stem.includes(anchor));
+      expect(matched, `Expected onboarding bank question matching "${anchor}"`).toBeDefined();
+      stemMap.set(anchor, matched!);
+    }
     await gotoRoute(page, '#/quiz');
     await modeCard(page, 'all').click();
     await expect(quizProgressText(page)).toContainText(`1 / ${onboardingBank.questions.length}`);
@@ -329,6 +334,7 @@ test.describe('Tier 1 (Phase 2): QuizHub Brand, Smart Import Workbench, Unified 
     await expect(stickyBtn).toContainText('确认导入题库');
     await expect(stickyBtn).toContainText('4');
     await stickyBtn.click();
+    await expect(quizImportDialog(page)).toBeHidden({ timeout: 10_000 });
 
     // Bank becomes active in #/quiz workspace
     if (!/#\/quiz/.test(page.url())) {
@@ -370,6 +376,7 @@ test.describe('Tier 1 (Phase 2): QuizHub Brand, Smart Import Workbench, Unified 
     const stickyBtn = btnConfirmImportSticky(page);
     await expect(stickyBtn).toBeEnabled();
     await stickyBtn.click();
+    await expect(quizImportDialog(page)).toBeHidden({ timeout: 10_000 });
 
     if (!/#\/quiz/.test(page.url())) {
       await gotoRoute(page, '#/quiz');
@@ -399,6 +406,7 @@ test.describe('Tier 1 (Phase 2): QuizHub Brand, Smart Import Workbench, Unified 
     await expect(draftAiInferred(page, 1)).toBeVisible();
 
     await btnConfirmImportSticky(page).click();
+    await expect(quizImportDialog(page)).toBeHidden({ timeout: 10_000 });
     if (!/#\/quiz/.test(page.url())) {
       await gotoRoute(page, '#/quiz');
     }
@@ -496,6 +504,7 @@ test.describe('Tier 1 (Phase 2): QuizHub Brand, Smart Import Workbench, Unified 
     await selectQuizFilters(page, { count: 10, order: 'seq' });
     await modeCard(page, 'choice').click();
     await expect(quizProgressText(page)).toContainText('1 / 10');
+    await qStem(page).click();
 
     await page.keyboard.press('1');
     await expect(quizFeedback(page)).toBeVisible();
@@ -625,6 +634,7 @@ test.describe('Tier 1 (Phase 2): QuizHub Brand, Smart Import Workbench, Unified 
 
     const streamReqs = mockLlm.requests.filter((r) => r.body?.stream === true);
     expect(streamReqs).toHaveLength(1);
+    await page.evaluate(() => window.scrollTo({ top: 0, behavior: 'instant' }));
     await assertFullLayoutAudit(page);
   });
 

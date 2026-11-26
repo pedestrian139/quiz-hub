@@ -44,6 +44,8 @@ export interface DraftQuestion {
   answer: number | number[] | boolean | string;
   rawAnswer: string;
   explain: string;
+  explanation?: string;
+  aiAnalysis?: string;
   keyPoints: string[];
   tags: string[];
   sourceRef: string;

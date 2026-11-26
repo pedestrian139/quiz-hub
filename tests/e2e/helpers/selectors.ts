@@ -485,6 +485,45 @@ export function washTargetBankName(page: Page): Locator {
   return page.getByTestId('wash-target-bank-name');
 }
 
+export function washTargetExistingBank(page: Page): Locator {
+  return page.getByTestId('wash-target-existing-bank');
+}
+
+export function washTypeCheckbox(
+  page: Page,
+  type: 'choice' | 'multi' | 'tf' | 'short',
+): Locator {
+  return page.getByTestId(`wash-type-${type}`);
+}
+
+export function washTypeObjectiveBtn(page: Page): Locator {
+  return page.getByTestId('wash-type-objective-btn');
+}
+
+export function washTypeGuardHint(page: Page): Locator {
+  return page.getByTestId('wash-type-guard-hint');
+}
+
+export function jsonInterceptBanner(page: Page): Locator {
+  return page.getByTestId('json-intercept-banner');
+}
+
+export function jsonInterceptDirectBtn(page: Page): Locator {
+  return page.getByTestId('json-intercept-direct-btn');
+}
+
+export function jsonInterceptAiBtn(page: Page): Locator {
+  return page.getByTestId('json-intercept-ai-btn');
+}
+
+export function btnExportBank(page: Page, id: string): Locator {
+  return page.getByTestId(`btn-export-bank-${id}`);
+}
+
+export function importBankName(page: Page): Locator {
+  return page.getByTestId('import-bank-name');
+}
+
 // Phase 2 Quiz Workspace & AI Tutor
 export function bankSwitcher(page: Page): Locator {
   return page.getByTestId('bank-switcher');

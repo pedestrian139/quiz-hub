@@ -1,5 +1,5 @@
 import type { ImportParseResult } from '../quizImportTypes';
-import { parseJsonBank } from './jsonImporter';
+import { detectStandardQuizJson, parseJsonBank } from './jsonImporter';
 import { appendDraftsToBank, suggestBankNameFromFile } from './normalize';
 import { decodeTextBuffer, parseDelimitedText, parseTabularRows } from './tabularParser';
 import { downloadTxtTemplate, parseTextQuestions, STANDARD_TXT_TEMPLATE } from './textImporter';
@@ -8,6 +8,7 @@ export {
   STANDARD_TXT_TEMPLATE,
   appendDraftsToBank,
   decodeTextBuffer,
+  detectStandardQuizJson,
   downloadTxtTemplate,
   parseJsonBank,
   parseTextQuestions,

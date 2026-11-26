@@ -86,6 +86,77 @@ function normalizeStringList(raw: unknown): string[] {
   return [];
 }
 
+function pickCleanText(candidates: unknown[]): string {
+  for (const candidate of candidates) {
+    if (
+      typeof candidate !== 'string' &&
+      !(typeof candidate === 'number' && Number.isFinite(candidate))
+    ) {
+      continue;
+    }
+    const cleaned = cleanText(candidate);
+    if (cleaned) {
+      return cleaned;
+    }
+  }
+  return '';
+}
+
+function isValidExplicitQuestionType(rawType: unknown): rawType is string {
+  if (typeof rawType !== 'string') return false;
+  const t = normalizeFullwidthAscii(cleanText(rawType)).toLowerCase();
+  if (!t) return false;
+  return (
+    /(多选|多项|不定项|multi|multiple|checkbox)/i.test(t) ||
+    /(判断|是非|正误|对错|\btf\b|true\s*\/?\s*false|boolean|bool)/i.test(t) ||
+    /(单选|单项|选择|single|choice|radio)/i.test(t) ||
+    /(综合|案例|分析|论述|材料|analysis|essay|case)/i.test(t) ||
+    /(简答|问答|填空|名词解释|主观|背诵|概念|short|qa|fill|blank|term)/i.test(t)
+  );
+}
+
+function isStandardQuizQuestion(item: unknown): boolean {
+  if (!isSafeRecord(item)) return false;
+
+  const stemVal = item.stem ?? item.question ?? item.题干 ?? item.题目;
+  if (typeof stemVal !== 'string' || cleanText(stemVal).length === 0) {
+    return false;
+  }
+
+  const rawTypeVal =
+    item.type ?? item.questionType ?? item.qtype ?? item.题型 ?? item.题目类型;
+  let explicitMappedType: QuestionType | undefined;
+  if (rawTypeVal !== undefined) {
+    if (!isValidExplicitQuestionType(rawTypeVal)) {
+      return false;
+    }
+    explicitMappedType = parseQuestionType(rawTypeVal);
+  }
+
+  const ansVal =
+    item.answer ?? item.correctAnswer ?? item.正确答案 ?? item.参考答案 ?? item.答案;
+  const hasAnswer =
+    typeof ansVal === 'number'
+      ? Number.isFinite(ansVal)
+      : typeof ansVal === 'boolean'
+        ? true
+        : typeof ansVal === 'string'
+          ? cleanText(ansVal).length > 0
+          : Array.isArray(ansVal)
+            ? ansVal.length > 0
+            : false;
+
+  if (hasAnswer) {
+    return true;
+  }
+
+  if (explicitMappedType === 'choice' || explicitMappedType === 'multi') {
+    return normalizeJsonOptions(item).length > 0;
+  }
+
+  return false;
+}
+
 function parseExternalQuestionArray(
   items: unknown[],
   chapterNameById: Map<number, string>,
@@ -195,29 +266,15 @@ function parseExternalQuestionArray(
       chapterName = info.chapterName;
     }
 
-    const explainCandidates = [
+    const explain = pickCleanText([
       rawItem.explain,
-      rawItem.explanation,
-      rawItem.aiAnalysis,
       rawItem.analysis,
       rawItem.rationale,
       rawItem.解析,
       rawItem.答案解析,
-    ];
-    let explain = '';
-    for (const candidate of explainCandidates) {
-      if (
-        typeof candidate !== 'string' &&
-        !(typeof candidate === 'number' && Number.isFinite(candidate))
-      ) {
-        continue;
-      }
-      const cleaned = cleanText(candidate);
-      if (cleaned) {
-        explain = cleaned;
-        break;
-      }
-    }
+    ]);
+    const explanation = pickCleanText([rawItem.explanation]);
+    const aiAnalysis = pickCleanText([rawItem.aiAnalysis]);
     const keyPoints = normalizeStringList(rawItem.keyPoints ?? rawItem.points ?? rawItem.要点 ?? rawItem.采分点);
     const tags = normalizeStringList(rawItem.tags ?? rawItem.标签);
     const aiInferredAnswer = rawItem.aiInferredAnswer === true;
@@ -249,6 +306,8 @@ function parseExternalQuestionArray(
       answer: typedAnswer,
       rawAnswer: rawAnsStr,
       explain,
+      ...(explanation ? { explanation } : {}),
+      ...(aiAnalysis ? { aiAnalysis } : {}),
       keyPoints,
       tags,
       sourceRef,
@@ -395,4 +454,58 @@ export function parseJsonBank(rawText: string, fileName?: string): ImportParseRe
     notes: [],
     fatalError: '未能识别该 JSON 题库结构（支持 .quizhub.json 分享包、BankData 或常见题目数组）',
   };
+}
+
+export function detectStandardQuizJson(
+  rawText: string,
+  fileName?: string,
+): ImportParseResult | null {
+  try {
+    if (typeof rawText !== 'string') return null;
+    const trimmed = cleanText(rawText);
+    if (!trimmed || (!trimmed.startsWith('{') && !trimmed.startsWith('['))) {
+      return null;
+    }
+
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(trimmed);
+    } catch {
+      return null;
+    }
+
+    let rawQuestions: unknown[] | null = null;
+    if (Array.isArray(parsed)) {
+      rawQuestions = parsed;
+    } else if (isSafeRecord(parsed)) {
+      if (
+        parsed.schema === QUIZHUB_SHARE_SCHEMA &&
+        isSafeRecord(parsed.bank) &&
+        isSafeRecord(parsed.bank.data) &&
+        Array.isArray(parsed.bank.data.questions)
+      ) {
+        rawQuestions = parsed.bank.data.questions;
+      } else if (
+        parsed.schema !== QUIZHUB_SHARE_SCHEMA &&
+        Array.isArray(parsed.questions)
+      ) {
+        rawQuestions = parsed.questions;
+      }
+    }
+
+    if (!rawQuestions || rawQuestions.length === 0) {
+      return null;
+    }
+    if (!rawQuestions.every(isStandardQuizQuestion)) {
+      return null;
+    }
+
+    const res = parseJsonBank(trimmed, fileName);
+    if (res.fatalError || res.drafts.length === 0) {
+      return null;
+    }
+    return res;
+  } catch {
+    return null;
+  }
 }

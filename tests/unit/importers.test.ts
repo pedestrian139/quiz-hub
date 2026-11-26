@@ -2,6 +2,7 @@
 import { describe, expect, it } from 'vitest';
 import { exportBankSharePackage } from '../../src/utils/bankDb';
 import {
+  detectStandardQuizJson,
   parseImportFile,
   parseJsonBank,
   parsePastedContent,
@@ -497,7 +498,7 @@ B. 选项B
     expect(finalized.questions[1]!.explain).toBe('');
   });
 
-  it('IMP-11: jsonImporter picks first non-empty explain candidate and preserves aiInferredAnswer', () => {
+  it('IMP-11: jsonImporter separates explain, explanation, and aiAnalysis independently and preserves aiInferredAnswer', () => {
     const jsonText = JSON.stringify([
       {
         type: 'choice',
@@ -517,16 +518,34 @@ B. 选项B
         aiAnalysis: '来自 aiAnalysis 字段的解析',
         aiInferredAnswer: false,
       },
+      {
+        type: 'choice',
+        stem: 'AI 洗题导入题 3',
+        options: ['选项A', '选项B'],
+        answer: 0,
+        analysis: '来自 analysis 字段的解析',
+        explanation: '独立 explanation 字段',
+        aiAnalysis: '独立 aiAnalysis 字段',
+      },
     ]);
 
     const res = parseJsonBank(jsonText, 'ai-washed.json');
     expect(res.fatalError).toBeUndefined();
-    expect(res.drafts).toHaveLength(2);
-    expect(res.drafts[0]!.explain).toBe('来自 explanation 字段的解析');
+    expect(res.drafts).toHaveLength(3);
+    expect(res.drafts[0]!.explain).toBe('');
+    expect(res.drafts[0]!.explanation).toBe('来自 explanation 字段的解析');
+    expect(res.drafts[0]!.aiAnalysis).toBeUndefined();
     expect(res.drafts[0]!.aiInferredAnswer).toBe(true);
     expect(res.drafts[0]!.tags).toEqual(['算法', 'AI洗题']);
-    expect(res.drafts[1]!.explain).toBe('来自 aiAnalysis 字段的解析');
+
+    expect(res.drafts[1]!.explain).toBe('');
+    expect(res.drafts[1]!.explanation).toBeUndefined();
+    expect(res.drafts[1]!.aiAnalysis).toBe('来自 aiAnalysis 字段的解析');
     expect(res.drafts[1]!.aiInferredAnswer).toBeUndefined();
+
+    expect(res.drafts[2]!.explain).toBe('来自 analysis 字段的解析');
+    expect(res.drafts[2]!.explanation).toBe('独立 explanation 字段');
+    expect(res.drafts[2]!.aiAnalysis).toBe('独立 aiAnalysis 字段');
   });
 
   it('IMP-12: finalizeDraftsToBank preserves aiInferredAnswer, tags, keyPoints, explain, and source', () => {
@@ -822,11 +841,11 @@ B. 选项B
     expect(qRes.drafts[0]!.explain).toBe('TCP 通过三次握手建立连接。');
   });
 
-  it('IMP-17: jsonImporter ignores non-string explain objects/arrays instead of coercing to [object Object]', () => {
+  it('IMP-17: jsonImporter ignores non-string/non-finite explain, explanation, and aiAnalysis values instead of coercing to [object Object]', () => {
     const jsonText = JSON.stringify([
       {
         type: 'choice',
-        stem: '非字符串 explain 回退测试 1',
+        stem: '非字符串字段过滤测试 1',
         options: ['A项', 'B项'],
         answer: 0,
         explain: { bad: 1 },
@@ -834,20 +853,52 @@ B. 选项B
       },
       {
         type: 'choice',
-        stem: '非字符串 explain 回退测试 2',
+        stem: '非字符串字段过滤测试 2',
         options: ['A项', 'B项'],
         answer: 1,
         explain: ['array-val'],
         explanation: true,
         aiAnalysis: 'ai fallback',
       },
+      {
+        type: 'choice',
+        stem: '非字符串字段过滤测试 3',
+        options: ['A项', 'B项'],
+        answer: 0,
+        explain: { bad: 1 },
+        analysis: 'analysis fallback',
+        explanation: ['bad-arr'],
+        aiAnalysis: { bad: 2 },
+      },
+      {
+        type: 'choice',
+        stem: '有限数字与 null 过滤测试 4',
+        options: ['A项', 'B项'],
+        answer: 1,
+        explain: 100,
+        explanation: null,
+        aiAnalysis: 42,
+      },
     ]);
 
     const res = parseJsonBank(jsonText, 'bad-explain.json');
     expect(res.fatalError).toBeUndefined();
-    expect(res.drafts).toHaveLength(2);
-    expect(res.drafts[0]!.explain).toBe('valid fallback');
-    expect(res.drafts[1]!.explain).toBe('ai fallback');
+    expect(res.drafts).toHaveLength(4);
+    expect(res.drafts[0]!.explain).toBe('');
+    expect(res.drafts[0]!.explanation).toBe('valid fallback');
+    expect(res.drafts[0]!.aiAnalysis).toBeUndefined();
+
+    expect(res.drafts[1]!.explain).toBe('');
+    expect(res.drafts[1]!.explanation).toBeUndefined();
+    expect(res.drafts[1]!.aiAnalysis).toBe('ai fallback');
+
+    expect(res.drafts[2]!.explain).toBe('analysis fallback');
+    expect(res.drafts[2]!.explanation).toBeUndefined();
+    expect(res.drafts[2]!.aiAnalysis).toBeUndefined();
+
+    expect(res.drafts[3]!.explain).toBe('100');
+    expect(res.drafts[3]!.explanation).toBeUndefined();
+    expect(res.drafts[3]!.aiAnalysis).toBe('42');
   });
 
   it('IMP-18: appendDraftsToBank recognizes Chinese numeral generic chapter labels like 第一章/第十二章 and upgrades them', () => {
@@ -902,5 +953,335 @@ B. 选项B
       short: '操作系统基础',
       title: '第 1 章 操作系统基础',
     });
+  });
+
+  it('IMP-19: exportBankSharePackage -> parseJsonBank -> finalizeDraftsToBank & appendDraftsToBank roundtrip preserves explain, explanation, and aiAnalysis losslessly', () => {
+    const sourceBank: BankRecord = {
+      id: 'bank-lossless-rt',
+      name: '解析保真往返题库',
+      description: '验证 explain / explanation / aiAnalysis 互不覆盖',
+      builtin: false,
+      createdAt: 1000,
+      updatedAt: 2000,
+      data: {
+        meta: {
+          title: '解析保真往返题库',
+          version: '2.0.0',
+          generatedAt: '2026-11-26T00:00:00Z',
+          counts: {
+            total: 4,
+            byType: { choice: 2, multi: 0, tf: 1, short: 1, analysis: 0 },
+            byOrigin: { comprehensive_bank: 4, video_popup: 0, review_notes_synthesized: 0 },
+          },
+        },
+        chapters: [{ id: 1, short: '深度学习', title: '第 1 章 深度学习' }],
+        questions: [
+          {
+            id: 'rt-q1',
+            type: 'choice',
+            chapter: 1,
+            stem: '同时包含 explain 与 aiAnalysis 的题目？',
+            options: ['选项A', '选项B'],
+            answer: 0,
+            explain: '原题官方解析 Q1',
+            aiAnalysis: 'AI 深度解析 Q1',
+            source: { origin: 'comprehensive_bank', file: 'rt', ref: '#1' },
+          },
+          {
+            id: 'rt-q2',
+            type: 'tf',
+            chapter: 1,
+            stem: '同时包含 explain、explanation 与 aiAnalysis 的题目。',
+            answer: false,
+            explain: '原题官方解析 Q2',
+            explanation: '补充 explanation Q2',
+            aiAnalysis: 'AI 深度解析 Q2',
+            source: { origin: 'comprehensive_bank', file: 'rt', ref: '#2' },
+          },
+          {
+            id: 'rt-q3',
+            type: 'choice',
+            chapter: 1,
+            stem: '仅包含 explain 的题目？',
+            options: ['甲', '乙'],
+            answer: 1,
+            explain: '仅原题解析 Q3',
+            source: { origin: 'comprehensive_bank', file: 'rt', ref: '#3' },
+          },
+          {
+            id: 'rt-q4',
+            type: 'short',
+            chapter: 1,
+            stem: 'explain 为空但包含 explanation 与 aiAnalysis 的题目？',
+            answer: '参考答案 Q4',
+            explain: '',
+            explanation: '外部 explanation Q4',
+            aiAnalysis: 'AI 深度解析 Q4',
+            source: { origin: 'comprehensive_bank', file: 'rt', ref: '#4' },
+          },
+        ],
+      },
+    };
+
+    const exported1 = exportBankSharePackage(sourceBank);
+    const parsed1 = parseJsonBank(exported1, 'roundtrip.quizhub.json');
+    expect(parsed1.fatalError).toBeUndefined();
+    expect(parsed1.drafts).toHaveLength(4);
+
+    expect(parsed1.drafts[0]!.explain).toBe('原题官方解析 Q1');
+    expect(parsed1.drafts[0]!.explanation).toBeUndefined();
+    expect(parsed1.drafts[0]!.aiAnalysis).toBe('AI 深度解析 Q1');
+
+    expect(parsed1.drafts[1]!.explain).toBe('原题官方解析 Q2');
+    expect(parsed1.drafts[1]!.explanation).toBe('补充 explanation Q2');
+    expect(parsed1.drafts[1]!.aiAnalysis).toBe('AI 深度解析 Q2');
+
+    expect(parsed1.drafts[2]!.explain).toBe('仅原题解析 Q3');
+    expect(parsed1.drafts[2]!.explanation).toBeUndefined();
+    expect(parsed1.drafts[2]!.aiAnalysis).toBeUndefined();
+
+    expect(parsed1.drafts[3]!.explain).toBe('');
+    expect(parsed1.drafts[3]!.explanation).toBe('外部 explanation Q4');
+    expect(parsed1.drafts[3]!.aiAnalysis).toBe('AI 深度解析 Q4');
+
+    const finalized1 = finalizeDraftsToBank(parsed1.drafts, {
+      name: parsed1.suggestedName,
+      description: parsed1.suggestedDescription,
+      sourceFormat: 'json',
+    });
+    expect(finalized1.questions).toHaveLength(4);
+
+    expect(finalized1.questions[0]!.explain).toBe('原题官方解析 Q1');
+    expect(finalized1.questions[0]!).not.toHaveProperty('explanation');
+    expect(finalized1.questions[0]!.aiAnalysis).toBe('AI 深度解析 Q1');
+
+    expect(finalized1.questions[1]!.explain).toBe('原题官方解析 Q2');
+    expect(finalized1.questions[1]!.explanation).toBe('补充 explanation Q2');
+    expect(finalized1.questions[1]!.aiAnalysis).toBe('AI 深度解析 Q2');
+
+    expect(finalized1.questions[2]!.explain).toBe('仅原题解析 Q3');
+    expect(finalized1.questions[2]!).not.toHaveProperty('explanation');
+    expect(finalized1.questions[2]!).not.toHaveProperty('aiAnalysis');
+
+    expect(finalized1.questions[3]!.explain).toBe('');
+    expect(finalized1.questions[3]!.explanation).toBe('外部 explanation Q4');
+    expect(finalized1.questions[3]!.aiAnalysis).toBe('AI 深度解析 Q4');
+
+    // Second re-export -> re-import -> finalize roundtrip
+    const reExported = exportBankSharePackage({
+      id: 'bank-lossless-rt-2',
+      name: finalized1.name,
+      description: finalized1.description,
+      builtin: false,
+      createdAt: 3000,
+      updatedAt: 4000,
+      sourceFormat: 'json',
+      data: {
+        meta: sourceBank.data.meta,
+        chapters: finalized1.chapters,
+        questions: finalized1.questions,
+      },
+    });
+    const parsed2 = parseJsonBank(reExported, 'roundtrip-2.quizhub.json');
+    const finalized2 = finalizeDraftsToBank(parsed2.drafts, { name: parsed2.suggestedName });
+    expect(finalized2.questions.map((q) => ({
+      explain: q.explain,
+      explanation: q.explanation,
+      aiAnalysis: q.aiAnalysis,
+    }))).toEqual(
+      finalized1.questions.map((q) => ({
+        explain: q.explain,
+        explanation: q.explanation,
+        aiAnalysis: q.aiAnalysis,
+      })),
+    );
+
+    // appendDraftsToBank lossless preservation
+    const existingBank: BankRecord = {
+      id: 'bank-existing-rt',
+      name: '已有题库',
+      builtin: false,
+      createdAt: 1000,
+      updatedAt: 1000,
+      data: {
+        meta: {
+          title: '已有题库',
+          version: '2.0.0',
+          generatedAt: '2026-11-26T00:00:00Z',
+          counts: {
+            total: 1,
+            byType: { choice: 0, multi: 0, tf: 1, short: 0, analysis: 0 },
+            byOrigin: { comprehensive_bank: 1, video_popup: 0, review_notes_synthesized: 0 },
+          },
+        },
+        chapters: [{ id: 1, short: '深度学习', title: '第 1 章 深度学习' }],
+        questions: [
+          {
+            id: 'existing-1',
+            type: 'tf',
+            chapter: 1,
+            stem: '原有题目',
+            answer: true,
+            explain: '原有解析',
+            source: { origin: 'comprehensive_bank', file: '已有题库', ref: '#1' },
+          },
+        ],
+      },
+    };
+    const appended = appendDraftsToBank(existingBank, parsed1.drafts);
+    expect(appended.data.questions).toHaveLength(5);
+    const appendedSlice = appended.data.questions.slice(1);
+    expect(appendedSlice[0]!.explain).toBe('原题官方解析 Q1');
+    expect(appendedSlice[0]!).not.toHaveProperty('explanation');
+    expect(appendedSlice[0]!.aiAnalysis).toBe('AI 深度解析 Q1');
+
+    expect(appendedSlice[1]!.explain).toBe('原题官方解析 Q2');
+    expect(appendedSlice[1]!.explanation).toBe('补充 explanation Q2');
+    expect(appendedSlice[1]!.aiAnalysis).toBe('AI 深度解析 Q2');
+
+    expect(appendedSlice[2]!.explain).toBe('仅原题解析 Q3');
+    expect(appendedSlice[2]!).not.toHaveProperty('explanation');
+    expect(appendedSlice[2]!).not.toHaveProperty('aiAnalysis');
+
+    expect(appendedSlice[3]!.explain).toBe('');
+    expect(appendedSlice[3]!.explanation).toBe('外部 explanation Q4');
+    expect(appendedSlice[3]!.aiAnalysis).toBe('AI 深度解析 Q4');
+  });
+
+  it('IMP-20: detectStandardQuizJson silently detects valid QuizHub JSON formats and rejects non-standard inputs', () => {
+    const shareBank: BankRecord = {
+      id: 'bank-detect-1',
+      name: '自动识货测试包',
+      description: '含三种解析字段',
+      builtin: false,
+      createdAt: 1000,
+      updatedAt: 2000,
+      data: {
+        meta: {
+          title: '自动识货测试包',
+          version: '2.0.0',
+          generatedAt: '2026-11-26T00:00:00Z',
+          counts: {
+            total: 1,
+            byType: { choice: 1, multi: 0, tf: 0, short: 0, analysis: 0 },
+            byOrigin: { comprehensive_bank: 1, video_popup: 0, review_notes_synthesized: 0 },
+          },
+        },
+        chapters: [{ id: 1, short: '第一章', title: '第 1 章 基础' }],
+        questions: [
+          {
+            id: 'dq-1',
+            type: 'choice',
+            chapter: 1,
+            stem: '以下哪项属于监督学习？',
+            options: ['线性回归', 'K-Means 聚类', 'PCA 降维', 'Apriori'],
+            answer: 0,
+            explain: '线性回归使用带标签样本训练。',
+            explanation: '补充说明',
+            aiAnalysis: 'AI 深度拆解',
+            source: { origin: 'comprehensive_bank', file: 'test', ref: '#1' },
+          },
+        ],
+      },
+    };
+    const shareJson = exportBankSharePackage(shareBank);
+
+    // Positive 1: .quizhub.json with and without fileName, plus BOM/whitespace
+    const detectedShareWithFile = detectStandardQuizJson(shareJson, 'my-bank.quizhub.json');
+    expect(detectedShareWithFile).not.toBeNull();
+    expect(detectedShareWithFile!.suggestedName).toBe('自动识货测试包');
+    expect(detectedShareWithFile!.drafts).toHaveLength(1);
+    expect(detectedShareWithFile!.drafts[0]!.explain).toBe('线性回归使用带标签样本训练。');
+    expect(detectedShareWithFile!.drafts[0]!.explanation).toBe('补充说明');
+    expect(detectedShareWithFile!.drafts[0]!.aiAnalysis).toBe('AI 深度拆解');
+
+    const detectedShareBom = detectStandardQuizJson(`\uFEFF  \n${shareJson}\n  `);
+    expect(detectedShareBom).not.toBeNull();
+    expect(detectedShareBom!.drafts).toHaveLength(1);
+
+    // Positive 2: Legacy/native BankData { meta, chapters, questions } and minimal { questions }
+    const bankDataJson = JSON.stringify({
+      meta: { title: '旧版导库格式' },
+      chapters: [{ id: 2, short: '图论', title: '第 2 章 图论' }],
+      questions: [
+        {
+          type: 'tf',
+          chapter: 2,
+          stem: '任意无向连通图都存在生成树。',
+          answer: false,
+          explain: '测试 false 答案保留',
+        },
+      ],
+    });
+    const detectedBankData = detectStandardQuizJson(bankDataJson);
+    expect(detectedBankData).not.toBeNull();
+    expect(detectedBankData!.suggestedName).toBe('旧版导库格式');
+    expect(detectedBankData!.drafts[0]!.answer).toBe(false);
+
+    const minimalQuestionsJson = JSON.stringify({
+      questions: [
+        {
+          question: 'HTTP 默认端口号是？',
+          options: ['80', '443'],
+          correctAnswer: 'A',
+        },
+      ],
+    });
+    const detectedMinimal = detectStandardQuizJson(minimalQuestionsJson, 'net.json');
+    expect(detectedMinimal).not.toBeNull();
+    expect(detectedMinimal!.suggestedName).toBe('net');
+    expect(detectedMinimal!.drafts[0]!.answer).toBe(0);
+
+    // Positive 3: Standard question array (with and without fileName, plus explicit choice with options)
+    const arrayJson = JSON.stringify([
+      {
+        type: 'choice',
+        stem: '时间复杂度为 O(1) 的操作是？',
+        options: ['数组按索引访问', '链表顺序查找'],
+        answer: 0,
+      },
+      {
+        type: '单选题',
+        stem: '无答案但显式声明单选题且带选项的草稿题？',
+        options: ['选项 1', '选项 2'],
+      },
+    ]);
+    const detectedArrayNoName = detectStandardQuizJson(arrayJson);
+    expect(detectedArrayNoName).not.toBeNull();
+    expect(detectedArrayNoName!.suggestedName).toBe('JSON 导入题库');
+    expect(detectedArrayNoName!.drafts).toHaveLength(2);
+
+    const detectedArrayWithName = detectStandardQuizJson(arrayJson, 'algo.json');
+    expect(detectedArrayWithName).not.toBeNull();
+    expect(detectedArrayWithName!.suggestedName).toBe('algo');
+
+    // Negative cases: must return null and never throw
+    const negatives = [
+      '',
+      '   \n\t  ',
+      '1. 什么是操作系统？\nA. 系统软件\nB. 应用软件\n答案：A',
+      '# 复习笔记\n\n- 重点一：TCP 三次握手',
+      '{"questions": [',
+      '[{stem: 1}]',
+      '{"foo": "bar"}',
+      '{"questions": []}',
+      '[]',
+      '{"questions": ["str"]}',
+      '[1, 2, 3]',
+      '{"questions": [{"name": "Alice"}]}',
+      '[{"name": "Alice"}]',
+      '[{"title": "Doc", "content": "..."}]',
+      '[{"question": "How are you?"}]',
+      '{"data": [{"type": "choice", "stem": "Q", "options": ["A", "B"], "answer": 0}]}',
+      '{"items": [{"type": "tf", "stem": "Q", "answer": true}]}',
+      '[{"stem": "Q", "type": "invalid_type", "answer": "x"}]',
+      '[{"stem": "Q", "type": "user", "answer": "x"}]',
+      '{"__proto__": {"polluted": true}, "questions": [{"type": "tf", "stem": "Q", "answer": true}]}',
+    ];
+
+    for (const input of negatives) {
+      expect(() => detectStandardQuizJson(input)).not.toThrow();
+      expect(detectStandardQuizJson(input)).toBeNull();
+    }
   });
 });

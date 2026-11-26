@@ -41,7 +41,6 @@ import {
   answerCurrentQuestion,
   bankImportFileInput,
   bankSwitcher,
-  btnCloseQuizImport,
   btnConfirmImport,
   btnConfirmImportSticky,
   btnNext,
@@ -50,6 +49,7 @@ import {
   draftDelete,
   draftEdit,
   ensureAnswerSheetOpen,
+  filterOrder,
   gotoRoute,
   hubBadgeTotal,
   hubCardQuiz,
@@ -125,14 +125,8 @@ async function confirmImportAndClose(page: Page, bankName?: string): Promise<voi
   await expect(confirmBtn).toBeEnabled();
   await confirmBtn.click();
 
-  const dialog = quizImportDialog(page);
-  if (await dialog.isVisible().catch(() => false)) {
-    const closeBtn = btnCloseQuizImport(page);
-    if (await closeBtn.isVisible().catch(() => false)) {
-      await closeBtn.click();
-    }
-  }
-  await expect(dialog).toBeHidden();
+  await expect(quizImportDialog(page)).toBeHidden({ timeout: 10_000 });
+  await expect(page).toHaveURL(/#\/quiz/);
 }
 
 async function switchActiveBank(
@@ -213,6 +207,7 @@ test.describe('Tier 4 Phase 2: Real-World Application Journeys (T4-P2-001..T4-P2
     await expect(quizBadgeTotal(page)).toContainText('3');
     await expect(page.locator('body')).toContainText('QuizHub 使用引导示例题库');
 
+    await filterOrder(page).selectOption('seq');
     await modeCard(page, 'all').click();
     await expect(qStem(page).locator('.katex').first()).toBeVisible();
 
@@ -360,7 +355,13 @@ test.describe('Tier 4 Phase 2: Real-World Application Journeys (T4-P2-001..T4-P2
       apiConfig: {},
     });
     const stemMap = buildQuestionStemMap(MARKDOWN_LATEX_BANK);
+    for (const anchor of ['能量与求和公式推导', '容错与 XSS 安全测试题', '向量算子']) {
+      const matched = MARKDOWN_LATEX_BANK.questions.find((q) => q.stem.includes(anchor));
+      expect(matched, `Expected MARKDOWN_LATEX_BANK question matching "${anchor}"`).toBeDefined();
+      stemMap.set(anchor, matched!);
+    }
 
+    await filterOrder(page).selectOption('seq');
     await modeCard(page, 'all').click();
     await expect(qStem(page).locator('table')).toBeVisible();
     await expect(qStem(page).locator('.katex').first()).toBeVisible();
@@ -500,6 +501,7 @@ test.describe('Tier 4 Phase 2: Real-World Application Journeys (T4-P2-001..T4-P2
 
     await gotoRoute(page, '#/quiz');
     await switchActiveBank(page, legacyBankId, /Phase 1/);
+    await filterOrder(page).selectOption('seq');
     await modeCard(page, 'all').click();
 
     await answerCurrentQuestion(page, stemMap, 'wrong');
@@ -531,10 +533,12 @@ test.describe('Tier 4 Phase 2: Real-World Application Journeys (T4-P2-001..T4-P2
     await gotoRoute(page, '#/quiz');
     await switchActiveBank(page, legacyBankId, /Phase 1/);
     await expect(statCard(page, 'done')).toContainText('2');
+    await filterOrder(page).selectOption('seq');
     await modeCard(page, 'choice').click();
     await aiBtnExplain(page).click();
     await expect(explanationContainer(page)).toContainText('核心考点');
     expect(llm.requests.filter((r) => r.url.includes('/chat/completions'))).toHaveLength(0);
+    await page.evaluate(() => window.scrollTo({ top: 0, behavior: 'instant' }));
     await assertFullLayoutAudit(page);
   });
 });

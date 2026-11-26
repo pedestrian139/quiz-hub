@@ -26,6 +26,7 @@ import type { QuestionType } from '../../types/quiz';
 import type { CreateCustomBankInput } from '../../utils/bankDb';
 import {
   decodeTextBuffer,
+  detectStandardQuizJson,
   downloadExcelTemplate,
   downloadTxtTemplate,
   parseImportFile,
@@ -75,11 +76,33 @@ const QUESTION_TYPE_OPTIONS: { value: QuestionType; label: string }[] = [
   { value: 'analysis', label: '综合分析题' },
 ];
 
+type WashQuestionType = 'choice' | 'multi' | 'tf' | 'short';
+
+const ALL_WASH_TYPES: WashQuestionType[] = ['choice', 'multi', 'tf', 'short'];
+const OBJECTIVE_WASH_TYPES: WashQuestionType[] = ['choice', 'multi', 'tf'];
+const WASH_TYPE_OPTIONS: { value: WashQuestionType; label: string }[] = [
+  { value: 'choice', label: '单选' },
+  { value: 'multi', label: '多选' },
+  { value: 'tf', label: '判断' },
+  { value: 'short', label: '简答' },
+];
+
+interface PendingJsonIntercept {
+  rawText: string;
+  fileName?: string;
+  parseResult: ImportParseResult;
+  trigger: 'paste' | 'drop' | 'wash';
+}
+
 const PAGE_STEP = 50;
 const MAX_OPTIONS = 8;
 
 function stopShortcutBubble(e: React.KeyboardEvent) {
   e.stopPropagation();
+}
+
+function normalizeLineEndings(text: string): string {
+  return text.replace(/\r\n?/g, '\n');
 }
 
 function getDraftWashBatchIndex(draft: DraftQuestion): number | null {
@@ -133,6 +156,7 @@ export function ImportWorkbench({
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const abortRef = useRef<AbortController | null>(null);
   const bankNameDirtyRef = useRef(false);
+  const pendingPasteDetectRef = useRef(false);
 
   const customBanks = useMemo(
     () => existingBanks.filter((b) => !b.builtin),
@@ -159,12 +183,26 @@ export function ImportWorkbench({
   const [targetBankId, setTargetBankId] = useState<string>('');
   const [autoFillExplain, setAutoFillExplain] = useState(true);
   const [autoTag, setAutoTag] = useState(true);
+  const [selectedWashTypes, setSelectedWashTypes] = useState<WashQuestionType[]>(() => [
+    ...ALL_WASH_TYPES,
+  ]);
+  const [pendingJsonIntercept, setPendingJsonIntercept] =
+    useState<PendingJsonIntercept | null>(null);
+  const [bypassedJsonText, setBypassedJsonText] = useState<string | null>(null);
 
   const [washing, setWashing] = useState(false);
   const [washProgress, setWashProgress] = useState<WashProgressEvent | null>(null);
   const [failedChunks, setFailedChunks] = useState<FailedWashChunk[]>([]);
   const [retryingChunkIndex, setRetryingChunkIndex] = useState<number | null>(null);
   const [washConfigError, setWashConfigError] = useState<string | null>(null);
+
+  const toggleWashType = (type: WashQuestionType) => {
+    setSelectedWashTypes((prev) =>
+      prev.includes(type)
+        ? prev.filter((t) => t !== type)
+        : ALL_WASH_TYPES.filter((t) => t === type || prev.includes(t)),
+    );
+  };
 
   const [parseResult, setParseResult] = useState<ImportParseResult | null>(null);
   const [bankName, setBankName] = useState('');
@@ -201,6 +239,9 @@ export function ImportWorkbench({
     res: ImportParseResult,
     options?: { suppressZeroDraftToast?: boolean },
   ) => {
+    pendingPasteDetectRef.current = false;
+    setPendingJsonIntercept(null);
+    setBypassedJsonText(null);
     setParseResult(res);
     if (res.suggestedName) {
       setBankName((prev) =>
@@ -225,6 +266,9 @@ export function ImportWorkbench({
   };
 
   const handleSelectedFile = async (file: File, targetArea: 'file' | 'paste' = 'file') => {
+    pendingPasteDetectRef.current = false;
+    setPendingJsonIntercept(null);
+    setBypassedJsonText(null);
     const fileName = file.name || '未命名文件';
     const lower = fileName.toLowerCase();
     const isTextLike =
@@ -286,18 +330,151 @@ export function ImportWorkbench({
   const handlePasteDrop = async (e: DragEvent<HTMLDivElement>) => {
     e.preventDefault();
     setPasteDragging(false);
-    const file = e.dataTransfer.files?.[0];
+    pendingPasteDetectRef.current = false;
+    const file = e.dataTransfer?.files?.[0];
     if (file) {
+      const lower = (file.name || '').toLowerCase();
+      const isTextOrJson =
+        lower.endsWith('.json') ||
+        lower.endsWith('.txt') ||
+        lower.endsWith('.md') ||
+        lower.endsWith('.markdown') ||
+        file.type === 'application/json' ||
+        file.type.startsWith('text/');
+      if (isTextOrJson) {
+        try {
+          const decoded = normalizeLineEndings(
+            typeof file.arrayBuffer === 'function'
+              ? decodeTextBuffer(await file.arrayBuffer())
+              : await file.text(),
+          );
+          const detected = detectStandardQuizJson(decoded, file.name);
+          if (detected) {
+            setPasteText(decoded);
+            setWashSourceText(decoded);
+            setWashSourceFileName(file.name || '');
+            setBypassedJsonText(null);
+            setPendingJsonIntercept({
+              rawText: decoded,
+              fileName: file.name || undefined,
+              parseResult: detected,
+              trigger: 'drop',
+            });
+            return;
+          }
+        } catch {
+          // fallback to standard file handler
+        }
+      }
       await handleSelectedFile(file, 'paste');
       return;
     }
-    const droppedText = e.dataTransfer.getData('text/plain');
+    const droppedText = normalizeLineEndings(
+      e.dataTransfer?.getData('text/plain') || e.dataTransfer?.getData('text') || '',
+    );
     if (droppedText) {
       setPasteText(droppedText);
+      setBypassedJsonText(null);
+      const detected = detectStandardQuizJson(droppedText);
+      setPendingJsonIntercept(
+        detected
+          ? {
+              rawText: droppedText,
+              parseResult: detected,
+              trigger: 'drop',
+            }
+          : null,
+      );
+    }
+  };
+
+  const handlePasteTextChange = (nextVal: string) => {
+    const normalizedNext = normalizeLineEndings(nextVal);
+    const normalizedBypass =
+      bypassedJsonText !== null ? normalizeLineEndings(bypassedJsonText) : null;
+    setPasteText(normalizedNext);
+    setBypassedJsonText((prev) =>
+      prev !== null && normalizeLineEndings(prev) !== normalizedNext ? null : prev,
+    );
+
+    if (pendingPasteDetectRef.current) {
+      pendingPasteDetectRef.current = false;
+      if (!normalizedNext.trim() || normalizedBypass === normalizedNext) {
+        setPendingJsonIntercept(null);
+        return;
+      }
+      const detected = detectStandardQuizJson(normalizedNext);
+      setPendingJsonIntercept(
+        detected
+          ? {
+              rawText: normalizedNext,
+              parseResult: detected,
+              trigger: 'paste',
+            }
+          : null,
+      );
+      return;
+    }
+
+    setPendingJsonIntercept((prev) =>
+      prev && normalizeLineEndings(prev.rawText) !== normalizedNext ? null : prev,
+    );
+  };
+
+  const handleTextareaPaste = (e: React.ClipboardEvent<HTMLTextAreaElement>) => {
+    const rawPasted =
+      e.clipboardData?.getData('text/plain') || e.clipboardData?.getData('text') || '';
+    if (!rawPasted) {
+      pendingPasteDetectRef.current = true;
+      return;
+    }
+
+    pendingPasteDetectRef.current = false;
+    const pasted = normalizeLineEndings(rawPasted);
+    const target = e.currentTarget;
+    const currentVal = normalizeLineEndings(target.value ?? pasteText);
+    const start = target.selectionStart ?? currentVal.length;
+    const end = target.selectionEnd ?? currentVal.length;
+    const nextText = `${currentVal.slice(0, start)}${pasted}${currentVal.slice(end)}`;
+
+    if (
+      !nextText.trim() ||
+      (bypassedJsonText !== null && normalizeLineEndings(bypassedJsonText) === nextText)
+    ) {
+      return;
+    }
+    const detected = detectStandardQuizJson(nextText);
+    if (detected) {
+      setPendingJsonIntercept({
+        rawText: nextText,
+        parseResult: detected,
+        trigger: 'paste',
+      });
+    }
+  };
+
+  const handleJsonInterceptDirectImport = () => {
+    if (!pendingJsonIntercept) return;
+    pendingPasteDetectRef.current = false;
+    const { parseResult: detectedResult } = pendingJsonIntercept;
+    setPendingJsonIntercept(null);
+    setBypassedJsonText(null);
+    applyParseResult(detectedResult);
+  };
+
+  const handleJsonInterceptUseAi = () => {
+    if (!pendingJsonIntercept) return;
+    pendingPasteDetectRef.current = false;
+    const { rawText, trigger } = pendingJsonIntercept;
+    setBypassedJsonText(normalizeLineEndings(rawText));
+    setPendingJsonIntercept(null);
+    if (trigger === 'wash') {
+      void handleAiWash({ bypassIntercept: true });
     }
   };
 
   const handleParsePaste = () => {
+    pendingPasteDetectRef.current = false;
     const res = parsePastedContent(pasteText);
     applyParseResult(res);
   };
@@ -318,13 +495,30 @@ export function ImportWorkbench({
     return { sourceText: '' };
   };
 
-  const handleAiWash = async () => {
-    if (washing || parsing) return;
+  const handleAiWash = async (washOptions?: { bypassIntercept?: boolean }) => {
+    if (washing || parsing || selectedWashTypes.length === 0) return;
 
     const { sourceText, sourceFile } = getActiveWashSource();
     if (!sourceText.trim()) {
       notify('请先粘贴文本或上传 .txt / .md 文件后再开始 AI 洗题', 'error');
       return;
+    }
+
+    const normalizedSource = normalizeLineEndings(sourceText);
+    const shouldBypass =
+      washOptions?.bypassIntercept === true ||
+      (bypassedJsonText !== null && normalizeLineEndings(bypassedJsonText) === normalizedSource);
+    if (!shouldBypass) {
+      const detected = detectStandardQuizJson(normalizedSource, sourceFile);
+      if (detected) {
+        setPendingJsonIntercept({
+          rawText: normalizedSource,
+          fileName: sourceFile,
+          parseResult: detected,
+          trigger: 'wash',
+        });
+        return;
+      }
     }
 
     const liveConfig = loadApiConfig(scope);
@@ -364,6 +558,7 @@ export function ImportWorkbench({
         sourceText,
         {
           practiceScope: scope,
+          allowedTypes: selectedWashTypes,
           autoFillExplain,
           autoTag,
           sourceFile,
@@ -470,7 +665,7 @@ export function ImportWorkbench({
   };
 
   const handleRetryChunk = async (chunk: FailedWashChunk) => {
-    if (washing || retryingChunkIndex !== null) return;
+    if (washing || retryingChunkIndex !== null || selectedWashTypes.length === 0) return;
 
     const liveConfig = loadApiConfig(scope);
     if (!isApiConfigReady(liveConfig)) {
@@ -485,6 +680,7 @@ export function ImportWorkbench({
     try {
       const recovered = await retryWashChunk(chunk, {
         practiceScope: scope,
+        allowedTypes: selectedWashTypes,
         autoFillExplain,
         autoTag,
         sourceFile: washSourceFileName || undefined,
@@ -617,6 +813,9 @@ export function ImportWorkbench({
       setPasteText('');
       setWashSourceText('');
       setWashSourceFileName('');
+      setPendingJsonIntercept(null);
+      setBypassedJsonText(null);
+      pendingPasteDetectRef.current = false;
       setWashProgress(null);
       setFailedChunks([]);
       setBankName('');
@@ -757,7 +956,8 @@ export function ImportWorkbench({
                 className="qi-textarea"
                 placeholder={`可粘贴杂乱无规律网页试题、课堂笔记，或标准格式：\n1. HTTP 默认端口是？\nA. 21  B. 80  C. 443\n答案：B`}
                 value={pasteText}
-                onChange={(e) => setPasteText(e.target.value)}
+                onChange={(e) => handlePasteTextChange(e.target.value)}
+                onPaste={handleTextareaPaste}
                 onKeyDown={stopShortcutBubble}
               />
               <div className="qi-btn-group">
@@ -775,11 +975,49 @@ export function ImportWorkbench({
                     type="button"
                     className="qi-btn qi-btn--sm"
                     disabled={washing}
-                    onClick={() => setPasteText('')}
+                    onClick={() => {
+                      pendingPasteDetectRef.current = false;
+                      setPasteText('');
+                      setPendingJsonIntercept(null);
+                      setBypassedJsonText(null);
+                    }}
                   >
                     清空文本框
                   </button>
                 )}
+              </div>
+            </div>
+          )}
+
+          {pendingJsonIntercept && (
+            <div
+              data-testid="json-intercept-banner"
+              className="qi-json-intercept"
+              role="alert"
+            >
+              <div className="qi-json-intercept__text">
+                <strong>检测到这已经是标准题库格式，是否跳过 AI 消耗直接秒导？</strong>
+                <span>
+                  本地已识别 {pendingJsonIntercept.parseResult.drafts.length} 道标准题目，直接导入零 API 请求、零 Token 消耗。
+                </span>
+              </div>
+              <div className="qi-json-intercept__actions">
+                <button
+                  type="button"
+                  data-testid="json-intercept-direct-btn"
+                  className="qi-btn qi-btn--sm qi-btn--primary"
+                  onClick={handleJsonInterceptDirectImport}
+                >
+                  直接导入
+                </button>
+                <button
+                  type="button"
+                  data-testid="json-intercept-ai-btn"
+                  className="qi-btn qi-btn--sm"
+                  onClick={handleJsonInterceptUseAi}
+                >
+                  仍用 AI 洗题
+                </button>
               </div>
             </div>
           )}
@@ -870,6 +1108,44 @@ export function ImportWorkbench({
               </label>
             </div>
 
+            <div className="qi-wash-types">
+              <div className="qi-wash-types__head">
+                <span className="qi-field__label">允许洗出题型</span>
+                <button
+                  type="button"
+                  data-testid="wash-type-objective-btn"
+                  className="qi-btn qi-btn--sm"
+                  disabled={washing}
+                  onClick={() => setSelectedWashTypes([...OBJECTIVE_WASH_TYPES])}
+                >
+                  仅选客观题
+                </button>
+              </div>
+              <div className="qi-wash-types__list">
+                {WASH_TYPE_OPTIONS.map((opt) => (
+                  <label key={opt.value} className="qi-checkbox-label">
+                    <input
+                      type="checkbox"
+                      data-testid={`wash-type-${opt.value}`}
+                      checked={selectedWashTypes.includes(opt.value)}
+                      disabled={washing}
+                      onChange={() => toggleWashType(opt.value)}
+                    />
+                    <span>{opt.label}</span>
+                  </label>
+                ))}
+              </div>
+              {selectedWashTypes.length === 0 && (
+                <div
+                  data-testid="wash-type-guard-hint"
+                  className="qi-wash-type-hint"
+                  role="status"
+                >
+                  请至少选择 1 种题型
+                </div>
+              )}
+            </div>
+
             {(!apiReady || washConfigError) && (
               <div className="qi-config-guard" role="alert">
                 <span className="qi-config-guard__text">
@@ -892,7 +1168,7 @@ export function ImportWorkbench({
                 type="button"
                 data-testid="ai-wash-btn"
                 className="qi-btn qi-btn--primary qi-wash-cta"
-                disabled={washing || parsing}
+                disabled={washing || parsing || selectedWashTypes.length === 0}
                 onClick={() => void handleAiWash()}
               >
                 {washing ? 'AI 正在分段洗题…' : '✨ 开始 AI 洗题'}
@@ -947,7 +1223,11 @@ export function ImportWorkbench({
                     type="button"
                     data-testid={`ai-wash-retry-chunk-${chunk.chunkIndex}`}
                     className="qi-btn qi-btn--sm qi-btn--warn"
-                    disabled={washing || retryingChunkIndex === chunk.chunkIndex}
+                    disabled={
+                      washing ||
+                      retryingChunkIndex !== null ||
+                      selectedWashTypes.length === 0
+                    }
                     onClick={() => void handleRetryChunk(chunk)}
                   >
                     {retryingChunkIndex === chunk.chunkIndex

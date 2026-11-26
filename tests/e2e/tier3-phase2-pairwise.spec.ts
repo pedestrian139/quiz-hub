@@ -40,7 +40,6 @@ import {
   answerCurrentQuestion,
   bankImportFileInput,
   bankSwitcher,
-  btnCloseQuizImport,
   btnConfirmImport,
   btnConfirmImportSticky,
   btnNext,
@@ -49,6 +48,7 @@ import {
   draftDelete,
   draftEdit,
   ensureAnswerSheetOpen,
+  filterOrder,
   gotoRoute,
   hubBadgeTotal,
   importPasteTextarea,
@@ -120,14 +120,8 @@ async function confirmImportAndClose(page: Page, bankName?: string): Promise<voi
   await expect(confirmBtn).toBeEnabled();
   await confirmBtn.click();
 
-  const dialog = quizImportDialog(page);
-  if (await dialog.isVisible().catch(() => false)) {
-    const closeBtn = btnCloseQuizImport(page);
-    if (await closeBtn.isVisible().catch(() => false)) {
-      await closeBtn.click();
-    }
-  }
-  await expect(dialog).toBeHidden();
+  await expect(quizImportDialog(page)).toBeHidden({ timeout: 10_000 });
+  await expect(page).toHaveURL(/#\/quiz/);
 }
 
 async function switchActiveBank(
@@ -221,6 +215,7 @@ test.describe('Tier 3 Phase 2: Cross-Feature Pairwise & Cloud Sync (T3-P2-001..T
     await confirmImportAndClose(page, 'AI智能洗题联动库');
 
     await gotoRoute(page, '#/quiz');
+    await filterOrder(page).selectOption('seq');
     await modeCard(page, 'all').click();
     await expect(qStem(page)).toBeVisible();
 
@@ -241,6 +236,7 @@ test.describe('Tier 3 Phase 2: Cross-Feature Pairwise & Cloud Sync (T3-P2-001..T
       .toBeGreaterThan(countBeforePill);
     await expect(aiChatCard(page).or(explainArea).first()).toContainText(/针对追问|核心|前文/);
 
+    await page.evaluate(() => window.scrollTo({ top: 0, behavior: 'instant' }));
     await assertFullLayoutAudit(page);
   });
 
@@ -275,6 +271,7 @@ test.describe('Tier 3 Phase 2: Cross-Feature Pairwise & Cloud Sync (T3-P2-001..T
     const callsAfterCreate = gateway.saveBankCalls.length;
 
     await gotoRoute(page, '#/quiz');
+    await filterOrder(page).selectOption('seq');
     await modeCard(page, 'all').click();
 
     // Trigger AI explanations on two questions rapidly (< 1000ms debounce window)
@@ -310,6 +307,7 @@ test.describe('Tier 3 Phase 2: Cross-Feature Pairwise & Cloud Sync (T3-P2-001..T
     llm.clear();
     await gotoRoute(page, '#/quiz');
     await switchActiveBank(page, bankId, /云端解析防抖测试库|Phase 1/);
+    await filterOrder(page).selectOption('seq');
     await modeCard(page, 'choice').click();
     await answerCurrentQuestion(page, stemMap, 'correct');
     await aiBtnExplain(page).click();
@@ -472,6 +470,7 @@ test.describe('Tier 3 Phase 2: Cross-Feature Pairwise & Cloud Sync (T3-P2-001..T
     await confirmImportAndClose(page);
 
     await gotoRoute(page, '#/quiz');
+    await filterOrder(page).selectOption('seq');
     await modeCard(page, 'all').click();
     await expect(workspaceMobileBar(page)).toBeVisible();
 
@@ -559,6 +558,7 @@ test.describe('Tier 3 Phase 2: Cross-Feature Pairwise & Cloud Sync (T3-P2-001..T
       apiConfig: {},
     });
 
+    await filterOrder(page).selectOption('seq');
     await modeCard(page, 'all').click();
     await expect(qStem(page).locator('table')).toBeVisible();
     await expect(qStem(page).locator('.katex').first()).toBeVisible();
@@ -591,6 +591,7 @@ test.describe('Tier 3 Phase 2: Cross-Feature Pairwise & Cloud Sync (T3-P2-001..T
     llm.clear();
     await page.reload({ waitUntil: 'domcontentloaded' });
     await gotoRoute(page, '#/quiz');
+    await filterOrder(page).selectOption('seq');
     await modeCard(page, 'choice').click();
     await aiBtnExplain(page).click();
     await expect(explanationContainer(page)).toContainText('核心考点');

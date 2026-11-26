@@ -320,6 +320,7 @@ test.describe('Tier 2 (Phase 2): Boundary Cases, Error Recovery, Legacy Compat &
     const stickyBtn = btnConfirmImportSticky(page);
     await expect(stickyBtn).toContainText('4');
     await stickyBtn.click();
+    await expect(quizImportDialog(page)).toBeHidden({ timeout: 10_000 });
 
     if (!/#\/quiz/.test(page.url())) {
       await gotoRoute(page, '#/quiz');
@@ -501,6 +502,7 @@ test.describe('Tier 2 (Phase 2): Boundary Cases, Error Recovery, Legacy Compat &
 
     await aiBtnExplain(page).click();
     await expect(aiExplainDrawer(page)).toContainText('核心考点');
+    await page.evaluate(() => window.scrollTo({ top: 0, behavior: 'instant' }));
     await assertFullLayoutAudit(page);
   });
 
@@ -535,6 +537,7 @@ test.describe('Tier 2 (Phase 2): Boundary Cases, Error Recovery, Legacy Compat &
       () => (window as unknown as { __xssFired?: unknown }).__xssFired,
     );
     expect(xssAfter).toBeUndefined();
+    await page.evaluate(() => window.scrollTo({ top: 0, behavior: 'instant' }));
     await assertFullLayoutAudit(page);
   });
 

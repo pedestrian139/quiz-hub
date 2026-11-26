@@ -727,6 +727,8 @@ export function finalizeDraftsToBank(
 
     const seq = String(idx + 1).padStart(3, '0');
     const formatNote = d.sourceNote || formatSourceFormatLabel(d.sourceFormat);
+    const cleanedExplanation = cleanText(d.explanation);
+    const cleanedAiAnalysis = cleanText(d.aiAnalysis);
 
     const q: Question = {
       id: `imp-c${chId}-${d.type}-${seq}`,
@@ -736,6 +738,8 @@ export function finalizeDraftsToBank(
       ...(cleanedOptions ? { options: cleanedOptions } : {}),
       answer: normalizedAnswer,
       explain: cleanText(d.explain),
+      ...(cleanedExplanation ? { explanation: cleanedExplanation } : {}),
+      ...(cleanedAiAnalysis ? { aiAnalysis: cleanedAiAnalysis } : {}),
       ...(d.aiInferredAnswer === true ? { aiInferredAnswer: true } : {}),
       ...(d.keyPoints.length > 0 ? { keyPoints: [...d.keyPoints] } : {}),
       ...(d.tags.length > 0 ? { tags: [...d.tags] } : {}),
@@ -927,6 +931,8 @@ export function appendDraftsToBank(
     }
 
     const formatNote = d.sourceNote || formatSourceFormatLabel(meta?.sourceFormat ?? d.sourceFormat);
+    const cleanedExplanation = cleanText(d.explanation);
+    const cleanedAiAnalysis = cleanText(d.aiAnalysis);
 
     return {
       id: allocQuestionId(chId, d.type),
@@ -936,6 +942,8 @@ export function appendDraftsToBank(
       ...(cleanedOptions ? { options: cleanedOptions } : {}),
       answer: normalizedAnswer,
       explain: cleanText(d.explain),
+      ...(cleanedExplanation ? { explanation: cleanedExplanation } : {}),
+      ...(cleanedAiAnalysis ? { aiAnalysis: cleanedAiAnalysis } : {}),
       ...(d.aiInferredAnswer === true ? { aiInferredAnswer: true } : {}),
       ...(d.keyPoints.length > 0 ? { keyPoints: [...d.keyPoints] } : {}),
       ...(d.tags.length > 0 ? { tags: [...d.tags] } : {}),

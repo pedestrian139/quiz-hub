@@ -12,7 +12,6 @@ import {
   bankCard,
   bankImportFileInput,
   bankSwitcher,
-  btnCloseQuizImport,
   btnConfirmImport,
   btnConfirmImportSticky,
   btnDeleteBank,
@@ -156,14 +155,8 @@ function confirmImportCta(page: Page): Locator {
 }
 
 async function closeImportModalAndOpenQuiz(page: Page): Promise<void> {
-  const dialog = quizImportDialog(page);
-  if (await dialog.isVisible().catch(() => false)) {
-    const closeBtn = btnCloseQuizImport(page);
-    if (await closeBtn.isVisible().catch(() => false)) {
-      await closeBtn.click();
-    }
-  }
-  await expect(dialog).toBeHidden();
+  await expect(quizImportDialog(page)).toBeHidden({ timeout: 10_000 });
+  await expect(page).toHaveURL(/#\/quiz/);
   if (!page.url().includes('#/quiz')) {
     await navLink(page, 'quiz').click();
   }
