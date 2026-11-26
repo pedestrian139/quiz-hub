@@ -1,4 +1,4 @@
-import { LEGACY_GUEST_SCOPE, practiceStorageKey } from '../core/practiceScope';
+import { isAccountPracticeScope, LEGACY_GUEST_SCOPE, practiceStorageKey } from '../core/practiceScope';
 import type { PracticeScope } from '../core/practiceScope';
 
 export type ApiProviderId =
@@ -287,14 +287,20 @@ function readRawFromScope(scope: ApiStorageScope, owner: PracticeScope): string 
   }
 }
 
-export function hasSessionApiConfig(owner: PracticeScope): boolean {
+function readSessionApiConfig(owner: PracticeScope): Record<string, unknown> | null {
   const raw = readRawFromScope('session', owner);
-  if (!raw) return false;
+  if (!raw) return null;
   try {
-    return isPlainObject(JSON.parse(raw));
+    const parsed: unknown = JSON.parse(raw);
+    return isPlainObject(parsed) ? parsed : null;
   } catch {
-    return false;
+    return null;
   }
+}
+
+export function hasSessionApiConfig(owner: PracticeScope): boolean {
+  const saved = readSessionApiConfig(owner);
+  return saved !== null && (!isAccountPracticeScope(owner) || saved.accountTabOnly === true);
 }
 
 export function getCloudMemoryApiConfig(owner: PracticeScope): ApiConfig | null {
@@ -340,19 +346,16 @@ export function clearCloudMemoryApiConfigs(owner?: PracticeScope): void {
 }
 
 export function loadApiConfig(owner: PracticeScope = LEGACY_GUEST_SCOPE): ApiConfig {
-  const sessionRaw = readRawFromScope('session', owner);
-  if (sessionRaw) {
-    try {
-      return sanitizeApiConfig(JSON.parse(sessionRaw), 'session');
-    } catch {
-      // Fall through to memory / localStorage
-    }
-  }
+  const session = readSessionApiConfig(owner);
+  if (session && (!isAccountPracticeScope(owner) || session.accountTabOnly === true)) return sanitizeApiConfig(session, 'session');
 
   const memoryCloud = memoryCloudApiConfigs.get(owner);
   if (memoryCloud) {
     return { ...memoryCloud };
   }
+
+  // Older account builds used the same storage for local-only saves without recording an explicit choice.
+  if (session) return sanitizeApiConfig({ ...session, storageScope: 'local' });
 
   const localRaw = readRawFromScope('local', owner);
   if (localRaw) {
@@ -395,7 +398,8 @@ export function saveApiConfig(input: ApiConfig, owner: PracticeScope = LEGACY_GU
   }
 
   try {
-    target.setItem(key, JSON.stringify(clean));
+    const record = clean.storageScope === 'session' && isAccountPracticeScope(owner) ? { ...clean, accountTabOnly: true } : clean;
+    target.setItem(key, JSON.stringify(record));
     emitApiConfigChange(clean, owner);
     return true;
   } catch {

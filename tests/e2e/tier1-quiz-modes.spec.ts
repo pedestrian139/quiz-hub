@@ -211,9 +211,12 @@ test.describe('Tier 1: Quiz Session, Modes, Answer Sheet & Result (UF07-UF15)', 
     page,
   }, testInfo) => {
     onlyDesktop(testInfo);
+    const question = loadBankCatalog().questions.find((item) => item.type === 'choice' && item.options?.length === 4);
+    if (!question) throw new Error('Expected a choice question with four options');
     await gotoRoute(page, '#/quiz');
-    await selectQuizFilters(page, { count: 10 });
+    await page.getByTestId('filter-search').fill(question.stem);
     await modeCard(page, 'choice').click();
+    await expect(qStem(page)).toContainText(question.stem);
     for (let i = 0; i < 4; i++) {
       await expect(quizOption(page, i)).toBeVisible();
     }

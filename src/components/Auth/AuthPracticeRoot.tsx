@@ -36,7 +36,8 @@ export function AuthPracticeRoot({ children }: { children: ReactNode }) {
     };
     const unsubscribeGuest = subscribeGuestScopeChanges(refreshGuest);
     const unsubscribeAuth = subscribeAuthChange((event) => {
-      if (event.type === 'guest_migration' && event.result.guestDataSynced && isAuthConfigured()) {
+      if (event.type === 'guest_migration' && event.result.guestDataSynced
+        && event.result.user.id === prevAccountIdRef.current && isAuthConfigured()) {
         void hydrateAccountFromCloud(event.result.user.id, { force: true });
       }
     });

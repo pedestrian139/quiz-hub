@@ -286,10 +286,14 @@ test.describe('Tier 6: Auth UI with the Supabase client (Email + OTP)', () => {
     expect(gateway.imports[0]).toMatchObject({ ownerId: first.user_id, progress: [expect.objectContaining({ bankId: 'builtin-ai-intro' })] });
   });
 
-  test('syncs API config to cloud in memory only, respects tab-only session mode, clears cloud config, and purges on logout', async ({ page }) => {
+  test('syncs API config to cloud in memory only, respects tab-only session mode, clears cloud config, and purges on logout', async ({ page, healthTrap }) => {
     const gateway = await installAuthGateway(page);
-    gateway.addAccount('apicloud@example.com', 'pass123456', '云端用户');
+    const account = gateway.addAccount('apicloud@example.com', 'pass123456', '云端用户');
     await gotoRoute(page, 'hub');
+    await page.evaluate((id) => {
+      sessionStorage.setItem(`ai-intro-quiz-api-config-v1:account:${id}`,
+        JSON.stringify({ apiKey: 'sk-cloud-secret-7777', storageScope: 'session' }));
+    }, account.user_id);
 
     await page.getByTestId('auth-open-btn').click();
     await page.getByTestId('auth-account-input').fill('apicloud@example.com');
@@ -298,10 +302,17 @@ test.describe('Tier 6: Auth UI with the Supabase client (Email + OTP)', () => {
     await expect(page.getByTestId('auth-modal')).toBeHidden();
 
     await page.getByTestId('btn-api-settings').click();
-    await expect(page.getByTestId('api-storage-status')).toContainText('未配置');
+    await expect(page.getByTestId('api-storage-status')).toContainText('旧版浏览器配置');
     await expect(page.getByTestId('api-scope-cloud')).toBeChecked();
-    await page.getByTestId('api-input-key').fill('sk-cloud-secret-7777');
+    await expect(page.getByTestId('api-input-key')).toHaveValue('sk-cloud-secret-7777');
     await assertFullLayoutAudit(page);
+    gateway.allowApiSaves(false);
+    healthTrap.expectHttpError('http://127.0.0.1:49391/functions/v1/user-data', 503);
+    await page.getByTestId('api-btn-save').click();
+    await expect(page.getByTestId('api-settings-notice')).toContainText('云端保存暂不可用');
+    await expect(page.getByTestId('api-input-key')).toHaveValue('sk-cloud-secret-7777');
+    expect(gateway.apiSaveCalls).toHaveLength(0);
+    gateway.allowApiSaves(true);
     await page.getByTestId('api-btn-save').click();
 
     await expect(page.getByTestId('api-settings-modal')).toBeHidden();

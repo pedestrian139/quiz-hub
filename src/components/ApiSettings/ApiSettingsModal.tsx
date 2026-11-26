@@ -10,20 +10,20 @@ import {
   getCloudMemoryApiConfig,
   getProviderPreset,
   hasSessionApiConfig,
+  isApiConfigReady,
   isLocalEndpoint,
   isValidHttpUrl,
   loadApiConfig,
   LlmApiError,
   normalizeBaseUrl,
   saveApiConfig,
+  subscribeApiConfig,
   testApiConnection,
   type ApiConfig,
   type ApiConnectionTestResult,
   type ApiProviderId,
 } from '../../services';
-import { isAuthConfigured } from '../../services/authService';
 import { clearAccountCloudApiConfig, saveAccountCloudApiConfig } from '../../services/cloudSync';
-import { useAuthUiState } from '../Auth/authState';
 import './ApiSettings.css';
 
 export interface ApiSettingsModalProps {
@@ -34,9 +34,9 @@ export interface ApiSettingsModalProps {
 
 export function ApiSettingsModal({ open, onClose, onSaved }: ApiSettingsModalProps) {
   const scope = usePracticeScope();
-  const { user } = useAuthUiState();
-  const isCloudAccount = Boolean(isAccountPracticeScope(scope) && user && !user.isGuest && isAuthConfigured());
-  const [draft, setDraft] = useState<ApiConfig>(() => loadApiConfig(scope));
+  const isCloudAccount = isAccountPracticeScope(scope);
+  const [draft, replaceDraft] = useState<ApiConfig>(() => loadApiConfig(scope));
+  const draftEdited = useRef(false);
   const [showKey, setShowKey] = useState(false);
   const [showAdvanced, setShowAdvanced] = useState(false);
   const [testing, setTesting] = useState(false);
@@ -50,9 +50,15 @@ export function ApiSettingsModal({ open, onClose, onSaved }: ApiSettingsModalPro
   const busy = saving || clearing;
   const abortRef = useRef<AbortController | null>(null);
 
+  function setDraft(update: (current: ApiConfig) => ApiConfig): void {
+    draftEdited.current = true;
+    replaceDraft(update);
+  }
+
   useEffect(() => {
     if (!open) return;
-    setDraft(loadApiConfig(scope));
+    draftEdited.current = false;
+    replaceDraft(loadApiConfig(scope));
     setShowKey(false);
     setShowAdvanced(false);
     setSaving(false);
@@ -60,7 +66,10 @@ export function ApiSettingsModal({ open, onClose, onSaved }: ApiSettingsModalPro
     setTestResult(null);
     setRemoteModels([]);
     setNotice(null);
-  }, [open, scope]);
+    if (isCloudAccount) return subscribeApiConfig((config) => {
+      if (!draftEdited.current) replaceDraft(config);
+    }, scope);
+  }, [isCloudAccount, open, scope]);
 
   useEffect(() => {
     return () => {
@@ -75,6 +84,7 @@ export function ApiSettingsModal({ open, onClose, onSaved }: ApiSettingsModalPro
       if (e.key === 'Escape') {
         e.preventDefault();
         e.stopPropagation();
+        if (busy) return;
         abortRef.current?.abort();
         onClose();
         return;
@@ -93,7 +103,7 @@ export function ApiSettingsModal({ open, onClose, onSaved }: ApiSettingsModalPro
 
     window.addEventListener('keydown', onKeyDownCapture, true);
     return () => window.removeEventListener('keydown', onKeyDownCapture, true);
-  }, [onClose, open]);
+  }, [busy, onClose, open]);
 
   if (!open || typeof document === 'undefined') {
     return null;
@@ -189,17 +199,17 @@ export function ApiSettingsModal({ open, onClose, onSaved }: ApiSettingsModalPro
       model: draft.model.trim(),
     };
 
-    if (isAccountPracticeScope(scope) && isCloudAccount && toSave.storageScope !== 'session') {
+    if (isAccountPracticeScope(scope) && toSave.storageScope !== 'session') {
       setSaving(true);
       setNotice(null);
       try {
         await saveAccountCloudApiConfig(scope, toSave);
         onSaved?.({ ...toSave, storageScope: 'local' });
         onClose();
-      } catch {
+      } catch (error) {
         setNotice({
           tone: 'bad',
-          text: '云端保存 API 配置失败，请检查网络连接或稍后重试。',
+          text: error instanceof Error ? `云端保存 API 配置失败。${error.message}` : '云端保存 API 配置失败，请稍后重试。',
         });
       } finally {
         setSaving(false);
@@ -224,17 +234,18 @@ export function ApiSettingsModal({ open, onClose, onSaved }: ApiSettingsModalPro
     if (busy) return;
     abortRef.current?.abort();
 
-    if (isAccountPracticeScope(scope) && isCloudAccount) {
+    if (isAccountPracticeScope(scope)) {
       setClearing(true);
       setNotice(null);
       try {
         await clearAccountCloudApiConfig(scope);
-        setDraft(createDefaultApiConfig());
+        draftEdited.current = false;
+        replaceDraft(createDefaultApiConfig());
         setTestResult(null);
         setRemoteModels([]);
         setNotice({ tone: 'info', text: '已清除云端及当前页面的 API Key 与自定义配置。' });
-      } catch {
-        setNotice({ tone: 'bad', text: '清除云端 API 配置失败，请稍后重试。' });
+      } catch (error) {
+        setNotice({ tone: 'bad', text: error instanceof Error ? `清除云端 API 配置失败。${error.message}` : '清除云端 API 配置失败，请稍后重试。' });
       } finally {
         setClearing(false);
       }
@@ -242,7 +253,8 @@ export function ApiSettingsModal({ open, onClose, onSaved }: ApiSettingsModalPro
     }
 
     const cleared = clearApiConfig(scope);
-    setDraft(cleared);
+    draftEdited.current = false;
+    replaceDraft(cleared);
     setTestResult(null);
     setRemoteModels([]);
     setNotice({ tone: 'info', text: '已清除本地保存的 API Key 与自定义配置。' });
@@ -254,7 +266,8 @@ export function ApiSettingsModal({ open, onClose, onSaved }: ApiSettingsModalPro
     ? '当前存储方式：仅当前标签页有效（只存 sessionStorage，未上传云端）'
     : cloudMemoryActive
       ? '当前存储方式：已加密同步至云端（明文仅保留在当前页面内存）'
-      : '当前存储方式：未配置（保存后默认加密同步至云端）';
+      : isApiConfigReady(loadApiConfig(scope)) ? '检测到旧版浏览器配置，保存后可同步至云端。'
+        : '当前存储方式：未配置（保存后默认加密同步至云端）';
 
   return createPortal(
     <div

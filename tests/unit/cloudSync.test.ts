@@ -157,7 +157,7 @@ describe('live cloud sync coordinator', () => {
     const cloudApi = { ...createDefaultApiConfig(), apiKey: 'sk-encrypted-remote' };
     await saveAccountCloudApiConfig(SCOPE, cloudApi);
 
-    expect(mock.saveCloudApiConfig).toHaveBeenCalledWith({ ...cloudApi, storageScope: 'local' });
+    expect(mock.saveCloudApiConfig).toHaveBeenCalledWith(cloudApi, USER_ID);
     expect(loadApiConfig(SCOPE).apiKey).toBe('sk-encrypted-remote');
     expect(localStorage.getItem(`${API_CONFIG_STORAGE_KEY}:${SCOPE}`)).toBeNull();
 
@@ -187,6 +187,34 @@ describe('live cloud sync coordinator', () => {
     expect(getCloudMemoryApiConfig(SCOPE)).toBeNull();
     expect(loadApiConfig(SCOPE).apiKey).toBe('');
     clearLocalApiConfigStorage(SCOPE);
+  });
+
+  it('keeps an old browser config available when the account has no cloud config', async () => {
+    const legacy = { ...createDefaultApiConfig(), apiKey: 'test-legacy-key' };
+    localStorage.setItem(`${API_CONFIG_STORAGE_KEY}:${SCOPE}`, JSON.stringify(legacy));
+    await hydrateAccountFromCloud(USER_ID);
+    expect(loadApiConfig(SCOPE)).toEqual(legacy);
+    expect(mock.saveCloudApiConfig).not.toHaveBeenCalled();
+  });
+
+  it('ignores an older API restore after clearing and a late save after logout', async () => {
+    const older = { ...createDefaultApiConfig(), apiKey: 'test-old-key' };
+    let resolveRestore!: (value: typeof older) => void;
+    mock.restoreCloudApiConfig.mockReturnValueOnce(new Promise((resolve) => { resolveRestore = resolve; }));
+    const loading = hydrateAccountFromCloud(USER_ID);
+    await clearAccountCloudApiConfig(SCOPE);
+    resolveRestore(older);
+    await loading;
+    expect(getCloudMemoryApiConfig(SCOPE)).toBeNull();
+
+    let resolveSave!: () => void;
+    mock.saveCloudApiConfig.mockReturnValueOnce(new Promise<void>((resolve) => { resolveSave = resolve; }));
+    const saving = saveAccountCloudApiConfig(SCOPE, older);
+    clearCloudSyncSession(USER_ID);
+    resolveSave();
+    await saving;
+    expect(getCloudMemoryApiConfig(SCOPE)).toBeNull();
+    expect(getCloudSyncSnapshot().accountId).toBeNull();
   });
 
   it('coalesces debounced progress writes, increments tracked revision, and flushes resets immediately', async () => {

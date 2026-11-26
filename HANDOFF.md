@@ -1,5 +1,13 @@
 # 项目开发交接文档（HANDOFF.md）
 
+## V2 正式账号 API 设置云端保存（2026-11-26）
+
+- API 设置在正式账号下默认加密同步至云端，可选仅标签页有效。保存或清除失败时保留输入并显示错误，刷新会恢复当前账号的云端配置，明文只留在页面内存。
+- 在最新 `dev` 的云同步和邮件验证码实现上整合修复。`src/services/cloudSync.ts` 与 `src/services/db/cloudData.ts` 绑定操作账号，忽略退出后的响应和早于保存或清除的读取。`src/components/ApiSettings/ApiSettingsModal.tsx` 显示云端错误并保留输入。数据库迁移及 Edge Function 协议沿用已部署版本。
+- 旧版浏览器配置可打开设置后直接保存到云端。本轮上线后的「仅当前标签页有效」选择才会记作仅标签页模式，切换模式由用户确认保存。
+- 在最新 `dev` 上通过生产构建、93 项单元测试、72 项相关浏览器回归和 2 项无 Supabase 配置的游客回归。
+- 合并并重新部署后，在生产项目验证 `save_api_config`、`restore_api_config` 和 `clear_api_config`，以及 `public.user_api_configs` 的配置元数据和 `private.user_api_secrets` 的密文记录。详见 `HANDOFF_database.md`。
+
 ## V2 Cloudflare Pages 上线准备（2026-11-25）
 
 - Pages 的构建命令为 `npm run build`，输出目录为 `dist`。连接 GitHub 仓库后，V2 项目的生产分支选择 `dev`。本轮使用 Node.js 24.21.0 验证构建。

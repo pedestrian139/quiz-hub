@@ -42,6 +42,7 @@ VITE_SUPABASE_AUTH_REDIRECT_URL=https://your-frontend.example/quiz-hub/
 
 ## 验证与当前状态
 
+- 2026-11-26 API 保存交接已整合最新 `dev` 的邮件 OTP 与云同步。保存、清除和恢复会校验当前 Session 对应的账号，退出后的旧响应和早于成功保存或清除的读取不会重新填入密钥。旧版浏览器配置可手动保存上云，保存失败会显示云函数返回的提示并保留输入供重试。
 - 已完成 `typecheck`、E2E 类型检查、生产构建（`npm run build`）及 10 个文件共 88 项单元测试（其中新增 [tests/unit/cloudSync.test.ts](tests/unit/cloudSync.test.ts) 7 项测试覆盖初始化拉取、纯内存 API Key 隔离、防抖/重置、退出清理、`40001` 三路合并与失败重试）。
 - Playwright E2E（[tests/e2e/tier6-auth-ui.spec.ts](tests/e2e/tier6-auth-ui.spec.ts)、[tests/e2e/api-integration.spec.ts](tests/e2e/api-integration.spec.ts)）已扩展有状态的本地 Supabase 测试网关，覆盖纯邮箱注册与 OTP 激活/登录、云端 API 配置仅存内存与标签页模式覆盖、退出登录清空内存、清缓存刷新自动从云端恢复题库/进度、`40001` 并发冲突合并，以及 `PW_AUTH_DISABLED=1` 下的纯本地游客模式。
 - `db/tests/auth-and-guest-upgrade.sql` 是可回滚的数据库回归脚本，验证较新迁移快照、云端独立修改和显式清空保护。对已应用迁移的开发库，可使用 `psql -v ON_ERROR_STOP=1 -f db/tests/auth-and-guest-upgrade.sql` 执行。

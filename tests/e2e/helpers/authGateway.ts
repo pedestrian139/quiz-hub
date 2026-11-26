@@ -50,6 +50,7 @@ export async function installAuthGateway(page: Page) {
   const apiSaveCalls: Array<{ userId: string; config: Record<string, unknown> }> = [];
   const apiClearCalls: string[] = [];
   let acceptImports = true;
+  let acceptApiSaves = true;
   let nextUser = 1;
 
   function userBanks(userId: string): Map<string, CloudBankEntry> {
@@ -360,7 +361,9 @@ export async function installAuthGateway(page: Page) {
         if (!signedIn || signedIn.user_id !== body.ownerId) return respond({ error: '登录账号已变更。' }, 403);
         switch (body.action) {
           case 'save_api_config': {
-            const cfg = body.config as CloudApiEntry;
+            if (!acceptApiSaves) return respond({ error: '云端保存暂不可用。' }, 503);
+            const cfg = body.config as CloudApiEntry & { storageScope?: string };
+            if (cfg?.storageScope !== 'local') return respond({ error: 'API 配置字段无效。' }, 400);
             apiConfigByUser.set(signedIn.user_id, { ...cfg });
             apiSaveCalls.push({ userId: signedIn.user_id, config: cfg as unknown as Record<string, unknown> });
             return respond(toApiRow(cfg));
@@ -431,6 +434,7 @@ export async function installAuthGateway(page: Page) {
     apiSaveCalls,
     apiClearCalls,
     allowImports: (allowed: boolean) => { acceptImports = allowed; },
+    allowApiSaves: (allowed: boolean) => { acceptApiSaves = allowed; },
     getCloudBanks: (email: string) => {
       const account = accounts.get(email.trim().toLowerCase());
       return account ? [...userBanks(account.user_id).values()].filter((b) => !b.deleted_at) : [];

@@ -50,6 +50,7 @@ const DEFAULT_DEBOUNCE_MS = 450;
 
 let debounceMs = DEFAULT_DEBOUNCE_MS;
 let sessionEpoch = 0;
+let apiConfigVersion = 0;
 let activeAccountId: string | null = null;
 let hydratedAccountId: string | null = null;
 let hydrationPromise: Promise<void> | null = null;
@@ -276,6 +277,7 @@ export async function hydrateAccountFromCloud(
   }
 
   const epoch = sessionEpoch;
+  const apiRequest = ++apiConfigVersion;
   const scope = accountPracticeScope(userId);
   const bankDb = getBankDb(scope);
 
@@ -284,7 +286,7 @@ export async function hydrateAccountFromCloud(
     const [banksRes, progressRes, apiRes] = await Promise.allSettled([
       listCloudBanks(),
       listCloudProgress(),
-      restoreCloudApiConfig(),
+      restoreCloudApiConfig(userId),
     ]);
     if (epoch !== sessionEpoch) return;
 
@@ -292,11 +294,13 @@ export async function hydrateAccountFromCloud(
     let banksChanged = false;
     let progressChanged = false;
 
-    if (apiRes.status === 'fulfilled') {
-      clearLocalApiConfigStorage(scope, ['local']);
-      setCloudMemoryApiConfig(scope, apiRes.value);
-    } else {
-      anyRejected = true;
+    if (apiRequest === apiConfigVersion) {
+      if (apiRes.status === 'fulfilled') {
+        if (apiRes.value) clearLocalApiConfigStorage(scope, ['local']);
+        setCloudMemoryApiConfig(scope, apiRes.value);
+      } else {
+        anyRejected = true;
+      }
     }
 
     if (banksRes.status === 'fulfilled') {
@@ -388,38 +392,34 @@ export async function hydrateAccountFromCloud(
   }
 }
 
-export async function saveAccountCloudApiConfig(
-  scope: AccountPracticeScope,
-  config: ApiConfig,
-): Promise<void> {
+async function writeAccountApiConfig(scope: AccountPracticeScope, config: ApiConfig | null): Promise<void> {
   const userId = accountIdFromScope(scope);
-  if (userId) ensureAccountSession(userId);
-  const cloudPayload: ApiConfig = { ...config, storageScope: 'local' };
+  if (!userId || (activeAccountId && activeAccountId !== userId)) throw new Error('登录账号已变更，请重新打开 API 设置。');
+  ensureAccountSession(userId);
+  const epoch = sessionEpoch;
   emitSnapshot({ status: 'syncing', message: null });
   try {
-    await saveCloudApiConfig(cloudPayload);
+    if (config) await saveCloudApiConfig(config, userId);
+    else await clearCloudApiConfig(userId);
+    if (epoch !== sessionEpoch) return;
+    apiConfigVersion += 1;
     clearLocalApiConfigStorage(scope, ['local', 'session']);
-    setCloudMemoryApiConfig(scope, cloudPayload);
+    setCloudMemoryApiConfig(scope, config);
     settledStatusUpdate('synced', null);
   } catch (err) {
-    emitSnapshot({ status: 'error', message: '云端保存 API 配置失败，请稍后重试。' });
+    if (epoch === sessionEpoch) {
+      emitSnapshot({ status: 'error', message: config ? '云端保存 API 配置失败，请稍后重试。' : '清除云端 API 配置失败，请稍后重试。' });
+    }
     throw err;
   }
 }
 
+export async function saveAccountCloudApiConfig(scope: AccountPracticeScope, config: ApiConfig): Promise<void> {
+  await writeAccountApiConfig(scope, config);
+}
+
 export async function clearAccountCloudApiConfig(scope: AccountPracticeScope): Promise<void> {
-  const userId = accountIdFromScope(scope);
-  if (userId) ensureAccountSession(userId);
-  emitSnapshot({ status: 'syncing', message: null });
-  try {
-    await clearCloudApiConfig();
-    clearLocalApiConfigStorage(scope, ['local', 'session']);
-    setCloudMemoryApiConfig(scope, null);
-    settledStatusUpdate('synced', null);
-  } catch (err) {
-    emitSnapshot({ status: 'error', message: '清除云端 API 配置失败，请稍后重试。' });
-    throw err;
-  }
+  await writeAccountApiConfig(scope, null);
 }
 
 async function waitForBankAndHydration(bankId: string): Promise<void> {
