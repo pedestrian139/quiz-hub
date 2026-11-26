@@ -885,6 +885,630 @@ describe('Smart Import & AI Washing Workbench (M2)', () => {
     expect(existingOpt.disabled).toBe(true);
     expect(modeSelect.value).toBe('new');
   });
+
+  it('SW-10: F9 4-type checkboxes default all checked, empty guard disables ai-wash-btn, objective preset unchecks short, and retry forwards allowedTypes', async () => {
+    saveApiConfig({
+      ...createDefaultApiConfig(),
+      apiKey: 'sk-test-key',
+      model: 'deepseek-chat',
+    });
+
+    const requests: string[] = [];
+    const mockFetch = vi
+      .fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
+        requests.push(String(init?.body ?? ''));
+        if (requests.length === 1) {
+          return new Response(JSON.stringify({ error: { message: 'boom' } }), { status: 500 });
+        }
+        return makeMockChatResponse([
+          {
+            type: 'choice',
+            stem: '恢复的单选题',
+            options: ['A', 'B'],
+            answer: 0,
+            answerInferred: false,
+            explain: 'ok',
+            tags: [],
+          },
+        ]);
+      });
+    vi.stubGlobal('fetch', mockFetch);
+
+    root = createRoot(container);
+    await act(async () => {
+      root!.render(
+        React.createElement(ImportWorkbench, {
+          notify: vi.fn(),
+          onCommit: vi.fn().mockResolvedValue(undefined),
+        }),
+      );
+    });
+
+    const choiceCb = container.querySelector('[data-testid="wash-type-choice"]') as HTMLInputElement;
+    const multiCb = container.querySelector('[data-testid="wash-type-multi"]') as HTMLInputElement;
+    const tfCb = container.querySelector('[data-testid="wash-type-tf"]') as HTMLInputElement;
+    const shortCb = container.querySelector('[data-testid="wash-type-short"]') as HTMLInputElement;
+    const washBtn = container.querySelector('[data-testid="ai-wash-btn"]') as HTMLButtonElement;
+
+    expect(choiceCb.checked).toBe(true);
+    expect(multiCb.checked).toBe(true);
+    expect(tfCb.checked).toBe(true);
+    expect(shortCb.checked).toBe(true);
+    expect(washBtn.disabled).toBe(false);
+    expect(container.querySelector('[data-testid="wash-type-guard-hint"]')).toBeNull();
+
+    // Uncheck all 4 -> ai-wash-btn disabled & guard hint visible
+    await act(async () => {
+      setCheckbox(choiceCb, false);
+      setCheckbox(multiCb, false);
+      setCheckbox(tfCb, false);
+      setCheckbox(shortCb, false);
+    });
+    expect(washBtn.disabled).toBe(true);
+    const guardHint = container.querySelector('[data-testid="wash-type-guard-hint"]');
+    expect(guardHint?.textContent).toContain('请至少选择 1 种题型');
+
+    // Click "仅选客观题" -> choice, multi, tf checked; short unchecked; washBtn enabled
+    const objBtn = container.querySelector(
+      '[data-testid="wash-type-objective-btn"]',
+    ) as HTMLButtonElement;
+    await act(async () => {
+      objBtn.click();
+    });
+    expect(choiceCb.checked).toBe(true);
+    expect(multiCb.checked).toBe(true);
+    expect(tfCb.checked).toBe(true);
+    expect(shortCb.checked).toBe(false);
+    expect(washBtn.disabled).toBe(false);
+    expect(container.querySelector('[data-testid="wash-type-guard-hint"]')).toBeNull();
+
+    // Switch to paste tab and run AI wash (1st call fails -> retry button appears)
+    await act(async () => {
+      (container.querySelector('[data-testid="import-tab-paste"]') as HTMLButtonElement).click();
+    });
+    await act(async () => {
+      setNativeValue(
+        container.querySelector('[data-testid="import-paste-textarea"]') as HTMLTextAreaElement,
+        '1. HTTP 默认端口？\nA. 21\nB. 80',
+      );
+    });
+    await act(async () => {
+      washBtn.click();
+    });
+    await flushMicrotasks();
+
+    expect(requests).toHaveLength(1);
+    const req0Sys = (
+      JSON.parse(requests[0]!) as { messages: Array<{ role: string; content: string }> }
+    ).messages[0]!.content;
+    expect(req0Sys).toContain('"choice"');
+    expect(req0Sys).toContain('"multi"');
+    expect(req0Sys).toContain('"tf"');
+    expect(req0Sys).not.toContain('"short"');
+
+    // Retry failed chunk -> must also forward objective-only allowedTypes
+    const retryBtn = container.querySelector(
+      '[data-testid="ai-wash-retry-chunk-0"]',
+    ) as HTMLButtonElement;
+    expect(retryBtn).not.toBeNull();
+    await act(async () => {
+      retryBtn.click();
+    });
+    await flushMicrotasks();
+
+    expect(requests).toHaveLength(2);
+    const req1Sys = (
+      JSON.parse(requests[1]!) as { messages: Array<{ role: string; content: string }> }
+    ).messages[0]!.content;
+    expect(req1Sys).toContain('"choice"');
+    expect(req1Sys).not.toContain('"short"');
+    expect(container.querySelector('[data-testid="preview-draft-0"]')).not.toBeNull();
+  });
+
+  it('SW-11: F10 standard JSON paste & AI-wash click with NO API key trigger json-intercept-banner and direct import preserves explain + aiAnalysis with 0 fetch calls', async () => {
+    const mockFetch = vi.fn();
+    vi.stubGlobal('fetch', mockFetch);
+
+    const commits: ImportCommitPayload[] = [];
+    root = createRoot(container);
+    await act(async () => {
+      root!.render(
+        React.createElement(ImportWorkbench, {
+          notify: vi.fn(),
+          onCommit: async (payload) => {
+            commits.push(payload);
+          },
+        }),
+      );
+    });
+
+    await act(async () => {
+      (container.querySelector('[data-testid="import-tab-paste"]') as HTMLButtonElement).click();
+    });
+
+    const standardShareJson = JSON.stringify({
+      schema: 'quizhub-bank-v2',
+      exportedAt: '2026-11-26T00:00:00Z',
+      bank: {
+        name: '标准分享题库',
+        description: '含独立 AI 解析',
+        data: {
+          meta: { title: '标准分享题库', version: '2.0.0' },
+          chapters: [{ id: 1, short: '第 1 章', title: '第 1 章' }],
+          questions: [
+            {
+              id: 'q1',
+              type: 'choice',
+              chapter: 1,
+              stem: 'TCP 三次握手第三次发送的是？',
+              options: ['SYN', 'ACK', 'FIN', 'RST'],
+              answer: 1,
+              explain: '原题解析内容',
+              aiAnalysis: '独立 AI 深度解析内容',
+            },
+          ],
+        },
+      },
+    });
+
+    const textarea = container.querySelector(
+      '[data-testid="import-paste-textarea"]',
+    ) as HTMLTextAreaElement;
+
+    // 1) Paste event triggers json-intercept-banner even without API key
+    const pasteEvent = new Event('paste', { bubbles: true, cancelable: true });
+    Object.defineProperty(pasteEvent, 'clipboardData', {
+      value: {
+        getData: (type: string) => (type === 'text/plain' ? standardShareJson : ''),
+      },
+    });
+    await act(async () => {
+      textarea.dispatchEvent(pasteEvent);
+      setNativeValue(textarea, standardShareJson);
+    });
+
+    const banner = container.querySelector('[data-testid="json-intercept-banner"]');
+    expect(banner).not.toBeNull();
+    expect(banner?.textContent).toContain(
+      '检测到这已经是标准题库格式，是否跳过 AI 消耗直接秒导？',
+    );
+    expect(container.querySelector('[data-testid="ai-open-settings-inline"]')).not.toBeNull();
+
+    // 2) Also verify clicking ai-wash-btn directly on standard JSON without API key intercepts before API guard
+    await act(async () => {
+      setNativeValue(textarea, '');
+      setNativeValue(textarea, standardShareJson);
+    });
+    expect(container.querySelector('[data-testid="json-intercept-banner"]')).toBeNull();
+
+    const notify = vi.fn();
+    await act(async () => {
+      root!.render(
+        React.createElement(ImportWorkbench, {
+          notify,
+          onCommit: async (payload) => {
+            commits.push(payload);
+          },
+        }),
+      );
+    });
+    await act(async () => {
+      (container.querySelector('[data-testid="ai-wash-btn"]') as HTMLButtonElement).click();
+    });
+
+    expect(mockFetch).not.toHaveBeenCalled();
+    expect(notify).not.toHaveBeenCalledWith(
+      expect.stringContaining('尚未配置 AI API Key'),
+      'error',
+    );
+    expect(container.querySelector('[data-testid="json-intercept-banner"]')).not.toBeNull();
+
+    // 3) Click "直接导入" -> previews and commits losslessly with 0 fetch calls
+    await act(async () => {
+      (container.querySelector('[data-testid="json-intercept-direct-btn"]') as HTMLButtonElement).click();
+    });
+    expect(container.querySelector('[data-testid="json-intercept-banner"]')).toBeNull();
+    expect(container.querySelector('[data-testid="import-preview"]')).not.toBeNull();
+    expect(mockFetch).not.toHaveBeenCalled();
+
+    await act(async () => {
+      (container.querySelector('[data-testid="btn-confirm-import-sticky"]') as HTMLButtonElement).click();
+    });
+    await flushMicrotasks();
+
+    expect(commits).toHaveLength(1);
+    const committed = commits[0]!;
+    expect(committed.mode).toBe('new');
+    if (committed.mode === 'new') {
+      expect(committed.input.questions[0]!.explain).toBe('原题解析内容');
+      expect(committed.input.questions[0]!.aiAnalysis).toBe('独立 AI 深度解析内容');
+    }
+  });
+
+  it('SW-12: F10 "仍用 AI 洗题" bypasses exact payload, re-arms on edit, and ignores non-standard JSON/text', async () => {
+    saveApiConfig({
+      ...createDefaultApiConfig(),
+      apiKey: 'sk-test-key',
+      model: 'deepseek-chat',
+    });
+
+    const mockFetch = vi.fn().mockImplementation(async () =>
+      makeMockChatResponse([
+        {
+          type: 'choice',
+          stem: 'AI 洗题结果',
+          options: ['X', 'Y'],
+          answer: 0,
+          answerInferred: false,
+          explain: 'ok',
+        },
+      ]),
+    );
+    vi.stubGlobal('fetch', mockFetch);
+
+    root = createRoot(container);
+    await act(async () => {
+      root!.render(
+        React.createElement(ImportWorkbench, {
+          notify: vi.fn(),
+          onCommit: vi.fn().mockResolvedValue(undefined),
+        }),
+      );
+    });
+
+    await act(async () => {
+      (container.querySelector('[data-testid="import-tab-paste"]') as HTMLButtonElement).click();
+    });
+    const textarea = container.querySelector(
+      '[data-testid="import-paste-textarea"]',
+    ) as HTMLTextAreaElement;
+
+    const legacyJson = JSON.stringify({
+      meta: { title: '旧版题库' },
+      chapters: [{ id: 1, title: '第一章' }],
+      questions: [
+        {
+          id: 'l1',
+          type: 'choice',
+          chapter: 1,
+          stem: '旧版题干',
+          options: ['A1', 'B1'],
+          answer: 0,
+        },
+      ],
+    });
+
+    // (a) Non-standard JSON & plain text do NOT trigger intercept
+    const nonStandardJson = JSON.stringify({ foo: 'bar', count: 2 });
+    const pasteBad = new Event('paste', { bubbles: true, cancelable: true });
+    Object.defineProperty(pasteBad, 'clipboardData', {
+      value: { getData: () => nonStandardJson },
+    });
+    await act(async () => {
+      textarea.dispatchEvent(pasteBad);
+      setNativeValue(textarea, nonStandardJson);
+    });
+    expect(container.querySelector('[data-testid="json-intercept-banner"]')).toBeNull();
+
+    // (b) Paste standard JSON (selecting/replacing existing text) -> click "仍用 AI 洗题" -> dismisses banner; subsequent wash calls fetch
+    const pasteGood = new Event('paste', { bubbles: true, cancelable: true });
+    Object.defineProperty(pasteGood, 'clipboardData', {
+      value: { getData: () => legacyJson },
+    });
+    await act(async () => {
+      textarea.setSelectionRange(0, textarea.value.length);
+      textarea.dispatchEvent(pasteGood);
+      setNativeValue(textarea, legacyJson);
+    });
+    expect(container.querySelector('[data-testid="json-intercept-banner"]')).not.toBeNull();
+
+    await act(async () => {
+      (container.querySelector('[data-testid="json-intercept-ai-btn"]') as HTMLButtonElement).click();
+    });
+    expect(container.querySelector('[data-testid="json-intercept-banner"]')).toBeNull();
+    expect(mockFetch).not.toHaveBeenCalled();
+
+    await act(async () => {
+      (container.querySelector('[data-testid="ai-wash-btn"]') as HTMLButtonElement).click();
+    });
+    await flushMicrotasks();
+    expect(mockFetch).toHaveBeenCalledTimes(1);
+
+    // (c) Editing textarea invalidates bypass & re-arms intercept; clicking "仍用 AI 洗题" from wash trigger immediately calls fetch
+    const editedJson = JSON.stringify([
+      {
+        type: 'tf',
+        stem: '编辑后的标准数组题',
+        answer: true,
+      },
+    ]);
+    await act(async () => {
+      setNativeValue(textarea, `${editedJson} `);
+      setNativeValue(textarea, editedJson);
+    });
+    await act(async () => {
+      (container.querySelector('[data-testid="ai-wash-btn"]') as HTMLButtonElement).click();
+    });
+    expect(container.querySelector('[data-testid="json-intercept-banner"]')).not.toBeNull();
+    expect(mockFetch).toHaveBeenCalledTimes(1);
+
+    await act(async () => {
+      (container.querySelector('[data-testid="json-intercept-ai-btn"]') as HTMLButtonElement).click();
+    });
+    await flushMicrotasks();
+    expect(container.querySelector('[data-testid="json-intercept-banner"]')).toBeNull();
+    expect(mockFetch).toHaveBeenCalledTimes(2);
+  });
+
+  it('SW-13: F10 paste-area drop (standard .json File & JSON array text) triggers intercept while file-tab .json auto-preview stays untouched', async () => {
+    const mockFetch = vi.fn();
+    vi.stubGlobal('fetch', mockFetch);
+
+    root = createRoot(container);
+    await act(async () => {
+      root!.render(
+        React.createElement(ImportWorkbench, {
+          notify: vi.fn(),
+          onCommit: vi.fn().mockResolvedValue(undefined),
+        }),
+      );
+    });
+
+    const standardArr = JSON.stringify([
+      {
+        type: 'choice',
+        stem: '数组格式标准题',
+        options: ['甲', '乙'],
+        answer: 0,
+        explain: '数组解析',
+      },
+    ]);
+
+    // 1) Switch to paste tab and drop a .json File -> triggers intercept banner (no auto-preview yet)
+    await act(async () => {
+      (container.querySelector('[data-testid="import-tab-paste"]') as HTMLButtonElement).click();
+    });
+    const dropWrap = container.querySelector('.qi-paste-dropwrap') as HTMLDivElement;
+    const jsonFile = new File([standardArr], 'standard-arr.json', { type: 'application/json' });
+    const dropFileEvent = new Event('drop', { bubbles: true, cancelable: true });
+    Object.defineProperty(dropFileEvent, 'dataTransfer', {
+      value: {
+        files: [jsonFile],
+        getData: () => '',
+      },
+    });
+    await act(async () => {
+      dropWrap.dispatchEvent(dropFileEvent);
+    });
+    await flushMicrotasks(2);
+
+    expect(container.querySelector('[data-testid="json-intercept-banner"]')).not.toBeNull();
+    expect(container.querySelector('[data-testid="import-preview"]')).toBeNull();
+    expect(mockFetch).not.toHaveBeenCalled();
+
+    // Direct import from dropped file
+    await act(async () => {
+      (container.querySelector('[data-testid="json-intercept-direct-btn"]') as HTMLButtonElement).click();
+    });
+    expect(container.querySelector('[data-testid="import-preview"]')).not.toBeNull();
+
+    // 2) Drop plain JSON array text -> triggers intercept banner again
+    const dropTextEvent = new Event('drop', { bubbles: true, cancelable: true });
+    Object.defineProperty(dropTextEvent, 'dataTransfer', {
+      value: {
+        files: [],
+        getData: (t: string) => (t === 'text/plain' ? standardArr : ''),
+      },
+    });
+    await act(async () => {
+      dropWrap.dispatchEvent(dropTextEvent);
+    });
+    expect(container.querySelector('[data-testid="json-intercept-banner"]')).not.toBeNull();
+    expect(mockFetch).not.toHaveBeenCalled();
+
+    // 3) File tab .json upload via bank-import-file-input stays untouched (no intercept banner, immediate preview)
+    await act(async () => {
+      (container.querySelector('[data-testid="import-tab-file"]') as HTMLButtonElement).click();
+    });
+    const fileInput = container.querySelector(
+      '[data-testid="bank-import-file-input"]',
+    ) as HTMLInputElement;
+    const tabFile = new File([standardArr], 'direct-file-tab.json', { type: 'application/json' });
+    Object.defineProperty(fileInput, 'files', { value: [tabFile], configurable: true });
+    await act(async () => {
+      fileInput.dispatchEvent(new Event('change', { bubbles: true }));
+    });
+    await flushMicrotasks(2);
+
+    expect(container.querySelector('[data-testid="json-intercept-banner"]')).toBeNull();
+    expect(container.querySelector('[data-testid="import-preview"]')).not.toBeNull();
+  });
+
+  it('SW-14: F10 Windows CRLF multiline JSON paste keeps json-intercept-banner visible after textarea LF normalization and imports with 0 fetch calls', async () => {
+    const mockFetch = vi.fn();
+    vi.stubGlobal('fetch', mockFetch);
+
+    const commits: ImportCommitPayload[] = [];
+    root = createRoot(container);
+    await act(async () => {
+      root!.render(
+        React.createElement(ImportWorkbench, {
+          notify: vi.fn(),
+          onCommit: async (payload) => {
+            commits.push(payload);
+          },
+        }),
+      );
+    });
+
+    await act(async () => {
+      (container.querySelector('[data-testid="import-tab-paste"]') as HTMLButtonElement).click();
+    });
+
+    const lfJson = JSON.stringify(
+      [
+        {
+          type: 'choice',
+          stem: 'CRLF 多行粘贴标准题',
+          options: ['选项A', '选项B'],
+          answer: 0,
+          explain: '原题解析',
+          aiAnalysis: 'AI 深度解析',
+        },
+      ],
+      null,
+      2,
+    );
+    const crlfJson = lfJson.replace(/\n/g, '\r\n');
+
+    const textarea = container.querySelector(
+      '[data-testid="import-paste-textarea"]',
+    ) as HTMLTextAreaElement;
+
+    const pasteEvent = new Event('paste', { bubbles: true, cancelable: true });
+    Object.defineProperty(pasteEvent, 'clipboardData', {
+      value: {
+        getData: (type: string) => (type === 'text/plain' ? crlfJson : ''),
+      },
+    });
+    await act(async () => {
+      textarea.dispatchEvent(pasteEvent);
+      setNativeValue(textarea, lfJson);
+    });
+
+    expect(container.querySelector('[data-testid="json-intercept-banner"]')).not.toBeNull();
+
+    await act(async () => {
+      (container.querySelector('[data-testid="json-intercept-direct-btn"]') as HTMLButtonElement).click();
+    });
+    expect(container.querySelector('[data-testid="json-intercept-banner"]')).toBeNull();
+    expect(container.querySelector('[data-testid="import-preview"]')).not.toBeNull();
+    expect(mockFetch).not.toHaveBeenCalled();
+
+    await act(async () => {
+      (container.querySelector('[data-testid="btn-confirm-import-sticky"]') as HTMLButtonElement).click();
+    });
+    await flushMicrotasks();
+
+    expect(commits).toHaveLength(1);
+    expect(mockFetch).not.toHaveBeenCalled();
+  });
+
+  it('SW-15: F10 paste event without clipboardData triggers json-intercept-banner on subsequent input change', async () => {
+    const mockFetch = vi.fn();
+    vi.stubGlobal('fetch', mockFetch);
+
+    root = createRoot(container);
+    await act(async () => {
+      root!.render(
+        React.createElement(ImportWorkbench, {
+          notify: vi.fn(),
+          onCommit: vi.fn().mockResolvedValue(undefined),
+        }),
+      );
+    });
+
+    await act(async () => {
+      (container.querySelector('[data-testid="import-tab-paste"]') as HTMLButtonElement).click();
+    });
+
+    const standardArr = JSON.stringify([
+      {
+        type: 'tf',
+        stem: '无 clipboardData 粘贴事件拦截测试',
+        answer: true,
+      },
+    ]);
+
+    const textarea = container.querySelector(
+      '[data-testid="import-paste-textarea"]',
+    ) as HTMLTextAreaElement;
+    const pasteWithoutClipboard = new Event('paste', { bubbles: true, cancelable: true });
+
+    await act(async () => {
+      textarea.dispatchEvent(pasteWithoutClipboard);
+      setNativeValue(textarea, standardArr);
+    });
+
+    expect(container.querySelector('[data-testid="json-intercept-banner"]')).not.toBeNull();
+    expect(mockFetch).not.toHaveBeenCalled();
+  });
+
+  it('SW-16: F9 disables ai-wash-retry-chunk-0 and guards handleRetryChunk with 0 fetch calls when all 4 wash types are unchecked', async () => {
+    saveApiConfig({
+      ...createDefaultApiConfig(),
+      apiKey: 'sk-test-key',
+      model: 'deepseek-chat',
+    });
+
+    const mockFetch = vi.fn().mockResolvedValueOnce(
+      new Response(JSON.stringify({ error: { message: 'Upstream 500' } }), {
+        status: 500,
+      }),
+    );
+    vi.stubGlobal('fetch', mockFetch);
+
+    root = createRoot(container);
+    await act(async () => {
+      root!.render(
+        React.createElement(ImportWorkbench, {
+          notify: vi.fn(),
+          onCommit: vi.fn().mockResolvedValue(undefined),
+        }),
+      );
+    });
+
+    await act(async () => {
+      (container.querySelector('[data-testid="import-tab-paste"]') as HTMLButtonElement).click();
+    });
+    const textarea = container.querySelector(
+      '[data-testid="import-paste-textarea"]',
+    ) as HTMLTextAreaElement;
+    await act(async () => {
+      setNativeValue(textarea, '1. 失败片段空题型重试校验');
+    });
+
+    await act(async () => {
+      (container.querySelector('[data-testid="ai-wash-btn"]') as HTMLButtonElement).click();
+    });
+    await flushMicrotasks();
+
+    const retryBtn = container.querySelector(
+      '[data-testid="ai-wash-retry-chunk-0"]',
+    ) as HTMLButtonElement;
+    expect(retryBtn).not.toBeNull();
+    expect(retryBtn.disabled).toBe(false);
+    expect(mockFetch).toHaveBeenCalledTimes(1);
+
+    await act(async () => {
+      setCheckbox(
+        container.querySelector('[data-testid="wash-type-choice"]') as HTMLInputElement,
+        false,
+      );
+      setCheckbox(
+        container.querySelector('[data-testid="wash-type-multi"]') as HTMLInputElement,
+        false,
+      );
+      setCheckbox(
+        container.querySelector('[data-testid="wash-type-tf"]') as HTMLInputElement,
+        false,
+      );
+      setCheckbox(
+        container.querySelector('[data-testid="wash-type-short"]') as HTMLInputElement,
+        false,
+      );
+    });
+
+    expect(container.querySelector('[data-testid="wash-type-guard-hint"]')).not.toBeNull();
+    expect(retryBtn.disabled).toBe(true);
+
+    await act(async () => {
+      retryBtn.click();
+    });
+    await flushMicrotasks();
+
+    expect(mockFetch).toHaveBeenCalledTimes(1);
+  });
 });
 
 function setSelectValue(el: HTMLSelectElement, value: string) {

@@ -348,4 +348,431 @@ describe('quizAiService (M1 structured explain, 10-turn chat, and chunked Smart 
     expect(res.drafts[1]!.options).toEqual(['tree', 'graph', 'list', 'stack']);
     expect(res.drafts[1]!.aiInferredAnswer).toBe(true);
   });
+
+  it('injects 4 strict rules and allowedTypes into wash System Prompt and threads allowedTypes in retryWashChunk', async () => {
+    saveApiConfig({
+      ...createDefaultApiConfig(),
+      apiKey: 'sk-test',
+      model: 'deepseek-chat',
+    });
+
+    const mockFetch = vi.fn().mockImplementation(async () =>
+      new Response(
+        JSON.stringify({
+          model: 'deepseek-chat',
+          choices: [{ message: { content: JSON.stringify({ questions: [] }) } }],
+        }),
+        { status: 200, headers: { 'Content-Type': 'application/json' } },
+      ),
+    );
+    vi.stubGlobal('fetch', mockFetch);
+
+    // 1) Default allowedTypes (choice, multi, tf, short — excludes analysis)
+    await washQuestionsChunked('1. 示例题');
+    const bodyDefault = JSON.parse(String(mockFetch.mock.calls[0]![1]?.body)) as {
+      messages: Array<{ role: string; content: string }>;
+    };
+    const sysDefault = bodyDefault.messages[0]!.content;
+    const userDefault = bodyDefault.messages[1]!.content;
+    expect(sysDefault).toContain('"choice"');
+    expect(sysDefault).toContain('"multi"');
+    expect(sysDefault).toContain('"tf"');
+    expect(sysDefault).toContain('"short"');
+    expect(sysDefault).not.toContain('"analysis"');
+    expect(sysDefault).toContain('纯 JSON');
+    expect(sysDefault).toContain('直接跳过');
+    expect(sysDefault).toContain('src/types/quiz.ts');
+    expect(sysDefault).toContain('\\\\frac');
+    expect(sysDefault).toContain('\\\\alpha');
+    expect(sysDefault).not.toMatch(/阅卷助教|recommendedMastery/);
+    expect(userDefault).toContain('：\n');
+
+    // 2) Objective-only allowedTypes
+    await washQuestionsChunked('1. 示例题', {
+      allowedTypes: ['choice', 'multi', 'tf'],
+    });
+    const bodyObj = JSON.parse(String(mockFetch.mock.calls[1]![1]?.body)) as {
+      messages: Array<{ role: string; content: string }>;
+    };
+    const sysObj = bodyObj.messages[0]!.content;
+    expect(sysObj).toContain('"choice"');
+    expect(sysObj).toContain('"multi"');
+    expect(sysObj).toContain('"tf"');
+    expect(sysObj).not.toContain('"short"');
+    expect(sysObj).not.toContain('"analysis"');
+
+    // 3) retryWashChunk enforces allowedTypes in prompt & post-filter
+    mockFetch.mockResolvedValueOnce(
+      new Response(
+        JSON.stringify({
+          model: 'deepseek-chat',
+          choices: [
+            {
+              message: {
+                content: JSON.stringify({
+                  questions: [
+                    { type: 'choice', stem: '单选过滤', options: ['A', 'B'], answer: 0 },
+                    { type: 'tf', stem: '判断保留', answer: true },
+                  ],
+                }),
+              },
+            },
+          ],
+        }),
+        { status: 200, headers: { 'Content-Type': 'application/json' } },
+      ),
+    );
+    const retried = await retryWashChunk(
+      { chunkIndex: 0, totalChunks: 1, rawText: '1. 示例题', errorMessage: 'err' },
+      { allowedTypes: ['tf'] },
+    );
+    const bodyRetry = JSON.parse(String(mockFetch.mock.calls[2]![1]?.body)) as {
+      messages: Array<{ role: string; content: string }>;
+    };
+    expect(bodyRetry.messages[0]!.content).toContain('"tf"');
+    expect(bodyRetry.messages[0]!.content).not.toContain('"choice"');
+    expect(retried).toHaveLength(1);
+    expect(retried[0]!.type).toBe('tf');
+  });
+
+  it('filters disallowed question types client-side and returns empty drafts cleanly when all filtered out', async () => {
+    saveApiConfig({
+      ...createDefaultApiConfig(),
+      apiKey: 'sk-test',
+      model: 'deepseek-chat',
+    });
+
+    const allFiveQuestions = [
+      { type: 'choice', stem: '单选题', options: ['A', 'B'], answer: 0 },
+      { type: 'multi', stem: '多选题', options: ['A', 'B', 'C'], answer: [0, 1] },
+      { type: 'tf', stem: '判断题', answer: true },
+      { type: 'short', stem: '简答题', answer: '简答参考答案' },
+      { type: 'analysis', stem: '综合分析题', answer: '综合分析答案' },
+    ];
+
+    const mockFetch = vi
+      .fn()
+      .mockResolvedValueOnce(
+        new Response(
+          JSON.stringify({
+            model: 'deepseek-chat',
+            choices: [{ message: { content: JSON.stringify({ questions: allFiveQuestions }) } }],
+          }),
+          { status: 200, headers: { 'Content-Type': 'application/json' } },
+        ),
+      )
+      .mockResolvedValueOnce(
+        new Response(
+          JSON.stringify({
+            model: 'deepseek-chat',
+            choices: [
+              {
+                message: {
+                  content: JSON.stringify({
+                    questions: [allFiveQuestions[3], allFiveQuestions[4]],
+                  }),
+                },
+              },
+            ],
+          }),
+          { status: 200, headers: { 'Content-Type': 'application/json' } },
+        ),
+      )
+      .mockResolvedValueOnce(
+        new Response(
+          JSON.stringify({
+            model: 'deepseek-chat',
+            choices: [
+              {
+                message: {
+                  content: JSON.stringify({
+                    questions: [allFiveQuestions[0], allFiveQuestions[4]],
+                  }),
+                },
+              },
+            ],
+          }),
+          { status: 200, headers: { 'Content-Type': 'application/json' } },
+        ),
+      );
+    vi.stubGlobal('fetch', mockFetch);
+
+    const partial = await washQuestionsChunked('test1', { allowedTypes: ['choice', 'tf'] });
+    expect(partial.failedChunks).toEqual([]);
+    expect(partial.drafts.map((d) => d.type)).toEqual(['choice', 'tf']);
+
+    const allFiltered = await washQuestionsChunked('test2', {
+      allowedTypes: ['choice', 'multi', 'tf'],
+    });
+    expect(allFiltered.cancelled).toBe(false);
+    expect(allFiltered.failedChunks).toEqual([]);
+    expect(allFiltered.drafts).toEqual([]);
+
+    const defaultFiltered = await washQuestionsChunked('test3');
+    expect(defaultFiltered.failedChunks).toEqual([]);
+    expect(defaultFiltered.drafts.map((d) => d.type)).toEqual(['choice']);
+  });
+
+  it('falls back from jsonMode: true to jsonMode: false on HTTP 400 in washCompletionJson', async () => {
+    saveApiConfig({
+      ...createDefaultApiConfig(),
+      apiKey: 'sk-test',
+      model: 'deepseek-chat',
+    });
+
+    const mockFetch = vi
+      .fn()
+      .mockResolvedValueOnce(
+        new Response(
+          JSON.stringify({ error: { message: 'response_format json_object is unsupported' } }),
+          { status: 400, headers: { 'Content-Type': 'application/json' } },
+        ),
+      )
+      .mockResolvedValueOnce(
+        new Response(
+          JSON.stringify({
+            model: 'deepseek-chat',
+            choices: [
+              {
+                message: {
+                  content: JSON.stringify({
+                    questions: [{ type: 'tf', stem: 'HTTP 400 fallback', answer: true }],
+                  }),
+                },
+              },
+            ],
+          }),
+          { status: 200, headers: { 'Content-Type': 'application/json' } },
+        ),
+      );
+    vi.stubGlobal('fetch', mockFetch);
+
+    const res = await washQuestionsChunked('1. 判断题');
+    expect(mockFetch).toHaveBeenCalledTimes(2);
+    const req1 = JSON.parse(String(mockFetch.mock.calls[0]![1]?.body)) as {
+      response_format?: unknown;
+    };
+    const req2 = JSON.parse(String(mockFetch.mock.calls[1]![1]?.body)) as {
+      response_format?: unknown;
+    };
+    expect(req1.response_format).toEqual({ type: 'json_object' });
+    expect(req2.response_format).toBeUndefined();
+    expect(res.drafts).toHaveLength(1);
+    expect(res.drafts[0]!.stem).toBe('HTTP 400 fallback');
+  });
+
+  it('repairs single-backslash LaTeX commands in wash JSON fallback while preserving genuine JSON escapes', async () => {
+    saveApiConfig({
+      ...createDefaultApiConfig(),
+      apiKey: 'sk-test',
+      model: 'deepseek-chat',
+    });
+
+    const rawMalformedJsonContent = [
+      '<think>内部推理过程</think>',
+      '```json',
+      '{',
+      '  "questions": [',
+      '    {',
+      '      "type": "short",',
+      '      "stem": "计算 $\\frac{1}{2} + \\alpha + \\theta + \\beta + \\rho \\neq 0$，其中 \\forall x \\in \\underline{z}，\\sqrt{x} 与 \\sum_{i=1}^{n} \\int \\cdot \\leq \\geq \\vec{a} \\hat{y} \\left( \\right) \\langle \\bar{x} \\begin{cases}x=1\\end{cases} \\text{kg} \\times \\tau \\nu \\nabla \\\\gamma \\"quoted\\" \\/path \\u0041\\n下一行\\t选项",',
+      '      "answer": "答案包含 $\\frac{a}{b}$ 与 $\\alpha$",',
+      '      "explain": "解释 $\\theta \\neq \\beta$"',
+      '    }',
+      '  ]',
+      '}',
+      '```',
+    ].join('\n');
+
+    const mockFetch = vi.fn().mockResolvedValueOnce(
+      new Response(
+        JSON.stringify({
+          model: 'deepseek-chat',
+          choices: [{ message: { content: rawMalformedJsonContent } }],
+        }),
+        { status: 200, headers: { 'Content-Type': 'application/json' } },
+      ),
+    );
+    vi.stubGlobal('fetch', mockFetch);
+
+    const res = await washQuestionsChunked('1. 公式题');
+    expect(res.failedChunks).toEqual([]);
+    expect(res.drafts).toHaveLength(1);
+    const stem = res.drafts[0]!.stem;
+    expect(stem).toContain('\\frac{1}{2}');
+    expect(stem).toContain('\\alpha');
+    expect(stem).toContain('\\theta');
+    expect(stem).toContain('\\beta');
+    expect(stem).toContain('\\rho');
+    expect(stem).toContain('\\neq');
+    expect(stem).toContain('\\forall');
+    expect(stem).toContain('\\underline{z}');
+    expect(stem).toContain('\\sqrt{x}');
+    expect(stem).toContain('\\sum');
+    expect(stem).toContain('\\int');
+    expect(stem).toContain('\\cdot');
+    expect(stem).toContain('\\leq');
+    expect(stem).toContain('\\geq');
+    expect(stem).toContain('\\vec{a}');
+    expect(stem).toContain('\\hat{y}');
+    expect(stem).toContain('\\left(');
+    expect(stem).toContain('\\right)');
+    expect(stem).toContain('\\langle');
+    expect(stem).toContain('\\bar{x}');
+    expect(stem).toContain('\\begin{cases}');
+    expect(stem).toContain('\\text{kg}');
+    expect(stem).toContain('\\times');
+    expect(stem).toContain('\\tau');
+    expect(stem).toContain('\\nu');
+    expect(stem).toContain('\\nabla');
+    expect(stem).toContain('\\gamma');
+    expect(stem).not.toContain('\\\\gamma');
+    expect(stem).toContain('"quoted"');
+    expect(stem).toContain('/path');
+    expect(stem).toContain('A');
+    expect(res.drafts[0]!.answer).toContain('\\frac{a}{b}');
+    expect(res.drafts[0]!.explain).toContain('\\theta \\neq \\beta');
+  });
+
+  it('rejects non-JSON text with PARSE_ERROR without triggering HTTP 400 retry', async () => {
+    saveApiConfig({
+      ...createDefaultApiConfig(),
+      apiKey: 'sk-test',
+      model: 'deepseek-chat',
+    });
+
+    const mockFetch = vi.fn().mockImplementation(async () =>
+      new Response(
+        JSON.stringify({
+          model: 'deepseek-chat',
+          choices: [{ message: { content: '（历史拒答记录，已略）' } }],
+        }),
+        { status: 200, headers: { 'Content-Type': 'application/json' } },
+      ),
+    );
+    vi.stubGlobal('fetch', mockFetch);
+
+    const res = await washQuestionsChunked('1. 任意题目');
+    expect(mockFetch).toHaveBeenCalledTimes(1);
+    expect(res.drafts).toEqual([]);
+    expect(res.failedChunks).toHaveLength(1);
+    expect(res.failedChunks[0]!.errorCode).toBe('PARSE_ERROR');
+
+    await expect(
+      retryWashChunk({
+        chunkIndex: 0,
+        totalChunks: 1,
+        rawText: '1. 任意题目',
+        errorMessage: 'parse error',
+      }),
+    ).rejects.toMatchObject({
+      code: 'PARSE_ERROR',
+    });
+  });
+
+  it('repairs valid-JSON-escape-letter LaTeX commands even when extractJsonFromText succeeds without PARSE_ERROR', async () => {
+    saveApiConfig({
+      ...createDefaultApiConfig(),
+      apiKey: 'sk-test',
+      model: 'deepseek-chat',
+    });
+
+    // Every single-backslash LaTeX command here starts with a valid JSON escape letter (b/f/n/r/t),
+    // so raw JSON.parse succeeds silently unless extractWashJsonFromText repairs the valid slice.
+    const rawValidEscapeJsonContent = [
+      '{',
+      '  "questions": [',
+      '    {',
+      '      "type": "short",',
+      '      "stem": "计算 $\\frac{1}{2} + \\theta + \\beta + \\rho \\neq 0$，当 $\\begin{cases}x=1\\\\end{cases}$ 时 $2 \\times 3 \\to 6$",',
+      '      "answer": "$\\text{ok}$",',
+      '      "explain": "$\\frac{1}{2} \\neq \\theta$"',
+      '    }',
+      '  ]',
+      '}',
+    ].join('\n');
+
+    expect(() => JSON.parse(rawValidEscapeJsonContent)).not.toThrow();
+
+    const mockFetch = vi.fn().mockResolvedValueOnce(
+      new Response(
+        JSON.stringify({
+          model: 'deepseek-chat',
+          choices: [{ message: { content: rawValidEscapeJsonContent } }],
+        }),
+        { status: 200, headers: { 'Content-Type': 'application/json' } },
+      ),
+    );
+    vi.stubGlobal('fetch', mockFetch);
+
+    const res = await washQuestionsChunked('1. 仅含合法转义字母的 LaTeX 题');
+    expect(res.failedChunks).toEqual([]);
+    expect(res.drafts).toHaveLength(1);
+
+    const draft = res.drafts[0]!;
+    expect(draft.stem).toBe(
+      String.raw`计算 $\frac{1}{2} + \theta + \beta + \rho \neq 0$，当 $\begin{cases}x=1\end{cases}$ 时 $2 \times 3 \to 6$`,
+    );
+    expect(draft.answer).toBe(String.raw`$\text{ok}$`);
+    expect(draft.explain).toBe(String.raw`$\frac{1}{2} \neq \theta$`);
+
+    for (const field of [draft.stem, draft.answer, draft.explain]) {
+      expect(field).not.toMatch(/[\u0008\u0009\u000a\u000c\u000d]/);
+    }
+  });
+
+  it('requests canonical aiInferredAnswer field in wash prompt, strips "A. "/"B、" prefixes, and handles empty chunk arrays', async () => {
+    saveApiConfig({
+      provider: 'deepseek',
+      baseUrl: 'https://api.deepseek.com/v1',
+      model: 'deepseek-chat',
+      apiKey: 'sk-test-canonical',
+      temperature: 0.2,
+      maxTokens: 2048,
+      timeoutMs: 30_000,
+      storageScope: 'local',
+    });
+
+    let capturedSystemPrompt = '';
+    const mockFetch = vi.fn().mockImplementation(async (_url, init) => {
+      const body = JSON.parse(String((init as RequestInit).body)) as {
+        messages: Array<{ role: string; content: string }>;
+      };
+      capturedSystemPrompt = body.messages.find((m) => m.role === 'system')?.content ?? '';
+      return new Response(
+        JSON.stringify({
+          model: 'deepseek-chat',
+          choices: [
+            {
+              message: {
+                content: JSON.stringify({
+                  questions: [
+                    {
+                      type: 'choice',
+                      stem: '无原文答案的选择题',
+                      options: ['A. 选项一', 'B、选项二'],
+                      answer: 1,
+                      explain: '推导解析',
+                      aiInferredAnswer: true,
+                    },
+                  ],
+                }),
+              },
+            },
+          ],
+        }),
+        { status: 200, headers: { 'Content-Type': 'application/json' } },
+      );
+    });
+    vi.stubGlobal('fetch', mockFetch);
+
+    const res = await washQuestionsChunked('1. 无原文答案的选择题\nA. 选项一\nB、选项二');
+    expect(capturedSystemPrompt).toContain('"aiInferredAnswer"');
+    expect(capturedSystemPrompt).toContain('"A. "/"B、"');
+    expect(capturedSystemPrompt).toContain('{"questions":[]}');
+    expect(res.drafts).toHaveLength(1);
+    expect(res.drafts[0]!.options).toEqual(['选项一', '选项二']);
+    expect(res.drafts[0]!.answer).toBe(1);
+    expect(res.drafts[0]!.aiInferredAnswer).toBe(true);
+  });
 });

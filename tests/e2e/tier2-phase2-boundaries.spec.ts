@@ -320,6 +320,7 @@ test.describe('Tier 2 (Phase 2): Boundary Cases, Error Recovery, Legacy Compat &
     const stickyBtn = btnConfirmImportSticky(page);
     await expect(stickyBtn).toContainText('4');
     await stickyBtn.click();
+    await expect(quizImportDialog(page)).toBeHidden({ timeout: 10_000 });
 
     if (!/#\/quiz/.test(page.url())) {
       await gotoRoute(page, '#/quiz');

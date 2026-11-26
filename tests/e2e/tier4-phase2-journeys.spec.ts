@@ -125,7 +125,8 @@ async function confirmImportAndClose(page: Page, bankName?: string): Promise<voi
   await expect(confirmBtn).toBeEnabled();
   await confirmBtn.click();
 
-  await expect(quizImportDialog(page)).toBeHidden();
+  await expect(quizImportDialog(page)).toBeHidden({ timeout: 10_000 });
+  await expect(page).toHaveURL(/#\/quiz/);
 }
 
 async function switchActiveBank(
@@ -353,6 +354,10 @@ test.describe('Tier 4 Phase 2: Real-World Application Journeys (T4-P2-001..T4-P2
       targetHashRoute: '#/quiz',
       apiConfig: {},
     });
+    for (const anchor of ['能量与求和公式推导', '容错与 XSS 安全测试题', '向量算子']) {
+      const matched = MARKDOWN_LATEX_BANK.questions.find((q) => q.stem.includes(anchor));
+      expect(matched, `Expected MARKDOWN_LATEX_BANK question matching "${anchor}"`).toBeDefined();
+    }
     await expect(bankSwitcher(page)).toHaveValue(FIXTURE_BANK_ID);
     await filterOrder(page).selectOption('seq');
     await modeCard(page, 'all').click();
@@ -528,6 +533,7 @@ test.describe('Tier 4 Phase 2: Real-World Application Journeys (T4-P2-001..T4-P2
     await gotoRoute(page, '#/quiz');
     await switchActiveBank(page, legacyBankId, /Phase 1/);
     await expect(statCard(page, 'done')).toContainText('2');
+    await filterOrder(page).selectOption('seq');
     await modeCard(page, 'choice').click();
     await aiBtnExplain(page).click();
     await expect(explanationContainer(page)).toContainText('核心考点');
