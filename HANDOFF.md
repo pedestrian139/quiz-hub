@@ -1,5 +1,20 @@
 # 项目开发交接文档（HANDOFF.md）
 
+## Phase 1 收尾与线上域名归档（2026-11-26）
+
+- **线上域名与部署架构**：
+  - 前端托管于 **Cloudflare Pages**（`main` 分支触发生产部署，构建命令 `npm run build`，输出目录 `dist`，`CF_PAGES=1` 下自动启用根路径 `/`）。
+  - 线上主域名：`https://acequiz.xyz`（Cloudflare DNS 已接入）；过渡测试域名：`https://quiz-hub-416.pages.dev`。
+  - 前端环境变量：`VITE_SUPABASE_URL`、`VITE_SUPABASE_PUBLISHABLE_KEY`（或 `VITE_SUPABASE_ANON_KEY`）、可选 `VITE_SUPABASE_AUTH_REDIRECT_URL`（建议设为 `https://acequiz.xyz` 或留空以自动匹配当前访问域名）。
+- **认证与实时云同步底座（已上线）**：
+  - **纯邮箱 + 6 位验证码（Supabase Auth + Resend 自定义 SMTP）**：发件人 `noreply@acequiz.xyz`（Port 465），`Confirm signup` 与 `Magic Link` 模板均直接展示 6 位数字码 `{{ .Token }}`，有效期统一 `300` 秒（5 分钟），前端支持 60 秒重发冷却与实时倒计时文案（PR #9 / `2140e20`）。
+  - **实时云同步与加密落库**：由 `src/services/db/cloudData.ts`、`src/services/cloudSync.ts` 与 Edge Function `user-data` 驱动，题库与进度同步至 `public.quiz_banks` / `public.quiz_progress`，模型配置存入 `public.user_api_configs`，API Key 经 AES-256-GCM（`QUIZHUB_API_KEY_ENCRYPTION_KEY_V1`）加密隔离存入 `private.user_api_secrets`，全表启用 RLS。
+  - **旧手机号清理已完成并上线**：`phone-auth` Edge Function、前端死代码与旧 `quizhub_before_user_created` Auth Hook 均已移除解绑；幂等清理迁移 `db/supabase/migrations/202611260001_cleanup_phone_auth.sql` 已推送至线上数据库执行完毕。
+- **Phase 1 上线验收与里程碑归档清单**：
+  1. 线上平台核对：Cloudflare Pages 主域 `acequiz.xyz` 绑定与 `VITE_SUPABASE_AUTH_REDIRECT_URL`；Supabase Edge Function Secret `QUIZHUB_ALLOWED_ORIGINS=https://acequiz.xyz,https://quiz-hub-416.pages.dev`（无尾斜杠）及 Auth `Site URL` / `Redirect URLs`。
+  2. 线上 9 项回归验证：新邮箱注册收码、退出后验证码登录、300 秒过期拦截、保存 API Key 返回 `200` 且密文落库、导入题库+刷题刷新不丢失、跨设备（手机端）自动拉取、退出清空本地缓存无串号、游客先刷题再登录/注册数据自动合并上云。
+  3. 验收全部通过并合入 `main` 后，在 `main` 打里程碑 Tag `v2.0-sync-ready` 作为稳定回滚点，随后开启 **Phase 2（AI 智能洗题导入与题目深度解析）**。
+
 ## V2 清理废弃 `phone-auth` 残留并对齐邮箱验证码方案（2026-11-26）
 
 - 认证方案已全面统一为 **「邮箱 + 6 位验证码（Supabase Auth + Resend SMTP，有效期 300 秒 / 60 秒重发冷却）」**，本轮安全清理了所有废弃手机号认证残留：
@@ -7,7 +22,7 @@
   - **前端死代码清理**：清理 `src/services/db/account.ts` 中的 `PHONE_ACCOUNT_DOMAIN` 虚拟域校验、`src/services/authService.ts` 中 `GuestProfile.phone`、`src/components/Auth/AuthIcons.tsx` 未使用的 `phone` 图标及 `src/components/Auth/UserMenu.tsx` 中的 `user?.phone` 兜底。
   - **数据库清理迁移**：保留已上线历史迁移 `db/supabase/migrations/202611250001_database.sql` 不变，新增幂等清理迁移 `db/supabase/migrations/202611260001_cleanup_phone_auth.sql`（`DROP ... IF EXISTS` 移除 `quizhub_before_user_created`、`quizhub_authorize_first_email`、`quizhub_take_phone_attempt`、`guard_email_link`、`check_reserved_auth_alias`、`private.first_email_links`、`private.phone_auth_rate_limits`，并简化 `private.sync_auth_profile()` 为纯邮箱同步；保留 `public.profiles.phone` 列以兼容受保护的 `src/services/db/cloudData.ts`），同步更新 `db/tests/auth-and-guest-upgrade.sql`。
   - **严格保护项均零改动**：`user-data` Edge Function、`src/services/db/cloudData.ts`、`public.user_api_configs`、`private.user_api_secrets`、`public.quiz_progress`、AES-256-GCM 加密与 `QUIZHUB_API_KEY_ENCRYPTION_KEY_V1` / `QUIZHUB_ALLOWED_ORIGINS` 均保持原样。
-  - **当前状态与下一步**：`typecheck`（主工程 + E2E）、93/93 单元测试、生产构建（304ms）与 26 项 Auth+API 端到端回归全部通过；下一步在 `db/` 目录执行 `supabase db push` 将 `202611260001_cleanup_phone_auth.sql` 应用至线上库即可。
+  - **线上执行状态**：`202611260001_cleanup_phone_auth.sql` 已推送至线上数据库执行完毕，`typecheck`（主工程 + E2E）、93/93 单元测试与生产构建均通过。
 
 ## V2 正式账号 API 设置云端保存（2026-11-26）
 
@@ -19,7 +34,7 @@
 
 ## V2 Cloudflare Pages 上线准备（2026-11-25）
 
-- Pages 的构建命令为 `npm run build`，输出目录为 `dist`。连接 GitHub 仓库后，V2 项目的生产分支选择 `dev`。本轮使用 Node.js 24.21.0 验证构建。
+- Pages 的构建命令为 `npm run build`，输出目录为 `dist`（现已切为 `main` 分支触发生产部署，主域名 `https://acequiz.xyz`）。本轮历史验证使用 Node.js 24.21.0。
 - `public/_redirects` 包含请求的 SPA 回退规则，并随构建复制到 `dist`。Wrangler 会将这条规则判为循环而忽略。实测由 Pages 内置 SPA 回退响应深层地址。`vite.config.ts` 在 Pages 自动设置的 `CF_PAGES` 下从站点根路径加载静态资源。
 - 已将 Excel 导入使用的 SheetJS 升级到官方 0.20.3。现有导入、模板下载和分享回归通过，`npm audit` 报告零漏洞。Git 索引、`dev` 历史和前端源码的敏感文件与密钥扫描未发现问题。
 - `npm install`、生产构建、78 项单元测试、254 项浏览器测试和 296 处相对导入路径的大小写核对通过。全量浏览器测试按视口或配置跳过 234 项。Vite Preview 与本地 Pages 模拟器均通过深层链接、刷新和静态资源加载验收。
@@ -94,9 +109,9 @@
 - **无阻断性报错**：代码、题库、单元与 E2E 测试、生产分包构建全部零报错、零警告通过。
 - GitHub Pages 首次上线前，需仓库管理员在 GitHub 仓库 `Settings -> Pages -> Build and deployment -> Source` 中选择 **GitHub Actions**，随后推送 `main` 或手动触发工作流即可生成在线站点链接。
 
-## 4. 下一步可选接力任务（To-Do）
-1. **开启 GitHub Pages 发布**：在 GitHub 仓库开启 Pages（Source: GitHub Actions），核验 `https://pedestrian139.github.io/quiz-hub/` 在线访问正常后即可分享给同学使用。
-2. **可选功能扩展**：如需支持同目录下 `材料导论/` 课程，可复用当前架构接入新题库模块。
+## 4. 历史 V1 归档与后续演进
+1. **V1 GitHub Pages 历史归档**：早期 V1 静态站配置位于 `.github/workflows/deploy.yml`（历史地址 `https://pedestrian139.github.io/quiz-hub/`）；V2 正式站已全面切换至 Cloudflare Pages（主域名 `https://acequiz.xyz`，过渡域 `https://quiz-hub-416.pages.dev`）。
+2. **Phase 2 规划**：待 Phase 1 线上 9 项回归验收通过并在 `main` 打上 `v2.0-sync-ready` 里程碑 Tag 后，正式启动第二阶段（AI 智能洗题导入与题目深度解析）。
 
 ## 5. 架构约定与避坑提示
 - **核心契约勿随意破坏**：`src/types/quiz.ts`、`src/core/*`、`STORAGE_KEY = 'ai-intro-quiz-v1'` 以及 `tests/e2e/helpers/selectors.ts` 中的全部 `data-testid` / `aria-*` / `data-status` 属性受 4 层 E2E 测试严格校验；主题偏好必须独立保存在 `ai-intro-quiz-theme`。
