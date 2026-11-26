@@ -670,7 +670,7 @@ function coerceWashedDraft(
   const explain = cleanText(obj.explain ?? obj.explanation);
   const keyPoints = toStringList(obj.keyPoints);
   const tags = options.autoTag === false ? [] : toStringList(obj.tags);
-  const aiInferredAnswer = parseBooleanFlag(obj.answerInferred ?? obj.aiInferredAnswer);
+  const aiInferredAnswer = parseBooleanFlag(obj.aiInferredAnswer ?? obj.answerInferred);
 
   const draft: DraftQuestion = {
     tempId: `wash-${Date.now().toString(36)}-${chunkIndex + 1}-${itemIndex + 1}-${Math.random().toString(36).slice(2, 6)}`,
@@ -770,12 +770,12 @@ function buildWashSystemPrompt(
     `   - "type": 仅限 ${allowedEnum}`,
     '   - "stem": 题干字符串（string，去除题号前缀如 "1."，保留必要的 Markdown 与 LaTeX 公式 $...$ / $$...$$）',
     includesChoiceOrMulti
-      ? '   - "options": 字符串数组（string[]，仅 choice/multi 填写，必须去除 "A."/"B." 等字母前缀；其余题型省略或留空）'
+      ? '   - "options": 字符串数组（string[]，仅 choice/multi 填写，必须去除 "A. "/"B、" 等选项前缀以防重复渲染；其余题型省略或留空）'
       : '   - "options": 本次不包含选择题，请省略或传空数组 []',
     `   - "answer": 严格匹配对应类型（${answerSpecs}）`,
     `   - "explain": ${autoFillExplain ? '解析说明字符串（string，若原文缺失解析请补充清晰准确的解析）' : '仅保留原文解析字符串（string），若无则填 ""'}`,
     `   - "tags": ${autoTag ? '1~3 个简短知识点标签字符串数组（string[]）' : '空数组 []'}`,
-    '   - "answerInferred": 布尔值（boolean，原文未给出答案时严谨推导并填 true；原文已有明确答案填 false）',
+    '   - "aiInferredAnswer": 布尔值（boolean，原文未给出答案时严谨推导并填 true；原文已有明确答案填 false）',
   ];
 
   if (includesSubjective) {

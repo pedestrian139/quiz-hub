@@ -720,4 +720,59 @@ describe('quizAiService (M1 structured explain, 10-turn chat, and chunked Smart 
       expect(field).not.toMatch(/[\u0008\u0009\u000a\u000c\u000d]/);
     }
   });
+
+  it('requests canonical aiInferredAnswer field in wash prompt, strips "A. "/"B、" prefixes, and handles empty chunk arrays', async () => {
+    saveApiConfig({
+      provider: 'deepseek',
+      baseUrl: 'https://api.deepseek.com/v1',
+      model: 'deepseek-chat',
+      apiKey: 'sk-test-canonical',
+      temperature: 0.2,
+      maxTokens: 2048,
+      timeoutMs: 30_000,
+      storageScope: 'local',
+    });
+
+    let capturedSystemPrompt = '';
+    const mockFetch = vi.fn().mockImplementation(async (_url, init) => {
+      const body = JSON.parse(String((init as RequestInit).body)) as {
+        messages: Array<{ role: string; content: string }>;
+      };
+      capturedSystemPrompt = body.messages.find((m) => m.role === 'system')?.content ?? '';
+      return new Response(
+        JSON.stringify({
+          model: 'deepseek-chat',
+          choices: [
+            {
+              message: {
+                content: JSON.stringify({
+                  questions: [
+                    {
+                      type: 'choice',
+                      stem: '无原文答案的选择题',
+                      options: ['A. 选项一', 'B、选项二'],
+                      answer: 1,
+                      explain: '推导解析',
+                      aiInferredAnswer: true,
+                    },
+                  ],
+                }),
+              },
+            },
+          ],
+        }),
+        { status: 200, headers: { 'Content-Type': 'application/json' } },
+      );
+    });
+    vi.stubGlobal('fetch', mockFetch);
+
+    const res = await washQuestionsChunked('1. 无原文答案的选择题\nA. 选项一\nB、选项二');
+    expect(capturedSystemPrompt).toContain('"aiInferredAnswer"');
+    expect(capturedSystemPrompt).toContain('"A. "/"B、"');
+    expect(capturedSystemPrompt).toContain('{"questions":[]}');
+    expect(res.drafts).toHaveLength(1);
+    expect(res.drafts[0]!.options).toEqual(['选项一', '选项二']);
+    expect(res.drafts[0]!.answer).toBe(1);
+    expect(res.drafts[0]!.aiInferredAnswer).toBe(true);
+  });
 });

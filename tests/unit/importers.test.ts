@@ -1255,6 +1255,26 @@ B. 选项B
     expect(detectedArrayWithName).not.toBeNull();
     expect(detectedArrayWithName!.suggestedName).toBe('algo');
 
+    // Positive 4: Legacy `analysis` question type passes standard JSON direct-import detection cleanly
+    const legacyAnalysisJson = JSON.stringify({
+      meta: { title: '旧版综合分析题库' },
+      chapters: [{ id: 1, short: '综合分析', title: '第 1 章 综合分析' }],
+      questions: [
+        {
+          type: 'analysis',
+          chapter: 1,
+          stem: '结合案例分析启发式搜索与盲目搜索的时间空间复杂度差异。',
+          answer: '启发式搜索借助估价函数剪枝，显著降低扩展节点数。',
+          explain: '原题解析内容',
+        },
+      ],
+    });
+    const detectedAnalysis = detectStandardQuizJson(legacyAnalysisJson, 'legacy-analysis.json');
+    expect(detectedAnalysis).not.toBeNull();
+    expect(detectedAnalysis!.drafts).toHaveLength(1);
+    expect(detectedAnalysis!.drafts[0]!.type).toBe('analysis');
+    expect(detectedAnalysis!.drafts[0]!.answer).toContain('启发式搜索借助估价函数剪枝');
+
     // Negative cases: must return null and never throw
     const negatives = [
       '',
