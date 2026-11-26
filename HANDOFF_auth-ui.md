@@ -1,4 +1,6 @@
-# HANDOFF — V2 【登录、注册与游客入口】模块交接文档（`feat/auth-ui`）
+# HANDOFF — V2 【登录、注册与游客入口】模块交接文档（`feat/auth-ui` 历史归档）
+
+> ⚠️ **状态说明（2026-11-26）**：本文档记录的是早期 PR #3（前端 Mock + 手机号/邮箱双输入阶段）的交接历史。当前 `dev` 分支已全面切换为 **「邮箱 + 6 位验证码（Supabase Auth + Resend SMTP，有效期 300 秒）」** 并完成 `phone-auth` 残留清理，最新鉴权契约、云端同步与部署说明请以 `HANDOFF_database.md`、`HANDOFF.md` 与 `src/services/authService.ts` 为准。
 
 > 所在分支：`feat/auth-ui`（基于 `origin/dev` `07c7bc1`，**严格隔离，未触碰 `main` 与 `dev` 分支**）
 > 合并目标：`base: dev <- compare: feat/auth-ui`

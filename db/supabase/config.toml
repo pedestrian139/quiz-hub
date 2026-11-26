@@ -10,15 +10,6 @@ enable_confirmations = true
 otp_length = 6
 otp_expiry = 300
 max_frequency = "60s"
-# A database guard requires a password-authorized first email binding for this one-mailbox flow.
-double_confirm_changes = false
-
-[auth.hook.before_user_created]
-enabled = true
-uri = "pg-functions://postgres/public/quizhub_before_user_created"
-
-[functions.phone-auth]
-verify_jwt = false
 
 [functions.user-data]
 verify_jwt = false

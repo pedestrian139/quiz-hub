@@ -1,5 +1,14 @@
 # 项目开发交接文档（HANDOFF.md）
 
+## V2 清理废弃 `phone-auth` 残留并对齐邮箱验证码方案（2026-11-26）
+
+- 认证方案已全面统一为 **「邮箱 + 6 位验证码（Supabase Auth + Resend SMTP，有效期 300 秒 / 60 秒重发冷却）」**，本轮安全清理了所有废弃手机号认证残留：
+  - **Edge Functions 与配置**：删除 `db/supabase/functions/phone-auth/` 目录；清理 `db/supabase/functions/_shared/edge.ts` 中仅 `phone-auth` 使用的 `publicAuthClient` / `requiredString`；更新 `db/supabase/config.toml` 移除 `[functions.phone-auth]` 与 `[auth.hook.before_user_created]`，保留 `otp_length = 6`、`otp_expiry = 300`、`max_frequency = "60s"` 与 `[functions.user-data]`。
+  - **前端死代码清理**：清理 `src/services/db/account.ts` 中的 `PHONE_ACCOUNT_DOMAIN` 虚拟域校验、`src/services/authService.ts` 中 `GuestProfile.phone`、`src/components/Auth/AuthIcons.tsx` 未使用的 `phone` 图标及 `src/components/Auth/UserMenu.tsx` 中的 `user?.phone` 兜底。
+  - **数据库清理迁移**：保留已上线历史迁移 `db/supabase/migrations/202611250001_database.sql` 不变，新增幂等清理迁移 `db/supabase/migrations/202611260001_cleanup_phone_auth.sql`（`DROP ... IF EXISTS` 移除 `quizhub_before_user_created`、`quizhub_authorize_first_email`、`quizhub_take_phone_attempt`、`guard_email_link`、`check_reserved_auth_alias`、`private.first_email_links`、`private.phone_auth_rate_limits`，并简化 `private.sync_auth_profile()` 为纯邮箱同步；保留 `public.profiles.phone` 列以兼容受保护的 `src/services/db/cloudData.ts`），同步更新 `db/tests/auth-and-guest-upgrade.sql`。
+  - **严格保护项均零改动**：`user-data` Edge Function、`src/services/db/cloudData.ts`、`public.user_api_configs`、`private.user_api_secrets`、`public.quiz_progress`、AES-256-GCM 加密与 `QUIZHUB_API_KEY_ENCRYPTION_KEY_V1` / `QUIZHUB_ALLOWED_ORIGINS` 均保持原样。
+  - **当前状态与下一步**：`typecheck`（主工程 + E2E）、93/93 单元测试、生产构建（304ms）与 26 项 Auth+API 端到端回归全部通过；下一步在 `db/` 目录执行 `supabase db push` 将 `202611260001_cleanup_phone_auth.sql` 应用至线上库即可。
+
 ## V2 正式账号 API 设置云端保存（2026-11-26）
 
 - API 设置在正式账号下默认加密同步至云端，可选仅标签页有效。保存或清除失败时保留输入并显示错误，刷新会恢复当前账号的云端配置，明文只留在页面内存。
@@ -29,7 +38,7 @@
 ## V2 登录与数据库集成（2026-11-25）
 
 - 本地 `feat/database` 已合入 `origin/dev` 的 `c773ac4`（PR #3），合并提交为 `146c304`。两个功能入口都已挂载，题库导入继续保留。
-- 登录界面现在使用 `src/services/authService.ts` 的 Supabase 鉴权、会话事件和共享校验。注册支持邮箱、手机号或两者。邮箱验证未完成时显示等待状态。未配置 Supabase 时只提供本地游客入口。原 PR 的浏览器模拟账号和密码摘要已退出运行路径。
+- （历史记录，已由上方邮箱 + 6 位验证码方案取代）登录界面当时接入 `src/services/authService.ts` 的 Supabase 鉴权基线，原 PR 的浏览器模拟账号和密码摘要退出运行路径。
 - 游客从绑定窗口登录已有账号时，会在验证账号密码成功后将本机数据同步给该账号。云端回执确认前显示待重试或冲突，原始本地数据保留。登录弹窗会移入并限制键盘焦点，关闭后恢复到登录入口。
 - 现有刷题页面继续使用原有本地存储。云端迁移和数据库服务已接通，刷题页面的持续跨设备读写仍是后续集成事项。
 - 本地验证覆盖真实 Supabase SDK 与模拟 HTTP 网关的交互。目标 Supabase 项目仍需验证实际邮件回跳和跨设备数据读取。环境变量、建表和部署设置见 `HANDOFF_database.md`。

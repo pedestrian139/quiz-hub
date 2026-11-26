@@ -1,14 +1,11 @@
 export type AccountIdentifier = { kind: 'email'; value: string };
 
-export const PHONE_ACCOUNT_DOMAIN = 'phone.quizhub.local';
-
 export function detectAccountInput(input: string): { kind: 'email'; valid: boolean; normalized: string; message?: string } {
   const value = input.trim().toLowerCase();
   if (!value) {
     return { kind: 'email', normalized: '', valid: false, message: '请输入邮箱地址。' };
   }
-  const valid = value.length <= 254 && /^[^\s@]+@[^\s@.]+(?:\.[^\s@.]+)+$/.test(value)
-    && !value.endsWith(`@${PHONE_ACCOUNT_DOMAIN}`);
+  const valid = value.length <= 254 && /^[^\s@]+@[^\s@.]+(?:\.[^\s@.]+)+$/.test(value);
   return { kind: 'email', normalized: value, valid, message: valid ? undefined : '请输入有效的邮箱地址。' };
 }
 

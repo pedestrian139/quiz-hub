@@ -23,11 +23,11 @@ describe('database accounts and guest migration', () => {
     resetAllOtpTimingsForTests();
   });
 
-  it('normalizes email identifiers and rejects phone numbers and reserved aliases', () => {
+  it('normalizes email identifiers and rejects phone numbers and invalid email formats', () => {
     expect(normalizeAccount(' USER@example.COM ')).toEqual({ kind: 'email', value: 'user@example.com' });
     expect(() => normalizeAccount('00123456789')).toThrow();
-    expect(() => normalizeAccount('00123456789@phone.quizhub.local')).toThrow();
     expect(() => normalizeAccount('123abc')).toThrow();
+    expect(() => normalizeAccount('user@localhost')).toThrow();
     expect(validateEmailOtp(' 123456 ')).toEqual({ valid: true, normalized: '123456' });
     expect(validateEmailOtp('12345678')).toEqual({ valid: true, normalized: '12345678' });
     expect(validateEmailOtp('')).toMatchObject({ valid: false });

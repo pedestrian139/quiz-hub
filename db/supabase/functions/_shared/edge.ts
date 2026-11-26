@@ -26,20 +26,9 @@ export function backendClient(): SupabaseClient {
   });
 }
 
-export function publicAuthClient(): SupabaseClient {
-  return createClient(requiredEnv('SUPABASE_URL'), gatewayKey('SUPABASE_PUBLISHABLE_KEYS', 'SUPABASE_ANON_KEY'), {
-    auth: { persistSession: false, autoRefreshToken: false, detectSessionInUrl: false },
-  });
-}
-
 export function object(value: unknown): Record<string, unknown> {
   if (!value || typeof value !== 'object' || Array.isArray(value)) throw new HttpError(400, '请求数据格式无效。');
   return value as Record<string, unknown>;
-}
-
-export function requiredString(value: unknown, maxLength: number): string {
-  if (typeof value !== 'string' || !value.length || value.length > maxLength) throw new HttpError(400, '请求字段无效。');
-  return value;
 }
 
 export async function requireOwner(req: Request, body: Record<string, unknown>, admin: SupabaseClient): Promise<User> {
