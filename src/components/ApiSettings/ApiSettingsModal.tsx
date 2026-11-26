@@ -1,22 +1,29 @@
 import { useEffect, useRef, useState, type FormEvent } from 'react';
 import { createPortal } from 'react-dom';
+import { isAccountPracticeScope } from '../../core/practiceScope';
 import { usePracticeScope } from '../../hooks/practiceScope';
 import {
   API_PROVIDER_PRESETS,
   clearApiConfig,
+  createDefaultApiConfig,
   fetchAvailableModels,
+  getCloudMemoryApiConfig,
   getProviderPreset,
+  hasSessionApiConfig,
+  isApiConfigReady,
   isLocalEndpoint,
   isValidHttpUrl,
   loadApiConfig,
   LlmApiError,
   normalizeBaseUrl,
   saveApiConfig,
+  subscribeApiConfig,
   testApiConnection,
   type ApiConfig,
   type ApiConnectionTestResult,
   type ApiProviderId,
 } from '../../services';
+import { clearAccountCloudApiConfig, saveAccountCloudApiConfig } from '../../services/cloudSync';
 import './ApiSettings.css';
 
 export interface ApiSettingsModalProps {
@@ -27,26 +34,42 @@ export interface ApiSettingsModalProps {
 
 export function ApiSettingsModal({ open, onClose, onSaved }: ApiSettingsModalProps) {
   const scope = usePracticeScope();
-  const [draft, setDraft] = useState<ApiConfig>(() => loadApiConfig(scope));
+  const isCloudAccount = isAccountPracticeScope(scope);
+  const [draft, replaceDraft] = useState<ApiConfig>(() => loadApiConfig(scope));
+  const draftEdited = useRef(false);
   const [showKey, setShowKey] = useState(false);
   const [showAdvanced, setShowAdvanced] = useState(false);
   const [testing, setTesting] = useState(false);
+  const [saving, setSaving] = useState(false);
+  const [clearing, setClearing] = useState(false);
   const [testResult, setTestResult] = useState<ApiConnectionTestResult | null>(null);
   const [loadingModels, setLoadingModels] = useState(false);
   const [remoteModels, setRemoteModels] = useState<string[]>([]);
   const [notice, setNotice] = useState<{ tone: 'ok' | 'bad' | 'info'; text: string } | null>(null);
 
+  const busy = saving || clearing;
   const abortRef = useRef<AbortController | null>(null);
+
+  function setDraft(update: (current: ApiConfig) => ApiConfig): void {
+    draftEdited.current = true;
+    replaceDraft(update);
+  }
 
   useEffect(() => {
     if (!open) return;
-    setDraft(loadApiConfig(scope));
+    draftEdited.current = false;
+    replaceDraft(loadApiConfig(scope));
     setShowKey(false);
     setShowAdvanced(false);
+    setSaving(false);
+    setClearing(false);
     setTestResult(null);
     setRemoteModels([]);
     setNotice(null);
-  }, [open, scope]);
+    if (isCloudAccount) return subscribeApiConfig((config) => {
+      if (!draftEdited.current) replaceDraft(config);
+    }, scope);
+  }, [isCloudAccount, open, scope]);
 
   useEffect(() => {
     return () => {
@@ -61,6 +84,7 @@ export function ApiSettingsModal({ open, onClose, onSaved }: ApiSettingsModalPro
       if (e.key === 'Escape') {
         e.preventDefault();
         e.stopPropagation();
+        if (busy) return;
         abortRef.current?.abort();
         onClose();
         return;
@@ -79,7 +103,7 @@ export function ApiSettingsModal({ open, onClose, onSaved }: ApiSettingsModalPro
 
     window.addEventListener('keydown', onKeyDownCapture, true);
     return () => window.removeEventListener('keydown', onKeyDownCapture, true);
-  }, [onClose, open]);
+  }, [busy, onClose, open]);
 
   if (!open || typeof document === 'undefined') {
     return null;
@@ -148,8 +172,9 @@ export function ApiSettingsModal({ open, onClose, onSaved }: ApiSettingsModalPro
     }
   };
 
-  const handleSave = (e: FormEvent) => {
+  const handleSave = async (e: FormEvent) => {
     e.preventDefault();
+    if (busy) return;
     const normalizedUrl = normalizeBaseUrl(draft.baseUrl);
     if (!isValidHttpUrl(normalizedUrl)) {
       setNotice({ tone: 'bad', text: 'API Base URL 格式无效，请填写以 http:// 或 https:// 开头的地址。' });
@@ -174,6 +199,24 @@ export function ApiSettingsModal({ open, onClose, onSaved }: ApiSettingsModalPro
       model: draft.model.trim(),
     };
 
+    if (isAccountPracticeScope(scope) && toSave.storageScope !== 'session') {
+      setSaving(true);
+      setNotice(null);
+      try {
+        await saveAccountCloudApiConfig(scope, toSave);
+        onSaved?.({ ...toSave, storageScope: 'local' });
+        onClose();
+      } catch (error) {
+        setNotice({
+          tone: 'bad',
+          text: error instanceof Error ? `云端保存 API 配置失败。${error.message}` : '云端保存 API 配置失败，请稍后重试。',
+        });
+      } finally {
+        setSaving(false);
+      }
+      return;
+    }
+
     const ok = saveApiConfig(toSave, scope);
     if (!ok) {
       setNotice({
@@ -187,21 +230,51 @@ export function ApiSettingsModal({ open, onClose, onSaved }: ApiSettingsModalPro
     onClose();
   };
 
-  const handleClear = () => {
+  const handleClear = async () => {
+    if (busy) return;
     abortRef.current?.abort();
+
+    if (isAccountPracticeScope(scope)) {
+      setClearing(true);
+      setNotice(null);
+      try {
+        await clearAccountCloudApiConfig(scope);
+        draftEdited.current = false;
+        replaceDraft(createDefaultApiConfig());
+        setTestResult(null);
+        setRemoteModels([]);
+        setNotice({ tone: 'info', text: '已清除云端及当前页面的 API Key 与自定义配置。' });
+      } catch (error) {
+        setNotice({ tone: 'bad', text: error instanceof Error ? `清除云端 API 配置失败。${error.message}` : '清除云端 API 配置失败，请稍后重试。' });
+      } finally {
+        setClearing(false);
+      }
+      return;
+    }
+
     const cleared = clearApiConfig(scope);
-    setDraft(cleared);
+    draftEdited.current = false;
+    replaceDraft(cleared);
     setTestResult(null);
     setRemoteModels([]);
     setNotice({ tone: 'info', text: '已清除本地保存的 API Key 与自定义配置。' });
   };
+
+  const sessionOnlyActive = hasSessionApiConfig(scope);
+  const cloudMemoryActive = getCloudMemoryApiConfig(scope) !== null;
+  const cloudStatusText = sessionOnlyActive
+    ? '当前存储方式：仅当前标签页有效（只存 sessionStorage，未上传云端）'
+    : cloudMemoryActive
+      ? '当前存储方式：已加密同步至云端（明文仅保留在当前页面内存）'
+      : isApiConfigReady(loadApiConfig(scope)) ? '检测到旧版浏览器配置，保存后可同步至云端。'
+        : '当前存储方式：未配置（保存后默认加密同步至云端）';
 
   return createPortal(
     <div
       className="api-modal-backdrop"
       data-testid="api-settings-backdrop"
       onMouseDown={(e) => {
-        if (e.target === e.currentTarget) {
+        if (e.target === e.currentTarget && !busy) {
           abortRef.current?.abort();
           onClose();
         }
@@ -220,7 +293,9 @@ export function ApiSettingsModal({ open, onClose, onSaved }: ApiSettingsModalPro
               大模型 API 设置
             </h2>
             <p className="api-modal__sub">
-              采用通用 OpenAI 兼容协议。密钥仅保存在你的浏览器本地，请求直接发往所填端点，不经过第三方服务器。
+              {isCloudAccount
+                ? '采用通用 OpenAI 兼容协议。默认使用 AES-256-GCM 加密同步至云端，明文仅保留在当前页面内存，绝不写入 localStorage；亦可勾选仅当前标签页有效。'
+                : '采用通用 OpenAI 兼容协议。密钥仅保存在你的浏览器本地，请求直接发往所填端点，不经过第三方服务器。'}
             </p>
           </div>
           <button
@@ -228,6 +303,7 @@ export function ApiSettingsModal({ open, onClose, onSaved }: ApiSettingsModalPro
             className="api-modal__close"
             data-testid="api-settings-close"
             aria-label="关闭 API 设置"
+            disabled={busy}
             onClick={() => {
               abortRef.current?.abort();
               onClose();
@@ -425,29 +501,59 @@ export function ApiSettingsModal({ open, onClose, onSaved }: ApiSettingsModalPro
                     </label>
                   </div>
 
-                  <div className="api-scope-row" role="radiogroup" aria-label="API 密钥保存范围">
-                    <label className="api-radio-label">
-                      <input
-                        type="radio"
-                        name="api-storage-scope"
-                        checked={draft.storageScope === 'local'}
-                        onChange={() => setDraft((prev) => ({ ...prev, storageScope: 'local' }))}
-                      />
-                      持久化到本机浏览器（localStorage）
-                    </label>
-                    <label className="api-radio-label">
-                      <input
-                        type="radio"
-                        name="api-storage-scope"
-                        checked={draft.storageScope === 'session'}
-                        onChange={() => setDraft((prev) => ({ ...prev, storageScope: 'session' }))}
-                      />
-                      仅当前标签页有效（关闭即清除）
-                    </label>
-                  </div>
+                  {!isCloudAccount && (
+                    <div className="api-scope-row" role="radiogroup" aria-label="API 密钥保存范围">
+                      <label className="api-radio-label">
+                        <input
+                          type="radio"
+                          name="api-storage-scope"
+                          checked={draft.storageScope === 'local'}
+                          onChange={() => setDraft((prev) => ({ ...prev, storageScope: 'local' }))}
+                        />
+                        持久化到本机浏览器（localStorage）
+                      </label>
+                      <label className="api-radio-label">
+                        <input
+                          type="radio"
+                          name="api-storage-scope"
+                          checked={draft.storageScope === 'session'}
+                          onChange={() => setDraft((prev) => ({ ...prev, storageScope: 'session' }))}
+                        />
+                        仅当前标签页有效（关闭即清除）
+                      </label>
+                    </div>
+                  )}
                 </>
               )}
             </div>
+
+            {isCloudAccount && (
+              <div className="api-storage-panel" role="radiogroup" aria-label="已登录账号 API 存储方式">
+                <div className="api-storage-panel__status" data-testid="api-storage-status">
+                  {cloudStatusText}
+                </div>
+                <label className="api-radio-label">
+                  <input
+                    type="radio"
+                    name="api-storage-scope"
+                    data-testid="api-scope-cloud"
+                    checked={draft.storageScope === 'local'}
+                    onChange={() => setDraft((prev) => ({ ...prev, storageScope: 'local' }))}
+                  />
+                  <span>已加密同步至云端（默认 · 跨设备可用，密钥不写入 localStorage）</span>
+                </label>
+                <label className="api-radio-label">
+                  <input
+                    type="radio"
+                    name="api-storage-scope"
+                    data-testid="api-scope-session"
+                    checked={draft.storageScope === 'session'}
+                    onChange={() => setDraft((prev) => ({ ...prev, storageScope: 'session' }))}
+                  />
+                  <span>仅当前标签页有效（只存 sessionStorage，不上传云端）</span>
+                </label>
+              </div>
+            )}
 
             {testResult && (
               <div
@@ -480,9 +586,10 @@ export function ApiSettingsModal({ open, onClose, onSaved }: ApiSettingsModalPro
               type="button"
               className="btn btn--ghost"
               data-testid="api-btn-clear"
-              onClick={handleClear}
+              disabled={busy}
+              onClick={() => { void handleClear(); }}
             >
-              清除配置
+              {clearing ? '清除中...' : '清除配置'}
             </button>
 
             <div className="api-modal__footer-group">
@@ -490,13 +597,18 @@ export function ApiSettingsModal({ open, onClose, onSaved }: ApiSettingsModalPro
                 type="button"
                 className="btn btn--ghost"
                 data-testid="api-btn-test"
-                disabled={testing}
+                disabled={testing || busy}
                 onClick={handleTest}
               >
                 {testing ? '测试中...' : '测试连接'}
               </button>
-              <button type="submit" className="btn btn--primary" data-testid="api-btn-save">
-                保存配置
+              <button
+                type="submit"
+                className="btn btn--primary"
+                data-testid="api-btn-save"
+                disabled={busy}
+              >
+                {saving ? '保存中...' : '保存配置'}
               </button>
             </div>
           </div>

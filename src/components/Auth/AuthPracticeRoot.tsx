@@ -1,8 +1,10 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import type { ReactNode } from 'react';
 import { accountPracticeScope, PRACTICE_DATA_CHANGED_EVENT } from '../../core/practiceScope';
 import type { GuestPracticeScope, PracticeScope } from '../../core/practiceScope';
 import { PracticeScopeContext } from '../../hooks/practiceScope';
+import { isAuthConfigured, subscribeAuthChange } from '../../services/authService';
+import { clearCloudSyncSession, hydrateAccountFromCloud } from '../../services/cloudSync';
 import { getActiveGuestPracticeScope, subscribeGuestScopeChanges } from '../../services/db/guestOwnership';
 import { refreshAuthIdentity, useAuthUiState } from './authState';
 import { AuthModal } from './AuthModal';
@@ -13,6 +15,7 @@ export function AuthPracticeRoot({ children }: { children: ReactNode }) {
   const [guestScopeError, setGuestScopeError] = useState(false);
   const [reload, setReload] = useState(0);
   const [revisions, setRevisions] = useState<Partial<Record<PracticeScope, number>>>({});
+  const prevAccountIdRef = useRef<string | null>(null);
 
   useEffect(() => {
     let active = true;
@@ -32,14 +35,35 @@ export function AuthPracticeRoot({ children }: { children: ReactNode }) {
       setRevisions((current) => ({ ...current, [scope]: (current[scope] ?? 0) + 1 }));
     };
     const unsubscribeGuest = subscribeGuestScopeChanges(refreshGuest);
+    const unsubscribeAuth = subscribeAuthChange((event) => {
+      if (event.type === 'guest_migration' && event.result.guestDataSynced
+        && event.result.user.id === prevAccountIdRef.current && isAuthConfigured()) {
+        void hydrateAccountFromCloud(event.result.user.id, { force: true });
+      }
+    });
     window.addEventListener(PRACTICE_DATA_CHANGED_EVENT, onPracticeDataChanged);
     refreshGuest();
     return () => {
       active = false;
       unsubscribeGuest();
+      unsubscribeAuth();
       window.removeEventListener(PRACTICE_DATA_CHANGED_EVENT, onPracticeDataChanged);
     };
   }, [reload]);
+
+  useEffect(() => {
+    if (identityStatus !== 'ready') return;
+    if (user && !user.isGuest && isAuthConfigured()) {
+      if (prevAccountIdRef.current && prevAccountIdRef.current !== user.id) {
+        clearCloudSyncSession(prevAccountIdRef.current);
+      }
+      prevAccountIdRef.current = user.id;
+      void hydrateAccountFromCloud(user.id);
+    } else if (prevAccountIdRef.current) {
+      clearCloudSyncSession(prevAccountIdRef.current);
+      prevAccountIdRef.current = null;
+    }
+  }, [identityStatus, user?.id, user?.isGuest]);
 
   const scope = identityStatus !== 'ready' ? null : user && !user.isGuest ? accountPracticeScope(user.id) : guestScope;
   const unavailable = identityStatus === 'error' || (identityStatus === 'ready' && !scope && guestScopeError);

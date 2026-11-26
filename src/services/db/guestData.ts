@@ -1,7 +1,7 @@
 import { createEmptyStore, loadStore, saveStore, STORAGE_KEY } from '../../core/storage';
 import { LEGACY_GUEST_SCOPE, notifyPracticeDataChanged, practiceStorageKey } from '../../core/practiceScope';
 import type { AccountPracticeScope, GuestPracticeScope, PracticeScope } from '../../core/practiceScope';
-import { API_CONFIG_STORAGE_KEY, sanitizeApiConfig, saveApiConfig } from '../apiConfig';
+import { API_CONFIG_STORAGE_KEY, getCloudMemoryApiConfig, sanitizeApiConfig, setCloudMemoryApiConfig } from '../apiConfig';
 import type { ApiConfig } from '../apiConfig';
 import type { UserStore } from '../../types/quiz';
 import { getBankDb, isStoreNonEmpty, mergeUserStores, sanitizeUserStore } from '../../utils/bankDb';
@@ -121,6 +121,7 @@ export async function adoptGuestData(snapshot: GuestData, source: GuestPracticeS
     bankDb.closeQuizHubDb();
     throw new Error('本机账号存储暂不可用。');
   }
+  let adoptApiConfig = false;
   const copied = await new Promise<boolean>((resolve, reject) => {
     const tx = database.transaction(['banks', 'progress', 'meta'], 'readwrite');
     const banks = tx.objectStore('banks');
@@ -155,8 +156,9 @@ export async function adoptGuestData(snapshot: GuestData, source: GuestPracticeS
           progress.put({ bankId, store: merged, updatedAt: Date.now() });
         }
         const apiConfigKey = practiceStorageKey(API_CONFIG_STORAGE_KEY, target);
-        if (snapshot.apiConfig && !localStorage.getItem(apiConfigKey) && !sessionStorage.getItem(apiConfigKey)
-          && !saveApiConfig(snapshot.apiConfig, target)) throw new Error('无法保存账号的本机 API 配置。');
+        if (snapshot.apiConfig && !sessionStorage.getItem(apiConfigKey) && !getCloudMemoryApiConfig(target)) {
+          adoptApiConfig = true;
+        }
         meta.put({ key: marker, value: true });
         copied = Boolean(snapshot.banks.length || snapshot.progress.length || snapshot.apiConfig);
       } catch (failure) {
@@ -168,5 +170,8 @@ export async function adoptGuestData(snapshot: GuestData, source: GuestPracticeS
     tx.oncomplete = () => resolve(copied);
     tx.onabort = () => reject(error ?? tx.error ?? new Error('无法复制游客数据至本机账号。'));
   });
+  if (copied && adoptApiConfig && snapshot.apiConfig) {
+    setCloudMemoryApiConfig(target, snapshot.apiConfig);
+  }
   if (copied) notifyPracticeDataChanged(target);
 }

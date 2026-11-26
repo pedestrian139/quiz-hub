@@ -26,6 +26,7 @@ interface BankRow {
   revision: number;
 }
 interface ProgressRow { store: UserStore; revision: number; reset_at: string | null }
+interface BankProgressRow extends ProgressRow { bank_id: string }
 interface ApiConfigRow {
   provider: ApiConfig['provider'];
   base_url: string;
@@ -116,6 +117,19 @@ export async function deleteCloudBank(bankId: string, revision: number): Promise
   if (error) throw error;
 }
 
+export async function listCloudProgress(): Promise<Record<string, VersionedProgress>> {
+  const session = await currentSession();
+  const { data, error } = await getDatabaseClient().from('quiz_progress')
+    .select('bank_id,store,revision,reset_at')
+    .eq('user_id', session.user.id);
+  if (error) throw error;
+  const result: Record<string, VersionedProgress> = {};
+  for (const row of (data ?? []) as BankProgressRow[]) {
+    result[row.bank_id] = toProgress(row);
+  }
+  return result;
+}
+
 export async function loadCloudProgress(bankId: string): Promise<VersionedProgress> {
   const session = await currentSession();
   const { data, error } = await getDatabaseClient().from('quiz_progress').select('store,revision,reset_at')
@@ -150,26 +164,27 @@ export async function loadCloudApiConfig(): Promise<CloudApiSummary | null> {
   return data ? toApiSummary(data) : null;
 }
 
-async function userData<T>(action: string, fields: Record<string, unknown> = {}): Promise<T> {
+async function userData<T>(action: string, fields: Record<string, unknown> = {}, expectedOwnerId?: string): Promise<T> {
   const session = await currentSession();
+  if (expectedOwnerId && session.user.id !== expectedOwnerId) throw new Error('登录账号已变更，请重新打开 API 设置。');
   return invokeDatabaseFunction<T>('user-data', { action, ...fields, ownerId: session.user.id }, session.access_token);
 }
 
-export async function saveCloudApiConfig(config: ApiConfig): Promise<CloudApiSummary> {
+export async function saveCloudApiConfig(config: ApiConfig, ownerId?: string): Promise<CloudApiSummary> {
   if (config.storageScope === 'session') throw new Error('仅当前标签页的配置留在本地。');
-  const row = await userData<ApiConfigRow>('save_api_config', { config });
+  const row = await userData<ApiConfigRow>('save_api_config', { config }, ownerId);
   return toApiSummary(row);
 }
 
-export async function restoreCloudApiConfig(): Promise<ApiConfig | null> {
-  const { config, apiKey } = await userData<{ config: ApiConfigRow | null; apiKey: string }>('restore_api_config');
+export async function restoreCloudApiConfig(ownerId?: string): Promise<ApiConfig | null> {
+  const { config, apiKey } = await userData<{ config: ApiConfigRow | null; apiKey: string }>('restore_api_config', {}, ownerId);
   if (!config) return null;
   const { hasKey: _hasKey, ...preferences } = toApiSummary(config);
   return { ...preferences, apiKey };
 }
 
-export async function clearCloudApiConfig(): Promise<void> {
-  await userData('clear_api_config');
+export async function clearCloudApiConfig(ownerId?: string): Promise<void> {
+  await userData('clear_api_config', {}, ownerId);
 }
 
 export async function uploadGuestData(ownerId: string, batch: GuestImportBatch, data: GuestData): Promise<GuestImportResult> {

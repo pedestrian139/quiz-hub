@@ -90,7 +90,7 @@ test.describe('V2 API Integration (feat/api-integration)', () => {
         messages?: Array<{ role: string; content: string }>;
       };
       const lastUser = body.messages?.[body.messages.length - 1]?.content ?? '';
-      const reply = lastUser.includes('为什么')
+      const reply = lastUser === '为什么选这个？'
         ? '这是一个直观的追问回复：**核心概念**对比非常清晰。'
         : '1) **核心考点**：识别基本概念。\n- 记忆口诀：先抓关键词，再排干扰项。';
       await route.fulfill({
@@ -120,6 +120,8 @@ test.describe('V2 API Integration (feat/api-integration)', () => {
     await page.getByTestId('ai-chat-send').click();
     await expect(page.getByTestId('ai-chat-card')).toContainText('这是一个直观的追问回复');
 
+    // The input causes Playwright to scroll under the sticky navigation. Audit the resting layout.
+    await page.evaluate(() => window.scrollTo({ top: 0, behavior: 'instant' }));
     await assertNoHorizontalOverflow(page);
     await assertNoOverlappingControls(page);
   });

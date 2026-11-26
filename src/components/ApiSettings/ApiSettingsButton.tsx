@@ -17,6 +17,7 @@ export function ApiSettingsButton() {
   const [open, setOpen] = useState(false);
 
   useEffect(() => {
+    setConfig(loadApiConfig(scope));
     const unsubscribe = subscribeApiConfig(setConfig, scope);
     const onOpenRequest = () => setOpen(true);
     window.addEventListener(OPEN_API_SETTINGS_EVENT, onOpenRequest);

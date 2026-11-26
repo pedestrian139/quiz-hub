@@ -1,11 +1,13 @@
 import { useEffect, useRef, useState } from 'react';
 import { isAuthConfigured, logout, resumeGuestUpgrade, syncLocalData } from '../../services/authService';
+import { hydrateAccountFromCloud, retryCloudSync, useCloudSyncState } from '../../services/cloudSync';
 import { AuthIcon } from './AuthIcons';
 import { openAuthModal, refreshAuthIdentity, useAuthUiState } from './authState';
 import './Auth.css';
 
 export function UserMenu() {
   const { user, migrationStatus } = useAuthUiState();
+  const cloudSync = useCloudSyncState();
   const [menuOpen, setMenuOpen] = useState(false);
   const [syncing, setSyncing] = useState(false);
   const [accountError, setAccountError] = useState<string | null>(null);
@@ -61,8 +63,17 @@ export function UserMenu() {
     setSyncing(true);
     setAccountError(null);
     try {
-      if (migrationStatus === 'pending' || migrationStatus === 'conflict') await resumeGuestUpgrade();
-      else await syncLocalData({ includeGuest });
+      if (migrationStatus === 'pending' || migrationStatus === 'conflict') {
+        await resumeGuestUpgrade();
+        if (user && !user.isGuest) await hydrateAccountFromCloud(user.id, { force: true });
+      } else if (!includeGuest && user && !user.isGuest
+        && cloudSync.accountId === user.id
+        && (cloudSync.status === 'error' || cloudSync.status === 'conflict' || cloudSync.pendingCount > 0)) {
+        await retryCloudSync(user.id);
+      } else {
+        await syncLocalData({ includeGuest });
+        if (user && !user.isGuest) await hydrateAccountFromCloud(user.id, { force: true });
+      }
     } catch {
       setAccountError('同步未完成，请稍后重试。');
     } finally {
@@ -70,12 +81,31 @@ export function UserMenu() {
     }
   };
 
+  const handleRetryCloud = async () => {
+    if (!user || user.isGuest) return;
+    setSyncing(true);
+    setAccountError(null);
+    try {
+      await retryCloudSync(user.id);
+    } catch {
+      setAccountError('云端同步重试失败，请稍后重试。');
+    } finally {
+      setSyncing(false);
+    }
+  };
+
   const configured = isAuthConfigured();
   const avatarInitial = user?.nickname ? user.nickname.slice(0, 1).toUpperCase() : 'U';
-  const boundAccountValue = [user?.phone, user?.email].filter(Boolean).join(' · ');
-  const syncLabel = syncing ? '正在同步本机进度' : migrationStatus === 'pending' ? '同步待重试'
-    : migrationStatus === 'conflict' ? '部分本机数据与云端冲突'
-      : migrationStatus === 'synced' ? '游客数据已同步' : '账号已登录';
+  const boundAccountValue = user?.email || user?.phone || '';
+  const sameCloudAccount = Boolean(user && !user.isGuest && cloudSync.accountId === user.id);
+  const showCloudBusy = sameCloudAccount && (cloudSync.status === 'hydrating' || cloudSync.status === 'syncing');
+  const showCloudProblem = sameCloudAccount && (cloudSync.status === 'error' || cloudSync.status === 'conflict');
+  const syncLabel = syncing ? '正在同步本机进度'
+    : migrationStatus === 'pending' ? '同步待重试'
+      : migrationStatus === 'conflict' ? '部分本机数据与云端冲突'
+        : showCloudProblem ? (cloudSync.status === 'conflict' ? '云端数据冲突' : '云端同步失败')
+          : showCloudBusy ? '正在同步云端数据…'
+            : migrationStatus === 'synced' ? '游客数据已同步' : '账号已登录';
 
   return (
     <div className="auth-bar" role="region" aria-label="账户与云端同步状态">
@@ -126,8 +156,22 @@ export function UserMenu() {
         {user !== null && !user.isGuest && (
           <>
             <div className="auth-bar__status">
-              <span className="auth-bar__dot auth-bar__dot--ready" aria-hidden="true" />
+              <span
+                className={`auth-bar__dot ${showCloudProblem ? 'auth-bar__dot--error' : showCloudBusy ? 'auth-bar__dot--guest' : 'auth-bar__dot--ready'}`}
+                aria-hidden="true"
+              />
               <span data-testid="auth-sync-status" role="status">{syncLabel}</span>
+              {showCloudProblem && !migrationStatus?.match(/pending|conflict/) && (
+                <button
+                  type="button"
+                  className="auth-inline-retry"
+                  data-testid="auth-cloud-retry-btn"
+                  disabled={syncing}
+                  onClick={() => { void handleRetryCloud(); }}
+                >
+                  重试
+                </button>
+              )}
             </div>
             <div className="auth-bar__actions">
               <div className="auth-user-menu" ref={menuRef}>

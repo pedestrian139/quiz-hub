@@ -1,7 +1,21 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { createEmptyStore } from '../core/storage';
+import {
+  BANK_LIBRARY_SYNCED_EVENT,
+  BUILTIN_PROGRESS_SYNCED_EVENT,
+  isAccountPracticeScope,
+  notifyBuiltinProgressSynced,
+  type PracticeScope,
+} from '../core/practiceScope';
+import { createEmptyStore, resetStore, saveStore } from '../core/storage';
 import type { StoreApi } from '../hooks/usePersistentStore';
 import { usePracticeScope } from '../hooks/practiceScope';
+import {
+  queueCloudProgressSave,
+  syncCloudBankCreate,
+  syncCloudBankDelete,
+  syncCloudBankUpdate,
+  syncCloudProgressReset,
+} from '../services/cloudSync';
 import type { UserStore } from '../types/quiz';
 import { BUILTIN_AI_BANK, buildBankViewModel, type BankViewModel } from './bankCatalog';
 import { getBankDb, type CreateCustomBankInput } from './bankDb';
@@ -32,7 +46,8 @@ function sortLibraryBanks(customBanks: BankRecord[]): BankRecord[] {
 }
 
 export function useBankLibrary(): BankLibraryApi {
-  const bankDb = getBankDb(usePracticeScope());
+  const scope = usePracticeScope();
+  const bankDb = getBankDb(scope);
   const [ready, setReady] = useState(false);
   const [migratedFromV1, setMigratedFromV1] = useState(false);
   const [banks, setBanks] = useState<BankRecord[]>(() => [BUILTIN_AI_BANK]);
@@ -94,10 +109,49 @@ export function useBankLibrary(): BankLibraryApi {
       }
       setReady(true);
     });
+
+    const onBankLibrarySynced = (event: Event) => {
+      const detail = (event as CustomEvent<{ scope: PracticeScope }>).detail;
+      if (detail?.scope !== scope) return;
+      void bankDb.initBankDb(BUILTIN_AI_BANK).then((res) => {
+        if (cancelled) return;
+        const syncedBanks = sortLibraryBanks(res.banks);
+        banksRef.current = syncedBanks;
+        setBanks(syncedBanks);
+
+        const nextProgress: Record<string, UserStore> = { ...res.progressByBank };
+        for (const b of syncedBanks) {
+          if (!nextProgress[b.id]) {
+            nextProgress[b.id] = createEmptyStore();
+          }
+        }
+        progressRef.current = nextProgress;
+        setProgressByBank(nextProgress);
+
+        const validIds = new Set(syncedBanks.map((b) => b.id));
+        if (!validIds.has(activeBankIdRef.current)) {
+          activeBankIdRef.current = BUILTIN_AI_BANK_ID;
+          setActiveBankIdState(BUILTIN_AI_BANK_ID);
+        }
+      });
+    };
+
+    const onBuiltinSynced = (event: Event) => {
+      const detail = (event as CustomEvent<{ scope: PracticeScope; store: UserStore }>).detail;
+      if (detail?.scope !== scope) return;
+      const nextMap = { ...progressRef.current, [BUILTIN_AI_BANK_ID]: detail.store };
+      progressRef.current = nextMap;
+      setProgressByBank(nextMap);
+    };
+
+    window.addEventListener(BANK_LIBRARY_SYNCED_EVENT, onBankLibrarySynced);
+    window.addEventListener(BUILTIN_PROGRESS_SYNCED_EVENT, onBuiltinSynced);
     return () => {
       cancelled = true;
+      window.removeEventListener(BANK_LIBRARY_SYNCED_EVENT, onBankLibrarySynced);
+      window.removeEventListener(BUILTIN_PROGRESS_SYNCED_EVENT, onBuiltinSynced);
     };
-  }, [bankDb]);
+  }, [bankDb, scope]);
 
   const getProgressFor = useCallback((bankId: string): UserStore => {
     return progressRef.current[bankId] ?? createEmptyStore();
@@ -109,8 +163,15 @@ export function useBankLibrary(): BankLibraryApi {
     progressRef.current = nextMap;
     setProgressByBank(nextMap);
     void bankDb.saveBankProgress(bankId, next);
+    if (bankId === BUILTIN_AI_BANK_ID) {
+      saveStore(next, scope);
+      notifyBuiltinProgressSynced(scope, next);
+    }
+    if (isAccountPracticeScope(scope)) {
+      queueCloudProgressSave(scope, bankId, next);
+    }
     return true;
-  }, [bankDb]);
+  }, [bankDb, scope]);
 
   const updateFor = useCallback(
     (bankId: string, fn: (prev: UserStore) => UserStore): UserStore => {
@@ -122,14 +183,25 @@ export function useBankLibrary(): BankLibraryApi {
     [commitFor],
   );
 
-  const wipeFor = useCallback((bankId: string): void => {
+  const wipeLocalFor = useCallback((bankId: string): void => {
     dirtyProgressRef.current.add(bankId);
     const empty = createEmptyStore();
     const nextMap = { ...progressRef.current, [bankId]: empty };
     progressRef.current = nextMap;
     setProgressByBank(nextMap);
     void bankDb.resetBankProgress(bankId);
-  }, [bankDb]);
+    if (bankId === BUILTIN_AI_BANK_ID) {
+      resetStore(scope);
+      notifyBuiltinProgressSynced(scope, empty);
+    }
+  }, [bankDb, scope]);
+
+  const wipeFor = useCallback((bankId: string): void => {
+    wipeLocalFor(bankId);
+    if (isAccountPracticeScope(scope)) {
+      void syncCloudProgressReset(scope, bankId);
+    }
+  }, [scope, wipeLocalFor]);
 
   const storeApiFor = useCallback(
     (bankId: string): StoreApi => ({
@@ -177,9 +249,13 @@ export function useBankLibrary(): BankLibraryApi {
         await bankDb.setActiveBankId(created.id);
       }
 
+      if (isAccountPracticeScope(scope)) {
+        await syncCloudBankCreate(scope, created);
+      }
+
       return created;
     },
-    [bankDb],
+    [bankDb, scope],
   );
 
   const renameBank = useCallback(
@@ -191,9 +267,12 @@ export function useBankLibrary(): BankLibraryApi {
       );
       banksRef.current = nextBanks;
       setBanks(nextBanks);
+      if (isAccountPracticeScope(scope)) {
+        await syncCloudBankUpdate(scope, updated);
+      }
       return true;
     },
-    [bankDb],
+    [bankDb, scope],
   );
 
   const deleteBank = useCallback(async (bankId: string): Promise<boolean> => {
@@ -215,14 +294,20 @@ export function useBankLibrary(): BankLibraryApi {
       setActiveBankIdState(BUILTIN_AI_BANK_ID);
       await bankDb.setActiveBankId(BUILTIN_AI_BANK_ID);
     }
+    if (isAccountPracticeScope(scope)) {
+      await syncCloudBankDelete(scope, bankId);
+    }
     return true;
-  }, [bankDb]);
+  }, [bankDb, scope]);
 
   const clearBankProgress = useCallback(
     async (bankId: string): Promise<void> => {
-      wipeFor(bankId);
+      wipeLocalFor(bankId);
+      if (isAccountPracticeScope(scope)) {
+        await syncCloudProgressReset(scope, bankId);
+      }
     },
-    [wipeFor],
+    [scope, wipeLocalFor],
   );
 
   const activeBank = useMemo(

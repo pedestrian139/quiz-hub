@@ -2,7 +2,15 @@ import 'fake-indexeddb/auto';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { resetStore, saveStore } from '../../src/core/storage';
 import { API_CONFIG_STORAGE_KEY, createDefaultApiConfig } from '../../src/services/apiConfig';
-import { normalizeAccount } from '../../src/services/db/account';
+import {
+  OTP_COOLDOWN_SECONDS,
+  OTP_VALIDITY_SECONDS,
+  clearOtpTiming,
+  getOtpTiming,
+  recordOtpSent,
+  resetAllOtpTimingsForTests,
+} from '../../src/components/Auth/otpThrottle';
+import { normalizeAccount, validateEmailOtp } from '../../src/services/db/account';
 import { readGuestData } from '../../src/services/db/guestData';
 import { savePendingUpgrade, readPendingUpgrade } from '../../src/services/db/guestUpgrade';
 import { closeQuizHubDb, createCustomBank, initBankDb, resetBankProgress, saveBankProgress } from '../../src/utils/bankDb';
@@ -12,20 +20,27 @@ describe('database accounts and guest migration', () => {
   beforeEach(() => {
     localStorage.clear();
     sessionStorage.clear();
+    resetAllOtpTimingsForTests();
   });
 
-  it('normalizes alternate sign-in identifiers and rejects reserved aliases', () => {
+  it('normalizes email identifiers and rejects phone numbers and reserved aliases', () => {
     expect(normalizeAccount(' USER@example.COM ')).toEqual({ kind: 'email', value: 'user@example.com' });
-    expect(normalizeAccount('00123456789')).toEqual({ kind: 'phone', value: '00123456789' });
+    expect(() => normalizeAccount('00123456789')).toThrow();
     expect(() => normalizeAccount('00123456789@phone.quizhub.local')).toThrow();
     expect(() => normalizeAccount('123abc')).toThrow();
+    expect(validateEmailOtp(' 123456 ')).toEqual({ valid: true, normalized: '123456' });
+    expect(validateEmailOtp('12345678')).toEqual({ valid: true, normalized: '12345678' });
+    expect(validateEmailOtp('')).toMatchObject({ valid: false });
+    expect(validateEmailOtp('12345')).toMatchObject({ valid: false });
+    expect(validateEmailOtp('123456789')).toMatchObject({ valid: false });
+    expect(validateEmailOtp('12ab56')).toMatchObject({ valid: false });
   });
 
-  it('binds a pending migration to the selected identity without saving its password', () => {
+  it('binds a pending migration to the selected email without saving its password', () => {
     const pending = savePendingUpgrade(normalizeAccount('user@example.com'));
     expect(readPendingUpgrade()).toEqual(pending);
     expect(savePendingUpgrade(normalizeAccount('USER@example.com'))).toEqual(pending);
-    expect(savePendingUpgrade(normalizeAccount('00123456789')).importId).not.toBe(pending.importId);
+    expect(savePendingUpgrade(normalizeAccount('other@example.com')).importId).not.toBe(pending.importId);
   });
 
   it('reads legacy progress, imported banks and only the locally persistent API configuration', async () => {
@@ -70,5 +85,36 @@ describe('database accounts and guest migration', () => {
     const failedOpen = vi.spyOn(indexedDB, 'open').mockImplementation(() => { throw new Error('Storage unavailable'); });
     try { await expect(readGuestData()).rejects.toThrow(); } finally { failedOpen.mockRestore(); }
     expect((await readGuestData()).banks.some(({ id }) => id === bank.id)).toBe(true);
+  });
+
+  it('enforces a 60s per-email OTP resend cooldown and 5-minute validity window', () => {
+    expect(OTP_COOLDOWN_SECONDS).toBe(60);
+    expect(OTP_VALIDITY_SECONDS).toBe(300);
+
+    const t0 = 1_700_000_000_000;
+    expect(recordOtpSent(' User@Example.com ', t0)).toMatchObject({
+      sent: true,
+      cooldownSeconds: 60,
+      remainingSeconds: 300,
+    });
+    expect(getOtpTiming('other@example.com', t0).sent).toBe(false);
+    expect(getOtpTiming('user@example.com', t0 + 30_000)).toMatchObject({
+      sent: true,
+      cooldownSeconds: 30,
+      remainingSeconds: 270,
+    });
+    expect(getOtpTiming('user@example.com', t0 + 60_000)).toMatchObject({
+      sent: true,
+      cooldownSeconds: 0,
+      remainingSeconds: 240,
+    });
+    expect(getOtpTiming('user@example.com', t0 + 300_000)).toMatchObject({
+      sent: true,
+      cooldownSeconds: 0,
+      remainingSeconds: 0,
+    });
+
+    clearOtpTiming('user@example.com');
+    expect(getOtpTiming('user@example.com', t0 + 10_000).sent).toBe(false);
   });
 });
