@@ -11,7 +11,7 @@ import {
 } from '../data/catalog';
 import type { BankViewModel } from '../utils/bankCatalog';
 import type { ImportModalTab } from '../utils/BankLibraryContext';
-import { BUILTIN_AI_BANK_ID, type BankRecord } from '../utils/quizImportTypes';
+import { BUILTIN_GUIDE_BANK_ID, type BankRecord } from '../utils/quizImportTypes';
 import { ROUTE_HASH } from '../router/useHashRoute';
 import { Icon } from '../components/Icons';
 
@@ -57,13 +57,13 @@ export function HubPage({
   onOpenImport,
 }: HubPageProps) {
   const { bank, counts, chapters, questions } = viewModel;
-  const isBuiltinBank = activeBankId === BUILTIN_AI_BANK_ID;
+  const usesGuideHandbook = activeBankId === BUILTIN_GUIDE_BANK_ID;
   const accuracyLabel = stats.accuracyPct === null ? '—' : `${stats.accuracyPct}%`;
   const overallCoverage =
     stats.totalCount > 0 ? Math.round((stats.practicedCount / stats.totalCount) * 100) : 0;
 
   const chapterProgress = useMemo<ChapterProgress[]>(() => {
-    const sectionsById = isBuiltinBank
+    const sectionsById = usesGuideHandbook
       ? new Map(NOTES.chapters.map((c) => [c.id, c.sections.length]))
       : new Map<number, number>();
     return chapters.map((ch) => {
@@ -81,7 +81,7 @@ export function HubPage({
         coveragePct: s.totalCount > 0 ? Math.round((s.practicedCount / s.totalCount) * 100) : 0,
       };
     });
-  }, [chapters, isBuiltinBank, questions, store]);
+  }, [chapters, usesGuideHandbook, questions, store]);
 
   return (
     <div className="page-wrap page-wrap--hub">
@@ -142,7 +142,7 @@ export function HubPage({
             共 {counts.total} 道题
           </span>
           <span data-testid="hub-badge-chapters" className="pill pill--neutral">
-            {isBuiltinBank
+            {usesGuideHandbook
               ? `覆盖 ${chapters.length} 章 · ${SECTION_COUNT} 小节`
               : `覆盖 ${chapters.length} 章`}
           </span>

@@ -1,7 +1,8 @@
 import { expect, test } from './helpers/fixtures';
 import { assertFullLayoutAudit } from './helpers/audit';
 import { installAuthGateway } from './helpers/authGateway';
-import { gotoRoute, modeCard, navLink, quizProgressText, statCard } from './helpers/selectors';
+import { filterOrder, gotoRoute, modeCard, navLink, quizOption, quizProgressText, statCard } from './helpers/selectors';
+import { BUILTIN_GUIDE_BANK_ID } from './helpers/fixtureBank';
 
 const authDisabled = process.env.PW_AUTH_DISABLED === '1';
 const progress = { records: { 'guest-question': { ok: 1, ts: 123 } }, fav: {}, mastery: {} };
@@ -296,7 +297,7 @@ test.describe('Tier 6: Auth UI with the Supabase client (Email + OTP)', () => {
     await trigger.click();
     await sync.click();
     await expect.poll(() => gateway.imports.length).toBe(1);
-    expect(gateway.imports[0]).toMatchObject({ ownerId: first.user_id, progress: [expect.objectContaining({ bankId: 'builtin-ai-intro' })] });
+    expect(gateway.imports[0]).toMatchObject({ ownerId: first.user_id, progress: [expect.objectContaining({ bankId: BUILTIN_GUIDE_BANK_ID })] });
   });
 
   test('syncs API config to cloud in memory only, respects tab-only session mode, clears cloud config, and purges on logout', async ({ page, healthTrap }) => {
@@ -403,12 +404,15 @@ test.describe('Tier 6: Auth UI with the Supabase client (Email + OTP)', () => {
     await page.getByTestId('btn-close-quiz-import').click();
 
     // Star a built-in question -> debounced sync to cloud
+    await page.getByTestId('bank-switcher').selectOption(BUILTIN_GUIDE_BANK_ID);
+    await filterOrder(page).selectOption('seq');
     await modeCard(page, 'choice').click();
+    await quizOption(page, 0).click();
     const star = page.getByTestId('btn-star');
     await star.click();
     await expect(star).toHaveClass(/is-starred/);
     await expect.poll(() => {
-      const entry = gateway.getCloudProgress('syncreader@example.com', 'builtin-ai-intro');
+      const entry = gateway.getCloudProgress('syncreader@example.com', BUILTIN_GUIDE_BANK_ID);
       return entry ? Object.keys(entry.store.fav).length : 0;
     }).toBe(1);
 
@@ -437,19 +441,28 @@ test.describe('Tier 6: Auth UI with the Supabase client (Email + OTP)', () => {
     await page.getByTestId('btn-close-quiz-import').click();
 
     // Simulate concurrent edit from another device bumping revision -> triggers 40001 and 3-way merge
-    gateway.mutateCloudProgressExternally('syncreader@example.com', 'builtin-ai-intro', (prev) => ({
+    gateway.mutateCloudProgressExternally('syncreader@example.com', BUILTIN_GUIDE_BANK_ID, (prev) => ({
       ...prev,
-      fav: { ...prev.fav, 'syn-c1-s1-04': true },
+      records: { ...prev.records, 'qh-guide-choice-02': { ok: 0, choice: 0, ts: Date.now() } },
+      fav: { ...prev.fav, 'qh-guide-choice-02': true },
+      aiExplanations: { 'qh-guide-choice-02': { content: '另一台设备保存的解析', updatedAt: Date.now() } },
     }));
 
-    await modeCard(page, 'tf').click();
+    await modeCard(page, 'multi').click();
     healthTrap.expectHttpError('http://127.0.0.1:49391/rest/v1/rpc/quizhub_save_progress', 409);
     await star.click();
 
     await expect.poll(() => {
-      const entry = gateway.getCloudProgress('syncreader@example.com', 'builtin-ai-intro');
+      const entry = gateway.getCloudProgress('syncreader@example.com', BUILTIN_GUIDE_BANK_ID);
       return entry ? Object.keys(entry.store.fav).length : 0;
     }).toBe(3);
+    expect(gateway.getCloudProgress('syncreader@example.com', BUILTIN_GUIDE_BANK_ID)?.store).toMatchObject({
+      records: {
+        'qh-guide-choice-01': { ok: 1 },
+        'qh-guide-choice-02': { ok: 0 },
+      },
+      aiExplanations: { 'qh-guide-choice-02': { content: '另一台设备保存的解析' } },
+    });
 
     await navLink(page, 'quiz').click();
     await expect(statCard(page, 'fav')).toContainText('3');

@@ -345,7 +345,7 @@ export async function installAuthGateway(page: Page) {
       case '/rest/v1/rpc/quizhub_save_progress': {
         if (!signedIn) return respond({ code: '42501', message: 'Authentication required' }, 401);
         const bankId = String(body.p_bank_id ?? '');
-        if (bankId !== 'builtin-ai-intro') {
+        if (bankId !== 'builtin-ai-intro' && bankId !== 'builtin-quizhub-guide') {
           const bank = userBanks(signedIn.user_id).get(bankId);
           if (!bank || bank.deleted_at) {
             return respond({ code: '42501', message: 'Bank not found' }, 403);

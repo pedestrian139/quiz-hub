@@ -18,9 +18,9 @@ import {
   syncCloudProgressReset,
 } from '../services/cloudSync';
 import type { UserStore } from '../types/quiz';
-import { BUILTIN_AI_BANK, buildBankViewModel, type BankViewModel } from './bankCatalog';
+import { BUILTIN_AI_BANK, BUILTIN_GUIDE_BANK, buildBankViewModel, type BankViewModel } from './bankCatalog';
 import { getBankDb, type CreateCustomBankInput } from './bankDb';
-import { BUILTIN_AI_BANK_ID, type BankRecord } from './quizImportTypes';
+import { BUILTIN_AI_BANK_ID, BUILTIN_GUIDE_BANK_ID, isBuiltinBankId, type BankRecord } from './quizImportTypes';
 
 export interface BankLibraryApi {
   ready: boolean;
@@ -28,6 +28,7 @@ export interface BankLibraryApi {
   error: string | null;
   migratedFromV1: boolean;
   banks: BankRecord[];
+  switchableBanks: BankRecord[];
   activeBank: BankRecord;
   activeBankId: string;
   activeViewModel: BankViewModel;
@@ -52,9 +53,17 @@ export interface BankLibraryApi {
 
 function sortLibraryBanks(customBanks: BankRecord[]): BankRecord[] {
   const customSorted = [...customBanks]
-    .filter((b) => b.id !== BUILTIN_AI_BANK_ID && !b.builtin)
+    .filter((b) => !isBuiltinBankId(b.id) && !b.builtin)
     .sort((a, b) => b.updatedAt - a.updatedAt || b.createdAt - a.createdAt);
-  return [BUILTIN_AI_BANK, ...customSorted];
+  return [BUILTIN_GUIDE_BANK, ...customSorted];
+}
+
+const HISTORICAL_BANK_IDS = [BUILTIN_AI_BANK_ID];
+
+function canRestoreLegacyBank(scope: PracticeScope, store: UserStore | undefined): boolean {
+  return isAccountPracticeScope(scope) && Boolean(store && BUILTIN_AI_BANK.data.questions.some(({ id }) =>
+    Object.hasOwn(store.records, id) || store.fav[id] === true || Object.hasOwn(store.mastery, id),
+  ));
 }
 
 export function useBankLibrary(): BankLibraryApi {
@@ -63,10 +72,10 @@ export function useBankLibrary(): BankLibraryApi {
   const [ready, setReady] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [migratedFromV1, setMigratedFromV1] = useState(false);
-  const [banks, setBanks] = useState<BankRecord[]>(() => [BUILTIN_AI_BANK]);
-  const [activeBankId, setActiveBankIdState] = useState<string>(BUILTIN_AI_BANK_ID);
+  const [banks, setBanks] = useState<BankRecord[]>(() => [BUILTIN_GUIDE_BANK]);
+  const [activeBankId, setActiveBankIdState] = useState<string>(BUILTIN_GUIDE_BANK_ID);
   const [progressByBank, setProgressByBank] = useState<Record<string, UserStore>>(() => ({
-    [BUILTIN_AI_BANK_ID]: createEmptyStore(),
+    [BUILTIN_GUIDE_BANK_ID]: createEmptyStore(),
   }));
 
   const activeBankIdRef = useRef<string>(activeBankId);
@@ -75,11 +84,13 @@ export function useBankLibrary(): BankLibraryApi {
   const dirtyProgressRef = useRef<Set<string>>(new Set());
   const bankWriteQueuesRef = useRef<Map<string, Promise<unknown>>>(new Map());
   const activeTouchedRef = useRef(false);
+  const mountedRef = useRef(false);
 
   useEffect(() => {
     let cancelled = false;
+    mountedRef.current = true;
     void bankDb
-      .initBankDb(BUILTIN_AI_BANK)
+      .initBankDb(BUILTIN_GUIDE_BANK, HISTORICAL_BANK_IDS)
       .then((res) => {
         if (cancelled) return;
         setError(null);
@@ -114,9 +125,10 @@ export function useBankLibrary(): BankLibraryApi {
 
       if (!activeTouchedRef.current) {
         const validIds = new Set(nextBanks.map((b) => b.id));
-        const nextActive = validIds.has(res.activeBankId)
+        const nextActive = validIds.has(res.activeBankId) ||
+          (res.activeBankId === BUILTIN_AI_BANK_ID && canRestoreLegacyBank(scope, nextProgress[BUILTIN_AI_BANK_ID]))
           ? res.activeBankId
-          : BUILTIN_AI_BANK_ID;
+          : BUILTIN_GUIDE_BANK_ID;
         activeBankIdRef.current = nextActive;
         setActiveBankIdState(nextActive);
       }
@@ -135,7 +147,7 @@ export function useBankLibrary(): BankLibraryApi {
     const onBankLibrarySynced = (event: Event) => {
       const detail = (event as CustomEvent<{ scope: PracticeScope }>).detail;
       if (detail?.scope !== scope) return;
-      void bankDb.initBankDb(BUILTIN_AI_BANK).then((res) => {
+      void bankDb.initBankDb(BUILTIN_GUIDE_BANK, HISTORICAL_BANK_IDS).then((res) => {
         if (cancelled) return;
         const syncedById = new Map(res.banks.map((b) => [b.id, b]));
         for (const [queuedId] of bankWriteQueuesRef.current) {
@@ -160,10 +172,13 @@ export function useBankLibrary(): BankLibraryApi {
         setProgressByBank(nextProgress);
 
         const validIds = new Set(syncedBanks.map((b) => b.id));
-        if (!validIds.has(activeBankIdRef.current)) {
-          activeBankIdRef.current = BUILTIN_AI_BANK_ID;
-          setActiveBankIdState(BUILTIN_AI_BANK_ID);
+        if (!validIds.has(activeBankIdRef.current) &&
+          !(activeBankIdRef.current === BUILTIN_AI_BANK_ID && canRestoreLegacyBank(scope, nextProgress[BUILTIN_AI_BANK_ID]))) {
+          activeBankIdRef.current = BUILTIN_GUIDE_BANK_ID;
+          setActiveBankIdState(BUILTIN_GUIDE_BANK_ID);
         }
+      }).catch(() => {
+        if (!cancelled) setError('无法更新本机题库，请刷新后重试。');
       });
     };
 
@@ -179,6 +194,7 @@ export function useBankLibrary(): BankLibraryApi {
     window.addEventListener(BUILTIN_PROGRESS_SYNCED_EVENT, onBuiltinSynced);
     return () => {
       cancelled = true;
+      mountedRef.current = false;
       window.removeEventListener(BANK_LIBRARY_SYNCED_EVENT, onBankLibrarySynced);
       window.removeEventListener(BUILTIN_PROGRESS_SYNCED_EVENT, onBuiltinSynced);
     };
@@ -188,12 +204,12 @@ export function useBankLibrary(): BankLibraryApi {
     return progressRef.current[bankId] ?? createEmptyStore();
   }, []);
 
-  const commitFor = useCallback((bankId: string, next: UserStore): boolean => {
+  const persistProgressFor = useCallback((bankId: string, next: UserStore, requireStorage = false): Promise<boolean> => {
     dirtyProgressRef.current.add(bankId);
     const nextMap = { ...progressRef.current, [bankId]: next };
     progressRef.current = nextMap;
     setProgressByBank(nextMap);
-    void bankDb.saveBankProgress(bankId, next);
+    const saved = bankDb.saveBankProgress(bankId, next, requireStorage);
     if (bankId === BUILTIN_AI_BANK_ID) {
       saveStore(next, scope);
       notifyBuiltinProgressSynced(scope, next);
@@ -201,8 +217,13 @@ export function useBankLibrary(): BankLibraryApi {
     if (isAccountPracticeScope(scope)) {
       queueCloudProgressSave(scope, bankId, next);
     }
-    return true;
+    return saved;
   }, [bankDb, scope]);
+
+  const commitFor = useCallback((bankId: string, next: UserStore): boolean => {
+    void persistProgressFor(bankId, next);
+    return true;
+  }, [persistProgressFor]);
 
   const updateFor = useCallback(
     (bankId: string, fn: (prev: UserStore) => UserStore): UserStore => {
@@ -224,6 +245,11 @@ export function useBankLibrary(): BankLibraryApi {
     if (bankId === BUILTIN_AI_BANK_ID) {
       resetStore(scope);
       notifyBuiltinProgressSynced(scope, empty);
+      if (activeBankIdRef.current === bankId) {
+        activeBankIdRef.current = BUILTIN_GUIDE_BANK_ID;
+        setActiveBankIdState(BUILTIN_GUIDE_BANK_ID);
+        void bankDb.setActiveBankId(BUILTIN_GUIDE_BANK_ID);
+      }
     }
   }, [bankDb, scope]);
 
@@ -246,8 +272,9 @@ export function useBankLibrary(): BankLibraryApi {
   );
 
   const switchBank = useCallback(async (bankId: string): Promise<void> => {
-    const exists = banksRef.current.some((b) => b.id === bankId);
-    const targetId = exists ? bankId : BUILTIN_AI_BANK_ID;
+    const exists = banksRef.current.some((b) => b.id === bankId) ||
+      (bankId === BUILTIN_AI_BANK_ID && canRestoreLegacyBank(scope, progressRef.current[bankId]));
+    const targetId = exists ? bankId : BUILTIN_GUIDE_BANK_ID;
     activeTouchedRef.current = true;
     activeBankIdRef.current = targetId;
     setActiveBankIdState(targetId);
@@ -257,7 +284,7 @@ export function useBankLibrary(): BankLibraryApi {
       setProgressByBank(nextMap);
     }
     await bankDb.setActiveBankId(targetId);
-  }, [bankDb]);
+  }, [bankDb, scope]);
 
   const importNewBank = useCallback(
     async (input: CreateCustomBankInput, activate = true): Promise<BankRecord> => {
@@ -302,7 +329,7 @@ export function useBankLibrary(): BankLibraryApi {
 
   const saveBank = useCallback(
     async (bank: BankRecord): Promise<BankRecord> => {
-      if (bank.id === BUILTIN_AI_BANK_ID || bank.builtin) {
+      if (isBuiltinBankId(bank.id) || bank.builtin) {
         throw new Error('Cannot overwrite built-in example bank');
       }
 
@@ -340,7 +367,7 @@ export function useBankLibrary(): BankLibraryApi {
 
   const renameBank = useCallback(
     async (bankId: string, name: string, description?: string): Promise<boolean> => {
-      if (bankId === BUILTIN_AI_BANK_ID) {
+      if (isBuiltinBankId(bankId)) {
         return false;
       }
       const trimmed = name.trim();
@@ -398,7 +425,7 @@ export function useBankLibrary(): BankLibraryApi {
   );
 
   const deleteBank = useCallback(async (bankId: string): Promise<boolean> => {
-    if (bankId === BUILTIN_AI_BANK_ID) {
+    if (isBuiltinBankId(bankId)) {
       return false;
     }
     return enqueueBankJob(bankId, async () => {
@@ -417,9 +444,9 @@ export function useBankLibrary(): BankLibraryApi {
 
       if (activeBankIdRef.current === bankId) {
         activeTouchedRef.current = true;
-        activeBankIdRef.current = BUILTIN_AI_BANK_ID;
-        setActiveBankIdState(BUILTIN_AI_BANK_ID);
-        await bankDb.setActiveBankId(BUILTIN_AI_BANK_ID);
+        activeBankIdRef.current = BUILTIN_GUIDE_BANK_ID;
+        setActiveBankIdState(BUILTIN_GUIDE_BANK_ID);
+        await bankDb.setActiveBankId(BUILTIN_GUIDE_BANK_ID);
       }
       if (isAccountPracticeScope(scope)) {
         await syncCloudBankDelete(scope, bankId);
@@ -453,11 +480,12 @@ export function useBankLibrary(): BankLibraryApi {
       model?: string,
     ): Promise<void> => {
       const trimmed = content.trim();
-      if (!trimmed) return;
+      if (!trimmed || !mountedRef.current) return;
 
-      if (bankId === BUILTIN_AI_BANK_ID) {
+      if (isBuiltinBankId(bankId)) {
         const cleanModel = model?.trim() || undefined;
-        updateFor(BUILTIN_AI_BANK_ID, (prev) => ({
+        const prev = progressRef.current[bankId] ?? createEmptyStore();
+        const saved = await persistProgressFor(bankId, {
           ...prev,
           aiExplanations: {
             ...(prev.aiExplanations ?? {}),
@@ -467,13 +495,15 @@ export function useBankLibrary(): BankLibraryApi {
               ...(cleanModel ? { model: cleanModel } : {}),
             },
           },
-        }));
+        }, true);
+        if (!saved) throw new Error('无法保存本机解析。');
         return;
       }
 
       await enqueueBankJob(bankId, async () => {
         const latestInRef = banksRef.current.find((b) => b.id === bankId);
-        if (!latestInRef || latestInRef.builtin) return;
+        if (!mountedRef.current) return;
+        if (!latestInRef || latestInRef.builtin) throw new Error('题库已不存在。');
 
         let changed = false;
         const nextQuestions = latestInRef.data.questions.map((q) => {
@@ -485,7 +515,7 @@ export function useBankLibrary(): BankLibraryApi {
             explanation: q.explanation && q.explanation.trim().length > 0 ? q.explanation : content,
           };
         });
-        if (!changed) return;
+        if (!changed) throw new Error('题目已不存在。');
 
         const nextBank: BankRecord = {
           ...latestInRef,
@@ -496,13 +526,8 @@ export function useBankLibrary(): BankLibraryApi {
           },
         };
 
-        const nextBanks = sortLibraryBanks(
-          banksRef.current.map((b) => (b.id === bankId ? nextBank : b)),
-        );
-        banksRef.current = nextBanks;
-        setBanks(nextBanks);
-
-        const saved = await bankDb.saveCustomBank(nextBank);
+        const saved = await bankDb.saveCustomBank(nextBank, { requireStorage: true });
+        if (!mountedRef.current) return;
         const syncedList = sortLibraryBanks(
           banksRef.current.map((b) => (b.id === saved.id ? saved : b)),
         );
@@ -513,12 +538,17 @@ export function useBankLibrary(): BankLibraryApi {
         }
       });
     },
-    [bankDb, enqueueBankJob, scope, updateFor],
+    [bankDb, enqueueBankJob, persistProgressFor, scope],
   );
 
+  const legacyAvailable = canRestoreLegacyBank(scope, progressByBank[BUILTIN_AI_BANK_ID]);
+  const switchableBanks = useMemo(
+    () => legacyAvailable ? [...banks, BUILTIN_AI_BANK] : banks,
+    [banks, legacyAvailable],
+  );
   const activeBank = useMemo(
-    () => banks.find((b) => b.id === activeBankId) ?? BUILTIN_AI_BANK,
-    [activeBankId, banks],
+    () => switchableBanks.find((b) => b.id === activeBankId) ?? BUILTIN_GUIDE_BANK,
+    [activeBankId, switchableBanks],
   );
 
   const activeViewModel = useMemo(() => buildBankViewModel(activeBank), [activeBank]);
@@ -529,6 +559,7 @@ export function useBankLibrary(): BankLibraryApi {
     error,
     migratedFromV1,
     banks,
+    switchableBanks,
     activeBank,
     activeBankId: activeBank.id,
     activeViewModel,

@@ -5,7 +5,7 @@ import { API_CONFIG_STORAGE_KEY, getCloudMemoryApiConfig, sanitizeApiConfig, set
 import type { ApiConfig } from '../apiConfig';
 import type { UserStore } from '../../types/quiz';
 import { getBankDb, isStoreNonEmpty, mergeUserStores, sanitizeUserStore } from '../../utils/bankDb';
-import { BUILTIN_AI_BANK_ID } from '../../utils/quizImportTypes';
+import { BUILTIN_AI_BANK_ID, BUILTIN_GUIDE_BANK_ID, isBuiltinBankId } from '../../utils/quizImportTypes';
 import type { BankRecord } from '../../utils/quizImportTypes';
 
 export const GUEST_KEY = 'quizhub-v2:guest';
@@ -56,7 +56,7 @@ async function readBankSnapshot(scope: PracticeScope): Promise<BankSnapshot> {
       throw new Error('浏览器暂时无法读取题库存储。');
     }
     const banks = await bankDb.listCustomBanks();
-    const progress = await Promise.all([BUILTIN_AI_BANK_ID, ...banks.map(({ id }) => id)].map(async (bankId) => ({
+    const progress = await Promise.all([BUILTIN_AI_BANK_ID, BUILTIN_GUIDE_BANK_ID, ...banks.map(({ id }) => id)].map(async (bankId) => ({
       bankId, store: await bankDb.getBankProgress(bankId), updatedAt: 0,
     })));
     return { banks, progress };
@@ -89,21 +89,18 @@ function mergeBuiltinProgress(
       mastery: Object.fromEntries(Object.entries(legacy.mastery).filter(([id]) => Object.hasOwn(records, id))),
     };
   }
-  const records = { ...indexed.records, ...legacy.records };
-  for (const [id, item] of Object.entries(indexed.records)) {
-    if (item.ts > records[id]!.ts) records[id] = item;
-  }
-  return { records, fav: legacy.fav, mastery: { ...indexed.mastery, ...legacy.mastery } };
+  return { ...mergeUserStores(indexed, legacy), fav: legacy.fav };
 }
 
 export async function readGuestData(scope: PracticeScope = LEGACY_GUEST_SCOPE): Promise<GuestData> {
   const snapshot = await readBankSnapshot(scope);
   const hasLegacyData = globalThis.localStorage.getItem(practiceStorageKey(STORAGE_KEY, scope)) !== null;
   const apiConfigText = globalThis.localStorage.getItem(practiceStorageKey(API_CONFIG_STORAGE_KEY, scope));
-  const banks = snapshot.banks.filter((bank) => !bank.builtin && bank.id !== BUILTIN_AI_BANK_ID);
+  const banks = snapshot.banks.filter((bank) => !bank.builtin && !isBuiltinBankId(bank.id));
   const progressByBank = new Map(snapshot.progress.map((entry) => [entry.bankId, entry]));
   const builtin = mergeBuiltinProgress(loadStore(scope), hasLegacyData, progressByBank.get(BUILTIN_AI_BANK_ID), snapshot.migratedAt);
-  const bankProgress = banks.map(({ id }) => ({ bankId: id, store: sanitizeUserStore(progressByBank.get(id)?.store) }));
+  const bankProgress = [BUILTIN_GUIDE_BANK_ID, ...banks.map(({ id }) => id)]
+    .map((bankId) => ({ bankId, store: sanitizeUserStore(progressByBank.get(bankId)?.store) }));
   const progress = [{ bankId: BUILTIN_AI_BANK_ID, store: builtin }, ...bankProgress]
     .filter(({ store }) => isStoreNonEmpty(store));
   let raw: unknown = null;
@@ -139,7 +136,7 @@ export async function adoptGuestData(snapshot: GuestData, source: GuestPracticeS
       try {
         const localBanks = new Map<string, BankRecord>((existingBanks.result as BankRecord[]).map((bank) => [bank.id, bank]));
         const localProgress = new Map<string, StoredProgress>((existingProgress.result as StoredProgress[]).map((entry) => [entry.bankId, entry]));
-        const importedIds = new Set([BUILTIN_AI_BANK_ID]);
+        const importedIds = new Set([BUILTIN_AI_BANK_ID, BUILTIN_GUIDE_BANK_ID]);
         for (const bank of snapshot.banks) {
           const existing = localBanks.get(bank.id);
           if (!existing) banks.put(bank);

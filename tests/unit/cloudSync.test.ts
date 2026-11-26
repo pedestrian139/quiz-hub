@@ -268,6 +268,72 @@ describe('live cloud sync coordinator', () => {
     expect(getCloudSyncSnapshot()).toMatchObject({ status: 'synced', pendingCount: 0 });
   });
 
+  it('keeps remote answers and AI analysis when another answer is queued during a 40001 retry', async () => {
+    const bankId = 'builtin-ai-intro';
+    const empty = createEmptyStore();
+    const remote = {
+      ...empty,
+      records: { remote: { ok: 1 as const, ts: 200 } },
+      aiExplanations: { remote: { content: 'Remote analysis', updatedAt: 200 } },
+    };
+    const first = { ...empty, records: { first: { ok: 0 as const, ts: 300 } } };
+    const newer = { ...first, records: { ...first.records, newer: { ok: 1 as const, ts: 400 } } };
+    mock.listCloudProgress.mockResolvedValue({ [bankId]: { store: empty, revision: 1, resetAt: null } });
+    await hydrateAccountFromCloud(USER_ID);
+
+    let releaseRetry!: () => void;
+    const blockedRetry = new Promise<void>((resolve) => { releaseRetry = resolve; });
+    mock.loadCloudProgress.mockResolvedValue({ store: remote, revision: 2, resetAt: null });
+    mock.saveCloudProgress
+      .mockRejectedValueOnce(Object.assign(new Error('Progress changed'), { code: '40001' }))
+      .mockImplementationOnce(async (_bankId, store) => {
+        await blockedRetry;
+        return { store, revision: 3, resetAt: null };
+      })
+      .mockImplementation(async (_bankId, store) => ({ store, revision: 4, resetAt: null }));
+
+    queueCloudProgressSave(SCOPE, bankId, first);
+    await vi.waitFor(() => expect(mock.saveCloudProgress).toHaveBeenCalledTimes(2));
+    queueCloudProgressSave(SCOPE, bankId, newer);
+    releaseRetry();
+    await flushPendingCloudWrites();
+
+    const expected = { ...remote, records: { ...remote.records, ...newer.records } };
+    expect(mock.saveCloudProgress).toHaveBeenNthCalledWith(3, bankId, expected, 3);
+    expect(await getBankDb(SCOPE).getBankProgress(bankId)).toEqual(expected);
+  });
+
+  it('keeps another device’s edits when a new bank save queues during a 40001 retry', async () => {
+    const bank = makeBank('b-overlapping-retry', '原题库', 100);
+    const local = { ...bank, description: '第一次本地编辑', updatedAt: 200 };
+    const newer = { ...local, description: '第二次本地编辑', updatedAt: 400 };
+    const remote = { ...bank, name: '其他设备改名', updatedAt: 300 };
+    mock.listCloudBanks.mockResolvedValueOnce([{ bank, revision: 1 }]);
+    await hydrateAccountFromCloud(USER_ID);
+
+    let releaseRetry!: () => void;
+    const blockedRetry = new Promise<void>((resolve) => { releaseRetry = resolve; });
+    mock.listCloudBanks.mockResolvedValueOnce([{ bank: remote, revision: 2 }]);
+    mock.saveCloudBank
+      .mockRejectedValueOnce(Object.assign(new Error('Bank changed'), { code: '40001' }))
+      .mockImplementationOnce(async (payload) => {
+        await blockedRetry;
+        return { bank: payload, revision: 3 };
+      })
+      .mockImplementation(async (payload) => ({ bank: payload, revision: 4 }));
+
+    queueCloudBankUpdate(SCOPE, local, 0);
+    await vi.waitFor(() => expect(mock.saveCloudBank).toHaveBeenCalledTimes(2));
+    queueCloudBankUpdate(SCOPE, newer, 0);
+    releaseRetry();
+    await flushPendingCloudWrites();
+
+    expect(mock.saveCloudBank).toHaveBeenNthCalledWith(3, expect.objectContaining({
+      name: remote.name,
+      description: newer.description,
+    }), 3);
+  });
+
   it('handles 40001 conflicts on custom bank rename and delete including remotely deleted banks', async () => {
     const initialBank = makeBank('b1', '旧名字', 100);
     const remoteUpdatedBank = makeBank('b1', '他端改名', 200);

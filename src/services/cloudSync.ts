@@ -12,7 +12,7 @@ import { createEmptyStore, saveStore } from '../core/storage';
 import type { CachedAiExplanation, Question, UserStore } from '../types/quiz';
 import { computeV1BankCounts } from '../utils/bankCatalog';
 import { getBankDb, sanitizeUserStore } from '../utils/bankDb';
-import { BUILTIN_AI_BANK_ID, type BankRecord } from '../utils/quizImportTypes';
+import { BUILTIN_AI_BANK_ID, isBuiltinBankId, type BankRecord } from '../utils/quizImportTypes';
 import {
   clearCloudMemoryApiConfigs,
   clearLocalApiConfigStorage,
@@ -43,7 +43,7 @@ export interface CloudSyncSnapshot {
   lastSyncedAt: number | null;
 }
 
-type PendingProgressOp = { kind: 'save'; store: UserStore } | { kind: 'reset' };
+type PendingProgressOp = { kind: 'save'; store: UserStore; reconciledFrom?: UserStore } | { kind: 'reset' };
 type FailedBankOp = { kind: 'save'; bank: BankRecord; create: boolean } | { kind: 'delete'; bankId: string };
 
 const MAX_CONFLICT_RETRIES = 3;
@@ -708,13 +708,14 @@ function flushProgressForBank(userId: string, bankId: string): Promise<void> {
 
     while (pendingProgress.has(bankId) && epoch === sessionEpoch) {
       let op = pendingProgress.get(bankId)!;
+      const localStoreBeforeMerge = op.kind === 'save' ? op.reconciledFrom ?? op.store : createEmptyStore();
       pendingProgress.delete(bankId);
       let baseStore = lastSyncedProgress.get(bankId) ?? createEmptyStore();
-      let mergedWithRemote = false;
+      let mergedWithRemote = op.kind === 'save' && op.reconciledFrom !== undefined;
       let resolvedConflict = false;
       let terminalStatus: 'error' | 'conflict' | null = null;
       let terminalMessage: string | null = null;
-      let savedVersioned: { store: UserStore; revision: number } | null = null;
+      let savedVersioned: { store: UserStore; revision: number; resetAt: string | null } | null = null;
 
       emitSnapshot({ status: 'syncing', message: null });
 
@@ -726,7 +727,7 @@ function flushProgressForBank(userId: string, bankId: string): Promise<void> {
           const result = op.kind === 'reset'
             ? await resetCloudProgress(bankId, revision)
             : await saveCloudProgress(bankId, op.store, revision);
-          savedVersioned = { store: result.store, revision: result.revision };
+          savedVersioned = result;
           break;
         } catch (err) {
           if (epoch !== sessionEpoch) return;
@@ -745,7 +746,7 @@ function flushProgressForBank(userId: string, bankId: string): Promise<void> {
               if (op.kind === 'save') {
                 const merged = mergeStoresThreeWay(baseStore, latest.store, op.store, latest.resetAt);
                 baseStore = latest.store;
-                op = { kind: 'save', store: merged };
+                op = { kind: 'save', store: merged, reconciledFrom: localStoreBeforeMerge };
                 mergedWithRemote = true;
               }
               resolvedConflict = true;
@@ -779,13 +780,20 @@ function flushProgressForBank(userId: string, bankId: string): Promise<void> {
       if (savedVersioned) {
         progressRevisions.set(bankId, savedVersioned.revision);
         lastSyncedProgress.set(bankId, sanitizeUserStore(savedVersioned.store));
-        if (mergedWithRemote && !pendingProgress.has(bankId)) {
+        const queued = pendingProgress.get(bankId);
+        if (mergedWithRemote && queued?.kind === 'save') {
+          pendingProgress.set(bankId, {
+            kind: 'save',
+            reconciledFrom: queued.store,
+            store: mergeStoresThreeWay(localStoreBeforeMerge, savedVersioned.store, queued.store, savedVersioned.resetAt),
+          });
+        } else if (mergedWithRemote && !queued) {
           await bankDb.saveBankProgress(bankId, savedVersioned.store);
           if (epoch !== sessionEpoch) return;
-          if (bankId === BUILTIN_AI_BANK_ID) {
-            writeBuiltinLocalCache(scope, savedVersioned.store);
+          if (!pendingProgress.has(bankId)) {
+            if (bankId === BUILTIN_AI_BANK_ID) writeBuiltinLocalCache(scope, savedVersioned.store);
+            notifyBankLibrarySynced(scope);
           }
-          notifyBankLibrarySynced(scope);
         }
         if (!pendingProgress.has(bankId)) {
           settledStatusUpdate('synced', resolvedConflict ? '已合并云端最新进度' : null);
@@ -844,8 +852,11 @@ export async function syncCloudProgressReset(scope: PracticeScope, bankId: strin
 }
 
 function enqueueBankWrite(bankId: string, fn: () => Promise<void>): Promise<void> {
+  const epoch = sessionEpoch;
   const prev = activeBankWrites.get(bankId) ?? Promise.resolve();
-  const next = prev.catch(() => undefined).then(fn);
+  const next = prev.catch(() => undefined).then(() => {
+    if (epoch === sessionEpoch) return fn();
+  });
   activeBankWrites.set(bankId, next);
   return next.finally(() => {
     if (activeBankWrites.get(bankId) === next) {
@@ -912,8 +923,12 @@ async function performBankSave(scope: AccountPracticeScope, bank: BankRecord, cr
       bankRevisions.set(saved.bank.id, saved.revision);
       lastSyncedBanks.set(saved.bank.id, structuredClone(saved.bank));
       pendingCreateBanks.delete(saved.bank.id);
-      if (!pendingBankUpdates.has(saved.bank.id)) {
+      const queued = pendingBankUpdates.get(saved.bank.id);
+      if (queued) {
+        queued.bank = mergeBankRecords(bank, saved.bank, queued.bank);
+      } else {
         await bankDb.saveCustomBank(saved.bank);
+        if (epoch !== sessionEpoch) return;
         notifyBankLibrarySynced(scope);
       }
       settledStatusUpdate('synced', attempt > 0 ? '已合并云端题库变更' : null);
@@ -1048,10 +1063,13 @@ async function performBankDelete(bankId: string): Promise<void> {
 async function flushQueuedBankUpdate(bankId: string): Promise<void> {
   const pending = pendingBankUpdates.get(bankId);
   if (!pending) return;
-  pendingBankUpdates.delete(bankId);
-  const shouldCreate =
-    !bankRevisions.has(bankId) && (pending.create || pendingCreateBanks.has(bankId));
-  await enqueueBankWrite(bankId, () => performBankSave(pending.scope, pending.bank, shouldCreate));
+  await enqueueBankWrite(bankId, async () => {
+    if (pendingBankUpdates.get(bankId) !== pending) return;
+    pendingBankUpdates.delete(bankId);
+    const shouldCreate =
+      !bankRevisions.has(bankId) && (pending.create || pendingCreateBanks.has(bankId));
+    await performBankSave(pending.scope, pending.bank, shouldCreate);
+  });
 }
 
 export function queueCloudBankUpdate(
@@ -1059,7 +1077,7 @@ export function queueCloudBankUpdate(
   bank: BankRecord,
   customDebounceMs?: number,
 ): void {
-  if (!isAccountPracticeScope(scope) || !isDatabaseConfigured() || bank.builtin || bank.id === BUILTIN_AI_BANK_ID) {
+  if (!isAccountPracticeScope(scope) || !isDatabaseConfigured() || bank.builtin || isBuiltinBankId(bank.id)) {
     return;
   }
   const userId = accountIdFromScope(scope);
@@ -1113,7 +1131,7 @@ export async function syncCloudBankUpdate(scope: PracticeScope, bank: BankRecord
 }
 
 export async function syncCloudBankDelete(scope: PracticeScope, bankId: string): Promise<void> {
-  if (!isAccountPracticeScope(scope) || !isDatabaseConfigured() || bankId === BUILTIN_AI_BANK_ID) return;
+  if (!isAccountPracticeScope(scope) || !isDatabaseConfigured() || isBuiltinBankId(bankId)) return;
   const userId = accountIdFromScope(scope);
   if (!userId) return;
   ensureAccountSession(userId);

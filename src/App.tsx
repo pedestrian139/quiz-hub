@@ -1069,13 +1069,15 @@ export default function App() {
 
   return (
     <div className="app-shell">
-      <TopNav
-        route={route}
-        wrongCount={homeStats.wrongCount}
-        favCount={homeStats.favCount}
-        onNavClick={handleNavClick}
-      />
-      <UserMenu />
+      <div className="site-masthead">
+        <TopNav
+          route={route}
+          wrongCount={homeStats.wrongCount}
+          favCount={homeStats.favCount}
+          onNavClick={handleNavClick}
+        />
+        <UserMenu />
+      </div>
       <QuizImportPortal />
 
       {toast && (
@@ -1088,11 +1090,12 @@ export default function App() {
         </div>
       )}
 
-      <main className="app-main">
-        {route === 'hub' && (
+      <main className="app-main" aria-busy={!library.ready}>
+        {!library.ready && <p className="page-wrap" role="status">正在读取题库…</p>}
+        {library.ready && route === 'hub' && (
           <HubPage
             viewModel={viewModel}
-            banks={library.banks}
+            banks={library.switchableBanks}
             activeBankId={library.activeBankId}
             stats={homeStats}
             store={activeStoreApi.store}
@@ -1102,10 +1105,10 @@ export default function App() {
           />
         )}
 
-        {route === 'quiz' && quizView.type === 'home' && (
+        {library.ready && route === 'quiz' && quizView.type === 'home' && (
           <QuizHome
             viewModel={viewModel}
-            banks={library.banks}
+            banks={library.switchableBanks}
             activeBankId={library.activeBankId}
             store={activeStoreApi.store}
             stats={homeStats}
@@ -1121,7 +1124,7 @@ export default function App() {
           />
         )}
 
-        {route === 'quiz' && quizView.type === 'session' && (
+        {library.ready && route === 'quiz' && quizView.type === 'session' && (
           <QuizSession
             key={quizView.spec.id}
             spec={quizView.spec}
@@ -1161,7 +1164,7 @@ export default function App() {
           />
         )}
 
-        {route === 'quiz' && quizView.type === 'result' && (
+        {library.ready && route === 'quiz' && quizView.type === 'result' && (
           <ResultView
             spec={quizView.spec}
             chapterById={chapterById}
@@ -1206,7 +1209,7 @@ export default function App() {
           />
         )}
 
-        {(route === 'wrong' || route === 'fav') && (
+        {library.ready && (route === 'wrong' || route === 'fav') && (
           <QuestionListView
             kind={route}
             bankName={library.activeBank.name}

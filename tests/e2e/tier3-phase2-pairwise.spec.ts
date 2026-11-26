@@ -8,7 +8,7 @@ import {
 import { assertFullLayoutAudit } from './helpers/audit.ts';
 import { installAuthGateway } from './helpers/authGateway.ts';
 import {
-  BUILTIN_AI_BANK_ID,
+  BUILTIN_GUIDE_BANK_ID,
   FIXTURE_BANK,
   FIXTURE_BANK_ID,
   LEGACY_PHASE1_BANK,
@@ -40,7 +40,6 @@ import {
   answerCurrentQuestion,
   bankImportFileInput,
   bankSwitcher,
-  btnCloseQuizImport,
   btnConfirmImport,
   btnConfirmImportSticky,
   btnNext,
@@ -49,6 +48,7 @@ import {
   draftDelete,
   draftEdit,
   ensureAnswerSheetOpen,
+  filterOrder,
   gotoRoute,
   hubBadgeTotal,
   importPasteTextarea,
@@ -120,14 +120,7 @@ async function confirmImportAndClose(page: Page, bankName?: string): Promise<voi
   await expect(confirmBtn).toBeEnabled();
   await confirmBtn.click();
 
-  const dialog = quizImportDialog(page);
-  if (await dialog.isVisible().catch(() => false)) {
-    const closeBtn = btnCloseQuizImport(page);
-    if (await closeBtn.isVisible().catch(() => false)) {
-      await closeBtn.click();
-    }
-  }
-  await expect(dialog).toBeHidden();
+  await expect(quizImportDialog(page)).toBeHidden();
 }
 
 async function switchActiveBank(
@@ -275,6 +268,8 @@ test.describe('Tier 3 Phase 2: Cross-Feature Pairwise & Cloud Sync (T3-P2-001..T
     const callsAfterCreate = gateway.saveBankCalls.length;
 
     await gotoRoute(page, '#/quiz');
+    await switchActiveBank(page, bankId, /云端解析防抖测试库|Phase 1/);
+    await filterOrder(page).selectOption('seq');
     await modeCard(page, 'all').click();
 
     // Trigger AI explanations on two questions rapidly (< 1000ms debounce window)
@@ -301,6 +296,7 @@ test.describe('Tier 3 Phase 2: Cross-Feature Pairwise & Cloud Sync (T3-P2-001..T
     const debouncedUpdateCalls = gateway.saveBankCalls.length - callsAfterCreate;
     expect(debouncedUpdateCalls).toBeGreaterThanOrEqual(1);
     expect(debouncedUpdateCalls).toBeLessThanOrEqual(2);
+    await expect.poll(() => Object.keys(gateway.getCloudProgress(email, bankId)?.store.records ?? {}).length).toBe(2);
 
     // Clear IDB & localStorage (keeping auth session) and reload
     await wipeLocalCachesPreserveAuth(page);
@@ -310,6 +306,7 @@ test.describe('Tier 3 Phase 2: Cross-Feature Pairwise & Cloud Sync (T3-P2-001..T
     llm.clear();
     await gotoRoute(page, '#/quiz');
     await switchActiveBank(page, bankId, /云端解析防抖测试库|Phase 1/);
+    await expect(statCard(page, 'done')).toContainText('2');
     await modeCard(page, 'choice').click();
     await answerCurrentQuestion(page, stemMap, 'correct');
     await aiBtnExplain(page).click();
@@ -341,7 +338,8 @@ test.describe('Tier 3 Phase 2: Cross-Feature Pairwise & Cloud Sync (T3-P2-001..T
     await expect.poll(() => gateway.apiSaveCalls.length).toBe(1);
 
     // 1) Built-in bank aiExplanations cloud sync
-    await switchActiveBank(page, BUILTIN_AI_BANK_ID, /QuizHub/);
+    await switchActiveBank(page, BUILTIN_GUIDE_BANK_ID, /QuizHub/);
+    await filterOrder(page).selectOption('seq');
     await modeCard(page, 'choice').click();
     await quizOption(page, 0).click();
     await aiBtnExplain(page).click();
@@ -350,7 +348,7 @@ test.describe('Tier 3 Phase 2: Cross-Feature Pairwise & Cloud Sync (T3-P2-001..T
     await expect
       .poll(
         () => {
-          const entry = gateway.getCloudProgress(email, BUILTIN_AI_BANK_ID);
+          const entry = gateway.getCloudProgress(email, BUILTIN_GUIDE_BANK_ID);
           const map = entry?.store.aiExplanations ?? {};
           return Object.values(map).some((v) => v.content.includes('核心考点'));
         },
@@ -445,7 +443,7 @@ test.describe('Tier 3 Phase 2: Cross-Feature Pairwise & Cloud Sync (T3-P2-001..T
     await expect(statCard(page, 'wrong')).toContainText('1');
 
     // Switch to built-in onboarding bank -> completely isolated progress
-    await switchActiveBank(page, BUILTIN_AI_BANK_ID, /QuizHub/);
+    await switchActiveBank(page, BUILTIN_GUIDE_BANK_ID, /QuizHub/);
     await expect(statCard(page, 'done')).toContainText('0');
     await expect(statCard(page, 'wrong')).toContainText('0');
 
@@ -472,6 +470,7 @@ test.describe('Tier 3 Phase 2: Cross-Feature Pairwise & Cloud Sync (T3-P2-001..T
     await confirmImportAndClose(page);
 
     await gotoRoute(page, '#/quiz');
+    await filterOrder(page).selectOption('seq');
     await modeCard(page, 'all').click();
     await expect(workspaceMobileBar(page)).toBeVisible();
 
@@ -559,6 +558,8 @@ test.describe('Tier 3 Phase 2: Cross-Feature Pairwise & Cloud Sync (T3-P2-001..T
       apiConfig: {},
     });
 
+    await expect(bankSwitcher(page)).toHaveValue(FIXTURE_BANK_ID);
+    await filterOrder(page).selectOption('seq');
     await modeCard(page, 'all').click();
     await expect(qStem(page).locator('table')).toBeVisible();
     await expect(qStem(page).locator('.katex').first()).toBeVisible();
@@ -591,6 +592,8 @@ test.describe('Tier 3 Phase 2: Cross-Feature Pairwise & Cloud Sync (T3-P2-001..T
     llm.clear();
     await page.reload({ waitUntil: 'domcontentloaded' });
     await gotoRoute(page, '#/quiz');
+    await expect(bankSwitcher(page)).toHaveValue(FIXTURE_BANK_ID);
+    await filterOrder(page).selectOption('seq');
     await modeCard(page, 'choice').click();
     await aiBtnExplain(page).click();
     await expect(explanationContainer(page)).toContainText('核心考点');

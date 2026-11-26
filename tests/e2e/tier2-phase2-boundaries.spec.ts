@@ -457,7 +457,7 @@ test.describe('Tier 2 (Phase 2): Boundary Cases, Error Recovery, Legacy Compat &
     await seedGuestApiConfig(page);
     const mockLlm = await installMockLlm(page);
     await seedFixtureBank(page, builtinBank, store, {
-      bankId: 'builtin-ai-intro',
+      bankId: 'builtin-quizhub-guide',
       activate: true,
       targetHashRoute: '#/quiz',
     });
@@ -501,6 +501,7 @@ test.describe('Tier 2 (Phase 2): Boundary Cases, Error Recovery, Legacy Compat &
 
     await aiBtnExplain(page).click();
     await expect(aiExplainDrawer(page)).toContainText('核心考点');
+    await page.evaluate(() => window.scrollTo({ top: 0, behavior: 'instant' }));
     await assertFullLayoutAudit(page);
   });
 
@@ -535,6 +536,7 @@ test.describe('Tier 2 (Phase 2): Boundary Cases, Error Recovery, Legacy Compat &
       () => (window as unknown as { __xssFired?: unknown }).__xssFired,
     );
     expect(xssAfter).toBeUndefined();
+    await page.evaluate(() => window.scrollTo({ top: 0, behavior: 'instant' }));
     await assertFullLayoutAudit(page);
   });
 

@@ -9,7 +9,7 @@ import {
   useOptionalBankLibraryContext,
   type BankLibraryContextValue,
 } from '../../src/utils/BankLibraryContext';
-import { BUILTIN_AI_BANK_ID } from '../../src/utils/quizImportTypes';
+import { BUILTIN_GUIDE_BANK_ID } from '../../src/utils/quizImportTypes';
 import { LEGACY_GUEST_SCOPE } from '../../src/core/practiceScope';
 import { closeQuizHubDb, getBankDb, resetFallbackMemoryDb } from '../../src/utils/bankDb';
 
@@ -77,7 +77,7 @@ describe('BankLibraryContext & concurrent saveQuestionAiAnalysis', () => {
 
     expect(outsideCtx).toBeNull();
     expect(capturedCtx!.loading).toBe(false);
-    expect(capturedCtx!.activeBankId).toBe(BUILTIN_AI_BANK_ID);
+    expect(capturedCtx!.activeBankId).toBe(BUILTIN_GUIDE_BANK_ID);
 
     act(() => {
       capturedCtx!.openImportModal('banks');
@@ -88,13 +88,13 @@ describe('BankLibraryContext & concurrent saveQuestionAiAnalysis', () => {
     // Save AI analysis on built-in bank -> stored in progress aiExplanations, NOT custom bank
     await act(async () => {
       await capturedCtx!.saveQuestionAiAnalysis(
-        BUILTIN_AI_BANK_ID,
+        BUILTIN_GUIDE_BANK_ID,
         'qh-guide-choice-01',
         '### 【核心考点】\n内置题库解析',
         'deepseek-chat',
       );
     });
-    const builtinStore = capturedCtx!.getProgressFor(BUILTIN_AI_BANK_ID);
+    const builtinStore = capturedCtx!.getProgressFor(BUILTIN_GUIDE_BANK_ID);
     expect(builtinStore.aiExplanations?.['qh-guide-choice-01']?.content).toBe(
       '### 【核心考点】\n内置题库解析',
     );
@@ -251,10 +251,10 @@ describe('BankLibraryContext & concurrent saveQuestionAiAnalysis', () => {
 
     // Concurrent deleteBank + saveQuestionAiAnalysis must NOT resurrect deleted bank
     await act(async () => {
-      await Promise.all([
-        capturedCtx!.deleteBank(customId),
-        capturedCtx!.saveQuestionAiAnalysis(customId, 'q1', 'Should Not Resurrect'),
-      ]);
+      const deletion = capturedCtx!.deleteBank(customId);
+      await expect(capturedCtx!.saveQuestionAiAnalysis(customId, 'q1', 'Should Not Resurrect'))
+        .rejects.toThrow('题库已不存在');
+      await expect(deletion).resolves.toBe(true);
     });
 
     expect(capturedCtx!.banks.find((b) => b.id === customId)).toBeUndefined();

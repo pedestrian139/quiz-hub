@@ -7,7 +7,7 @@ import {
 } from './helpers/fixtures.ts';
 import { assertFullLayoutAudit } from './helpers/audit.ts';
 import {
-  BUILTIN_AI_BANK_ID,
+  BUILTIN_GUIDE_BANK_ID,
   FIXTURE_BANK,
   FIXTURE_BANK_ID,
   MARKDOWN_LATEX_BANK,
@@ -227,13 +227,21 @@ test.describe('Tier 1 (Phase 2): QuizHub Brand, Smart Import Workbench, Unified 
     expect(onboardingBank.questions.length).toBeGreaterThanOrEqual(2);
     expect(onboardingBank.questions.length).toBeLessThanOrEqual(3);
 
-    const stemMap = buildQuestionStemMap(onboardingBank);
     await gotoRoute(page, '#/quiz');
+    await filterOrder(page).selectOption('seq');
     await modeCard(page, 'all').click();
     await expect(quizProgressText(page)).toContainText(`1 / ${onboardingBank.questions.length}`);
 
     for (let i = 0; i < onboardingBank.questions.length; i++) {
-      await answerCurrentQuestion(page, stemMap, 'correct');
+      const question = onboardingBank.questions[i]!;
+      if (Array.isArray(question.answer)) {
+        for (const option of question.answer) await quizOption(page, option).click();
+        await page.getByTestId('btn-submit-multi').click();
+      } else if (typeof question.answer === 'number') {
+        await quizOption(page, question.answer).click();
+      } else {
+        throw new Error(`Expected an objective onboarding question, received ${question.type}`);
+      }
       await expect(quizFeedback(page)).toContainText('回答正确');
       await btnNext(page).click();
     }
@@ -442,7 +450,7 @@ test.describe('Tier 1 (Phase 2): QuizHub Brand, Smart Import Workbench, Unified 
     await expect(quizBadgeTotal(page)).toContainText(`${FIXTURE_BANK.meta.counts.total}`);
     await expect(bankSwitcher(page)).toBeVisible();
 
-    await switchActiveBank(page, BUILTIN_AI_BANK_ID, /QuizHub 使用引导示例题库/);
+    await switchActiveBank(page, BUILTIN_GUIDE_BANK_ID, /QuizHub 使用引导示例题库/);
     await expect(quizBadgeTotal(page)).toContainText('3');
 
     await switchActiveBank(page, FIXTURE_BANK_ID, new RegExp(FIXTURE_BANK.meta.title));
@@ -625,6 +633,16 @@ test.describe('Tier 1 (Phase 2): QuizHub Brand, Smart Import Workbench, Unified 
 
     const streamReqs = mockLlm.requests.filter((r) => r.body?.stream === true);
     expect(streamReqs).toHaveLength(1);
+    const accountButton = page.getByTestId('auth-open-btn');
+    if (await accountButton.isVisible()) {
+      await page.evaluate(() => window.scrollTo({ top: 60, behavior: 'instant' }));
+      const settingsBox = await page.getByTestId('btn-api-settings').boundingBox();
+      const accountBox = await accountButton.boundingBox();
+      expect(settingsBox).not.toBeNull();
+      expect(accountBox).not.toBeNull();
+      expect(boxesOverlap(settingsBox!, accountBox!)).toBe(false);
+    }
+    await page.evaluate(() => window.scrollTo({ top: 0, behavior: 'instant' }));
     await assertFullLayoutAudit(page);
   });
 

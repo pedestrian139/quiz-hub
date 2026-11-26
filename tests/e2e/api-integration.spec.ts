@@ -1,6 +1,7 @@
 import { test, expect } from './helpers/fixtures';
 import { assertNoHorizontalOverflow, assertNoOverlappingControls } from './helpers/audit';
 import { gotoRoute, modeCard, quizOption, selfCheckBtn } from './helpers/selectors';
+import { seedFixtureBank } from './helpers/fixtureBank';
 
 const MOCK_API_BASE = 'https://mock-llm.example.test/v1';
 
@@ -169,7 +170,7 @@ test.describe('V2 API Integration (feat/api-integration)', () => {
       });
     });
 
-    await gotoRoute(page, 'quiz');
+    await seedFixtureBank(page, undefined, undefined, { targetHashRoute: '#/quiz' });
     await modeCard(page, 'short').click();
 
     await page.getByTestId('ai-btn-grade-toggle').click();
@@ -182,6 +183,7 @@ test.describe('V2 API Integration (feat/api-integration)', () => {
     await page.getByTestId('ai-btn-apply-mastery').click();
     await expect(selfCheckBtn(page, 2)).toHaveAttribute('aria-pressed', 'true');
 
+    await page.evaluate(() => window.scrollTo({ top: 0, behavior: 'instant' }));
     await assertNoHorizontalOverflow(page);
     await assertNoOverlappingControls(page);
   });

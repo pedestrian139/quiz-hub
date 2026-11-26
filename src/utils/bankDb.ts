@@ -13,7 +13,9 @@ import type {
 import { computeV1BankCounts } from './bankCatalog';
 import {
   BUILTIN_AI_BANK_ID,
+  BUILTIN_GUIDE_BANK_ID,
   QUIZHUB_SHARE_SCHEMA,
+  isBuiltinBankId,
   type BankRecord,
   type ImportSourceFormat,
   type QuizHubSharePackage,
@@ -228,6 +230,7 @@ function createBankDb(scope: PracticeScope) {
   let openPromise: Promise<IDBDatabase | null> | null = null;
   let cachedDb: IDBDatabase | null = null;
   const progressWriteQueues = new Map<string, Promise<boolean>>();
+  let defaultBankId = BUILTIN_GUIDE_BANK_ID;
 
   function resetFallbackMemoryDb(): void {
     memBanks.clear();
@@ -382,7 +385,7 @@ function createBankDb(scope: PracticeScope) {
     }
 
     return list
-      .filter((b) => b && b.id !== BUILTIN_AI_BANK_ID && !b.builtin)
+      .filter((b) => b && !isBuiltinBankId(b.id) && !b.builtin)
       .map((b) => {
         const safeQuestions = Array.isArray(b.data?.questions)
           ? b.data.questions.map(normalizeLegacyQuestion)
@@ -403,8 +406,8 @@ function createBankDb(scope: PracticeScope) {
       .sort((a, b) => b.updatedAt - a.updatedAt || b.createdAt - a.createdAt);
   }
 
-  async function saveCustomBank(bank: BankRecord): Promise<BankRecord> {
-    if (bank.id === BUILTIN_AI_BANK_ID || bank.builtin) {
+  async function saveCustomBank(bank: BankRecord, options?: { requireStorage?: boolean }): Promise<BankRecord> {
+    if (isBuiltinBankId(bank.id) || bank.builtin) {
       throw new Error('Cannot overwrite built-in example bank');
     }
     const safeQuestions = Array.isArray(bank.data?.questions)
@@ -430,17 +433,18 @@ function createBankDb(scope: PracticeScope) {
       },
     };
 
-    memBanks.set(normalized.id, cloneBankRecord(normalized));
     const db = await openQuizHubDb();
+    if (!db && options?.requireStorage) throw new Error('浏览器题库存储暂不可用。');
     if (db) {
       try {
         const tx = db.transaction(STORE_BANKS, 'readwrite');
         tx.objectStore(STORE_BANKS).put(normalized);
         await txDone(tx);
-      } catch {
-        // Fallback already persisted in memBanks
+      } catch (error) {
+        if (options?.requireStorage) throw error;
       }
     }
+    memBanks.set(normalized.id, cloneBankRecord(normalized));
     return normalized;
   }
 
@@ -448,7 +452,7 @@ function createBankDb(scope: PracticeScope) {
     const now = Date.now();
     const safeName = input.name.trim() || '未命名题库';
     const id =
-      input.id && input.id !== BUILTIN_AI_BANK_ID
+      input.id && !isBuiltinBankId(input.id)
         ? input.id
         : `bank-${now.toString(36)}-${Math.random().toString(36).slice(2, 7)}`;
 
@@ -486,7 +490,7 @@ function createBankDb(scope: PracticeScope) {
     newName: string,
     newDescription?: string,
   ): Promise<BankRecord | null> {
-    if (bankId === BUILTIN_AI_BANK_ID) {
+    if (isBuiltinBankId(bankId)) {
       return null;
     }
     const trimmed = newName.trim();
@@ -519,7 +523,7 @@ function createBankDb(scope: PracticeScope) {
   }
 
   async function deleteCustomBank(bankId: string): Promise<boolean> {
-    if (bankId === BUILTIN_AI_BANK_ID) {
+    if (isBuiltinBankId(bankId)) {
       return false;
     }
 
@@ -540,7 +544,7 @@ function createBankDb(scope: PracticeScope) {
 
     const active = await getActiveBankId();
     if (active === bankId) {
-      await setActiveBankId(BUILTIN_AI_BANK_ID);
+      await setActiveBankId(defaultBankId);
     }
     return true;
   }
@@ -590,7 +594,7 @@ function createBankDb(scope: PracticeScope) {
     }
   }
 
-  async function writeBankProgressRaw(bankId: string, store: UserStore): Promise<boolean> {
+  async function writeBankProgressRaw(bankId: string, store: UserStore, requireStorage = false): Promise<boolean> {
     const clean = cloneStore(store);
     memProgress.set(bankId, clean);
     if (bankId === BUILTIN_AI_BANK_ID) {
@@ -599,7 +603,7 @@ function createBankDb(scope: PracticeScope) {
 
     const db = await openQuizHubDb();
     if (!db) {
-      return true;
+      return !requireStorage;
     }
 
     try {
@@ -624,9 +628,9 @@ function createBankDb(scope: PracticeScope) {
     }
   }
 
-  function saveBankProgress(bankId: string, store: UserStore): Promise<boolean> {
+  function saveBankProgress(bankId: string, store: UserStore, requireStorage = false): Promise<boolean> {
     const prev = progressWriteQueues.get(bankId) ?? Promise.resolve(true);
-    const next = prev.catch(() => true).then(() => writeBankProgressRaw(bankId, store));
+    const next = prev.catch(() => true).then(() => writeBankProgressRaw(bankId, store, requireStorage));
     progressWriteQueues.set(bankId, next);
     return next;
   }
@@ -639,14 +643,18 @@ function createBankDb(scope: PracticeScope) {
 
   async function getActiveBankId(): Promise<string> {
     const raw = await getMeta(META_ACTIVE_BANK_ID);
-    return typeof raw === 'string' && raw.trim().length > 0 ? raw : BUILTIN_AI_BANK_ID;
+    return typeof raw === 'string' && raw.trim().length > 0 ? raw : defaultBankId;
   }
 
   async function setActiveBankId(bankId: string): Promise<void> {
     await setMeta(META_ACTIVE_BANK_ID, bankId);
   }
 
-  async function initBankDb(builtinBank: BankRecord): Promise<InitBankDbResult> {
+  async function initBankDb(
+    builtinBank: BankRecord,
+    extraProgressIds: readonly string[] = [],
+  ): Promise<InitBankDbResult> {
+    defaultBankId = builtinBank.id;
     await openQuizHubDb();
 
     let migratedFromV1 = false;
@@ -667,18 +675,20 @@ function createBankDb(scope: PracticeScope) {
 
     const customBanks = await listCustomBanks();
     const banks: BankRecord[] = [builtinBank, ...customBanks];
-    const validBankIds = new Set(banks.map((b) => b.id));
+    const validBankIds = new Set([...banks.map((b) => b.id), ...extraProgressIds]);
 
     const storedProgress = await readAllProgressMap();
     const progressByBank: Record<string, UserStore> = {};
-    for (const bank of banks) {
-      progressByBank[bank.id] = storedProgress[bank.id]
-        ? cloneStore(storedProgress[bank.id]!)
+    for (const bankId of validBankIds) {
+      progressByBank[bankId] = storedProgress[bankId]
+        ? cloneStore(storedProgress[bankId]!)
         : createEmptyStore();
     }
 
-    const rawActiveId = await getActiveBankId();
-    const activeBankId = validBankIds.has(rawActiveId) ? rawActiveId : BUILTIN_AI_BANK_ID;
+    const rawActiveId = await getMeta(META_ACTIVE_BANK_ID);
+    const activeBankId = typeof rawActiveId === 'string' && validBankIds.has(rawActiveId)
+      ? rawActiveId
+      : builtinBank.id;
     if (activeBankId !== rawActiveId) {
       await setActiveBankId(activeBankId);
     }

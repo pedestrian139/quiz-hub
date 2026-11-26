@@ -50,7 +50,7 @@ test.describe('Tier 1: Portal Hub, Navigation & Quiz Home (UF01-UF06)', () => {
   }, testInfo) => {
     onlyDesktop(testInfo);
     await gotoRoute(page, '#/');
-    await expect(page.getByRole('heading', { name: /QuizHub/i })).toBeVisible();
+    await expect(page.getByRole('heading', { level: 1, name: /QuizHub/i })).toBeVisible();
     await expect(page.getByText(/QuizHub 使用引导示例题库/).first()).toBeVisible();
     await expect(page.getByText(/本地保存进度|离线|localStorage|云端/i).first()).toBeVisible();
     await expect(page.locator('body')).not.toContainText('人工智能导论');
@@ -187,7 +187,7 @@ test.describe('Tier 1: Portal Hub, Navigation & Quiz Home (UF01-UF06)', () => {
     await expect(
       page.getByText(new RegExp(`${bank.chapters.length}\\s*章`)).first(),
     ).toBeVisible();
-    await expect(page.getByText(/本地保存进度/).first()).toBeVisible();
+    await expect(page.getByText(/独立保存进度/)).toBeVisible();
   });
 
   test('T1-012 [UF03] Quiz Home fresh 4-card stats grid shows initial zeros', async ({

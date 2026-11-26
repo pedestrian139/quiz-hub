@@ -8,7 +8,7 @@ import {
 import { assertFullLayoutAudit } from './helpers/audit.ts';
 import { installAuthGateway } from './helpers/authGateway.ts';
 import {
-  BUILTIN_AI_BANK_ID,
+  BUILTIN_GUIDE_BANK_ID,
   FIXTURE_BANK,
   FIXTURE_BANK_ID,
   LEGACY_PHASE1_BANK,
@@ -41,7 +41,6 @@ import {
   answerCurrentQuestion,
   bankImportFileInput,
   bankSwitcher,
-  btnCloseQuizImport,
   btnConfirmImport,
   btnConfirmImportSticky,
   btnNext,
@@ -50,6 +49,7 @@ import {
   draftDelete,
   draftEdit,
   ensureAnswerSheetOpen,
+  filterOrder,
   gotoRoute,
   hubBadgeTotal,
   hubCardQuiz,
@@ -125,14 +125,7 @@ async function confirmImportAndClose(page: Page, bankName?: string): Promise<voi
   await expect(confirmBtn).toBeEnabled();
   await confirmBtn.click();
 
-  const dialog = quizImportDialog(page);
-  if (await dialog.isVisible().catch(() => false)) {
-    const closeBtn = btnCloseQuizImport(page);
-    if (await closeBtn.isVisible().catch(() => false)) {
-      await closeBtn.click();
-    }
-  }
-  await expect(dialog).toBeHidden();
+  await expect(quizImportDialog(page)).toBeHidden();
 }
 
 async function switchActiveBank(
@@ -213,6 +206,7 @@ test.describe('Tier 4 Phase 2: Real-World Application Journeys (T4-P2-001..T4-P2
     await expect(quizBadgeTotal(page)).toContainText('3');
     await expect(page.locator('body')).toContainText('QuizHub 使用引导示例题库');
 
+    await filterOrder(page).selectOption('seq');
     await modeCard(page, 'all').click();
     await expect(qStem(page).locator('.katex').first()).toBeVisible();
 
@@ -359,15 +353,16 @@ test.describe('Tier 4 Phase 2: Real-World Application Journeys (T4-P2-001..T4-P2
       targetHashRoute: '#/quiz',
       apiConfig: {},
     });
-    const stemMap = buildQuestionStemMap(MARKDOWN_LATEX_BANK);
-
+    await expect(bankSwitcher(page)).toHaveValue(FIXTURE_BANK_ID);
+    await filterOrder(page).selectOption('seq');
     await modeCard(page, 'all').click();
     await expect(qStem(page).locator('table')).toBeVisible();
     await expect(qStem(page).locator('.katex').first()).toBeVisible();
     await assertFullLayoutAudit(page, { checkTables: true });
 
     await enableAutoExplain(page);
-    await answerCurrentQuestion(page, stemMap, 'wrong');
+    await quizOption(page, 1).click();
+    await expect(quizFeedback(page)).toContainText('回答错误');
 
     const explainArea = explanationContainer(page);
     await expect(explainArea).toContainText('核心考点');
@@ -431,7 +426,7 @@ test.describe('Tier 4 Phase 2: Real-World Application Journeys (T4-P2-001..T4-P2
     const stemMap = buildQuestionStemMap(FIXTURE_BANK);
 
     await assertFullLayoutAudit(page);
-    await switchActiveBank(page, BUILTIN_AI_BANK_ID, /QuizHub/);
+    await switchActiveBank(page, BUILTIN_GUIDE_BANK_ID, /QuizHub/);
     await expect(quizBadgeTotal(page)).toContainText('3');
     await switchActiveBank(page, FIXTURE_BANK_ID, /E2E 合成/);
     await expect(quizBadgeTotal(page)).toContainText('57');
@@ -500,6 +495,7 @@ test.describe('Tier 4 Phase 2: Real-World Application Journeys (T4-P2-001..T4-P2
 
     await gotoRoute(page, '#/quiz');
     await switchActiveBank(page, legacyBankId, /Phase 1/);
+    await filterOrder(page).selectOption('seq');
     await modeCard(page, 'all').click();
 
     await answerCurrentQuestion(page, stemMap, 'wrong');
@@ -521,6 +517,7 @@ test.describe('Tier 4 Phase 2: Real-World Application Journeys (T4-P2-001..T4-P2
         { timeout: 8_000 },
       )
       .toBe(true);
+    await expect.poll(() => Object.keys(gateway.getCloudProgress(email, legacyBankId)?.store.records ?? {}).length).toBe(2);
 
     // Clean reload (wipe localStorage/IDB except Supabase auth session) -> hit cached explanation with 0 LLM calls
     await wipeLocalCachesPreserveAuth(page);
@@ -535,6 +532,7 @@ test.describe('Tier 4 Phase 2: Real-World Application Journeys (T4-P2-001..T4-P2
     await aiBtnExplain(page).click();
     await expect(explanationContainer(page)).toContainText('核心考点');
     expect(llm.requests.filter((r) => r.url.includes('/chat/completions'))).toHaveLength(0);
+    await page.evaluate(() => window.scrollTo({ top: 0, behavior: 'instant' }));
     await assertFullLayoutAudit(page);
   });
 });

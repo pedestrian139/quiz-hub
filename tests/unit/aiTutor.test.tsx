@@ -166,6 +166,36 @@ describe('AiQuestionTutor (M3)', () => {
     );
   });
 
+  it('keeps the generated analysis visible and retries a failed save without calling the model again', async () => {
+    seedReadyApiConfig();
+    const analysis = '### 【核心考点】\n生成成功，等待保存';
+    const fetchMock = vi.fn(async () => makeSseResponse([analysis]));
+    vi.stubGlobal('fetch', fetchMock);
+    const save = vi.fn().mockImplementationOnce(() => {
+      throw new Error('Storage unavailable');
+    }).mockResolvedValue(undefined);
+
+    root = createRoot(container);
+    act(() => {
+      root!.render(
+        <AiQuestionTutor question={makeQuestion()} isGraded isRevealed={false} onSaveAiAnalysis={save} />,
+      );
+    });
+    await act(async () => {
+      container.querySelector<HTMLButtonElement>('[data-testid="ai-btn-explain"]')!.click();
+    });
+
+    const card = container.querySelector('[data-testid="ai-explain-card"]')!;
+    expect(card.textContent).toContain('生成成功，等待保存');
+    expect(card.textContent).toContain('解析保存失败');
+    const retry = Array.from(card.querySelectorAll('button')).find((button) => button.textContent === '重试保存')!;
+    await act(async () => retry.click());
+    expect(save).toHaveBeenCalledTimes(2);
+    expect(save).toHaveBeenLastCalledWith('tutor-q1', analysis, 'mock-tutor-model');
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(card.textContent).not.toContain('解析保存失败');
+  });
+
   it('hits cached store.aiExplanations or question.aiAnalysis with 0 LLM calls and supports regenerate', async () => {
     seedReadyApiConfig();
     const fetchMock = vi
