@@ -18,6 +18,7 @@ import type { CurrentUser } from '../../services/authService';
 import { AuthIcon } from './AuthIcons';
 import { applyAuthResult, closeAuthModal, refreshAuthIdentity, setAuthModalMode, useAuthUiState } from './authState';
 import type { AuthModalMode } from './authState';
+import { clearOtpTiming, getOtpTiming, recordOtpSent } from './otpThrottle';
 import { useDialogFocus } from './useDialogFocus';
 import './Auth.css';
 
@@ -30,7 +31,11 @@ export interface AuthModalProps {
 
 type LoginMethod = 'password' | 'otp';
 
-const OTP_COOLDOWN_SECONDS = 60;
+function formatCountdown(seconds: number): string {
+  const mins = Math.floor(seconds / 60);
+  const secs = seconds % 60;
+  return `${mins}:${String(secs).padStart(2, '0')}`;
+}
 
 const MODE_COPY: Record<AuthModalMode, { title: string; description: string; submit: string }> = {
   login: { title: '登录 QuizHub', description: '支持邮箱密码登录或邮箱验证码登录。', submit: '登录' },
@@ -50,13 +55,13 @@ function errorMessage(error: unknown): string {
   if (code === 'invalid_credentials') return '邮箱或密码不正确。';
   if (code === 'email_not_confirmed') return '该邮箱尚未完成验证码激活，请先验证邮箱。';
   if (code === 'otp_expired' || /token.*(expired|invalid)/i.test(rawMessage)) {
-    return '验证码无效或已过期，请核对或重新获取。';
+    return '验证码无效或已过期（有效期 5 分钟），请核对或点击「重发验证码」。';
   }
   if (code === 'otp_disabled' || code === 'signup_disabled') {
     return '该邮箱尚未注册，请先切换到「注册」创建账号。';
   }
   if (code === 'over_email_send_rate_limit' || code === 'over_request_rate_limit') {
-    return '验证码发送过于频繁，请稍后再试。';
+    return '发送过于频繁，请至少间隔 60 秒后再重发验证码。';
   }
   if (code === 'user_already_exists' || code === 'email_exists') {
     return '该邮箱已注册，请直接登录。';
@@ -80,7 +85,7 @@ export function AuthModal({ open: controlledOpen, initialMode, onClose, onAuthSu
   const [otpTouched, setOtpTouched] = useState(false);
   const [pendingVerifyEmail, setPendingVerifyEmail] = useState<string | null>(null);
   const [unconfirmedEmail, setUnconfirmedEmail] = useState<string | null>(null);
-  const [otpCooldown, setOtpCooldown] = useState(0);
+  const [otpTick, setOtpTick] = useState(0);
   const [sendingOtp, setSendingOtp] = useState(false);
   const [submitError, setSubmitError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
@@ -105,19 +110,27 @@ export function AuthModal({ open: controlledOpen, initialMode, onClose, onAuthSu
     setOtpTouched(false);
     setPendingVerifyEmail(null);
     setUnconfirmedEmail(null);
-    setOtpCooldown(0);
     setSendingOtp(false);
     setSubmitError(null);
     setNotice(null);
   }, [isOpen]);
 
+  const detection = detectAccountInput(account);
+  const otpTargetEmail = pendingVerifyEmail ?? (detection.valid ? detection.normalized : '');
+  void otpTick;
+  const otpTiming = isOpen && otpTargetEmail ? getOtpTiming(otpTargetEmail) : getOtpTiming('');
+  const otpSent = otpTiming.sent;
+  const otpCooldown = otpTiming.cooldownSeconds;
+  const otpRemainingSeconds = otpTiming.remainingSeconds;
+
   useEffect(() => {
-    if (otpCooldown <= 0) return;
+    if (!isOpen || !otpTargetEmail) return;
+    if (otpCooldown <= 0 && otpRemainingSeconds <= 0) return;
     const timer = window.setTimeout(() => {
-      setOtpCooldown((prev) => (prev > 1 ? prev - 1 : 0));
+      setOtpTick((n) => n + 1);
     }, 1000);
     return () => window.clearTimeout(timer);
-  }, [otpCooldown]);
+  }, [isOpen, otpTargetEmail, otpCooldown, otpRemainingSeconds, otpTick]);
 
   useEffect(() => {
     if (pendingVerifyEmail) {
@@ -134,13 +147,19 @@ export function AuthModal({ open: controlledOpen, initialMode, onClose, onAuthSu
   const showOtpField = Boolean(pendingVerifyEmail) || (isLoginFlow && loginMethod === 'otp');
   const showPasswordField = !pendingVerifyEmail && (creating || (isLoginFlow && loginMethod === 'password'));
 
-  const detection = detectAccountInput(account);
   const passwordCheck = validatePassword(password, creating);
   const otpCheck = validateEmailOtp(otpCode);
   const accountError = accountTouched && !detection.valid ? detection.message : undefined;
   const passwordError = passwordTouched && !passwordCheck.valid ? passwordCheck.message : undefined;
   const otpError = otpTouched && !otpCheck.valid ? otpCheck.message : undefined;
   const copy = MODE_COPY[mode];
+
+  function recordRateLimitCooldown(email: string): void {
+    if (email && getOtpTiming(email).cooldownSeconds === 0) {
+      recordOtpSent(email);
+      setOtpTick((n) => n + 1);
+    }
+  }
 
   function changeMode(nextMode: AuthModalMode): void {
     if (controlledOpen === undefined) setAuthModalMode(nextMode);
@@ -152,7 +171,6 @@ export function AuthModal({ open: controlledOpen, initialMode, onClose, onAuthSu
     setOtpTouched(false);
     setPendingVerifyEmail(null);
     setUnconfirmedEmail(null);
-    setOtpCooldown(0);
     setSubmitError(null);
     setNotice(null);
   }
@@ -171,18 +189,28 @@ export function AuthModal({ open: controlledOpen, initialMode, onClose, onAuthSu
   }
 
   async function handleSendOtp(): Promise<void> {
-    if (busy || !configured || otpCooldown > 0) return;
+    if (busy || !configured) return;
     setSubmitError(null);
     setNotice(null);
 
     if (pendingVerifyEmail) {
+      const currentTiming = getOtpTiming(pendingVerifyEmail);
+      if (currentTiming.cooldownSeconds > 0) {
+        setSubmitError(`请至少间隔 ${currentTiming.cooldownSeconds} 秒后再重发验证码。`);
+        return;
+      }
       setSendingOtp(true);
       try {
         await resendSignupOtp({ account: pendingVerifyEmail });
-        setOtpCooldown(OTP_COOLDOWN_SECONDS);
-        setNotice(`验证码已重新发送至 ${pendingVerifyEmail}，请查收邮件。`);
+        recordOtpSent(pendingVerifyEmail);
+        setOtpTick((n) => n + 1);
+        setNotice(`验证码已重新发送至 ${pendingVerifyEmail}（5 分钟内有效），请查收邮件。`);
         otpInputRef.current?.focus();
       } catch (error) {
+        const code = errorCodeOf(error);
+        if (code === 'over_email_send_rate_limit' || code === 'over_request_rate_limit') {
+          recordRateLimitCooldown(pendingVerifyEmail);
+        }
         setSubmitError(errorMessage(error));
       } finally {
         setSendingOtp(false);
@@ -192,13 +220,29 @@ export function AuthModal({ open: controlledOpen, initialMode, onClose, onAuthSu
 
     setAccountTouched(true);
     if (!detection.valid) return;
+    const targetEmail = detection.normalized;
+    const currentTiming = getOtpTiming(targetEmail);
+    if (currentTiming.cooldownSeconds > 0) {
+      setSubmitError(`请至少间隔 ${currentTiming.cooldownSeconds} 秒后再重发验证码。`);
+      return;
+    }
+    const isResend = currentTiming.sent;
     setSendingOtp(true);
     try {
-      await sendLoginOtp({ account });
-      setOtpCooldown(OTP_COOLDOWN_SECONDS);
-      setNotice(`验证码已发送至 ${detection.normalized}，请查收邮件。`);
+      await sendLoginOtp({ account: targetEmail });
+      recordOtpSent(targetEmail);
+      setOtpTick((n) => n + 1);
+      setNotice(
+        isResend
+          ? `验证码已重新发送至 ${targetEmail}（5 分钟内有效），请查收邮件。`
+          : `验证码已发送至 ${targetEmail}（5 分钟内有效），请查收邮件。`,
+      );
       otpInputRef.current?.focus();
     } catch (error) {
+      const code = errorCodeOf(error);
+      if (code === 'over_email_send_rate_limit' || code === 'over_request_rate_limit') {
+        recordRateLimitCooldown(targetEmail);
+      }
       setSubmitError(errorMessage(error));
     } finally {
       setSendingOtp(false);
@@ -209,19 +253,36 @@ export function AuthModal({ open: controlledOpen, initialMode, onClose, onAuthSu
     if (busy || !configured || !unconfirmedEmail) return;
     setSubmitError(null);
     setNotice(null);
-    setSendingOtp(true);
-    try {
-      await resendSignupOtp({ account: unconfirmedEmail });
-      const targetEmail = unconfirmedEmail;
+    const targetEmail = unconfirmedEmail;
+    const currentTiming = getOtpTiming(targetEmail);
+    if (currentTiming.cooldownSeconds > 0) {
       setPendingVerifyEmail(targetEmail);
       setUnconfirmedEmail(null);
       setPassword('');
       setPasswordTouched(false);
       setOtpCode('');
       setOtpTouched(false);
-      setOtpCooldown(OTP_COOLDOWN_SECONDS);
-      setNotice(`激活验证码已发送至 ${targetEmail}，请输入邮件中的 6–8 位验证码。`);
+      setNotice(`验证码已发送至 ${targetEmail}（5 分钟内有效），请查收邮件或 ${currentTiming.cooldownSeconds}s 后重发。`);
+      return;
+    }
+
+    setSendingOtp(true);
+    try {
+      await resendSignupOtp({ account: targetEmail });
+      recordOtpSent(targetEmail);
+      setOtpTick((n) => n + 1);
+      setPendingVerifyEmail(targetEmail);
+      setUnconfirmedEmail(null);
+      setPassword('');
+      setPasswordTouched(false);
+      setOtpCode('');
+      setOtpTouched(false);
+      setNotice(`激活验证码已发送至 ${targetEmail}（5 分钟内有效），请输入邮件中的 6–8 位验证码。`);
     } catch (error) {
+      const code = errorCodeOf(error);
+      if (code === 'over_email_send_rate_limit' || code === 'over_request_rate_limit') {
+        recordRateLimitCooldown(targetEmail);
+      }
       setSubmitError(errorMessage(error));
     } finally {
       setSendingOtp(false);
@@ -244,6 +305,7 @@ export function AuthModal({ open: controlledOpen, initialMode, onClose, onAuthSu
           code: otpCode,
           importGuestData: mode === 'guest-login',
         });
+        clearOtpTiming(pendingVerifyEmail);
         await applyAuthResult(result);
         onAuthSuccess?.(result.user);
         (onClose ?? closeAuthModal)();
@@ -266,6 +328,7 @@ export function AuthModal({ open: controlledOpen, initialMode, onClose, onAuthSu
           code: otpCode,
           importGuestData: mode === 'guest-login',
         });
+        clearOtpTiming(detection.normalized);
         await applyAuthResult(result);
         onAuthSuccess?.(result.user);
         (onClose ?? closeAuthModal)();
@@ -294,19 +357,24 @@ export function AuthModal({ open: controlledOpen, initialMode, onClose, onAuthSu
           : await loginWithAccount({ account, password, importGuestData: mode === 'guest-login' });
 
       if (!result.user) {
+        recordOtpSent(detection.normalized);
+        setOtpTick((n) => n + 1);
         setPendingVerifyEmail(detection.normalized);
         setOtpCode('');
         setOtpTouched(false);
-        setOtpCooldown(OTP_COOLDOWN_SECONDS);
-        setNotice(`验证码已发送至 ${detection.normalized}，请输入邮件中的 6–8 位验证码完成${mode === 'upgrade' ? '绑定' : '注册'}。`);
+        setNotice(`验证码已发送至 ${detection.normalized}（5 分钟内有效），请输入邮件中的 6–8 位验证码完成${mode === 'upgrade' ? '绑定' : '注册'}。`);
         return;
       }
       await applyAuthResult(result);
       onAuthSuccess?.(result.user);
       (onClose ?? closeAuthModal)();
     } catch (error) {
-      if (isLoginFlow && errorCodeOf(error) === 'email_not_confirmed' && detection.valid) {
+      const code = errorCodeOf(error);
+      if (isLoginFlow && code === 'email_not_confirmed' && detection.valid) {
         setUnconfirmedEmail(detection.normalized);
+      }
+      if (code === 'over_email_send_rate_limit' || code === 'over_request_rate_limit') {
+        recordRateLimitCooldown(detection.normalized);
       }
       setSubmitError(errorMessage(error));
     } finally {
@@ -554,7 +622,7 @@ export function AuthModal({ open: controlledOpen, initialMode, onClose, onAuthSu
                 <div className="auth-field">
                   <div className="auth-field__head">
                     <label className="auth-field__label" htmlFor="auth-otp-input">邮箱验证码</label>
-                    <span className="auth-field__hint">查收邮件中的 6–8 位数字验证码</span>
+                    <span className="auth-field__hint">6–8 位数字 · 5 分钟内有效</span>
                   </div>
                   <div className="auth-otp-group">
                     <input
@@ -581,9 +649,25 @@ export function AuthModal({ open: controlledOpen, initialMode, onClose, onAuthSu
                       disabled={busy || otpCooldown > 0}
                       onClick={() => { void handleSendOtp(); }}
                     >
-                      {sendingOtp ? '发送中…' : otpCooldown > 0 ? `${otpCooldown}s 后重发` : pendingVerifyEmail ? '重新发送' : '获取验证码'}
+                      {sendingOtp
+                        ? '发送中…'
+                        : otpCooldown > 0
+                          ? `${otpCooldown}s 后重发`
+                          : (pendingVerifyEmail || otpSent)
+                            ? '重发验证码'
+                            : '获取验证码'}
                     </button>
                   </div>
+                  {(pendingVerifyEmail || otpSent) && (
+                    <span
+                      data-testid="auth-otp-expiry"
+                      className={`auth-otp-expiry${otpRemainingSeconds <= 0 ? ' auth-otp-expiry--expired' : ''}`}
+                    >
+                      {otpRemainingSeconds > 0
+                        ? `验证码 5 分钟内有效（剩余 ${formatCountdown(otpRemainingSeconds)}）`
+                        : '验证码已过期，请点击「重发验证码」重新获取'}
+                    </span>
+                  )}
                   {otpError && (
                     <span id="auth-otp-error" className="auth-field__error" role="alert" data-testid="auth-otp-error">
                       {otpError}
@@ -607,7 +691,9 @@ export function AuthModal({ open: controlledOpen, initialMode, onClose, onAuthSu
                     disabled={busy}
                     onClick={() => { void handleGoActivateUnconfirmed(); }}
                   >
-                    发送验证码激活此邮箱
+                    {getOtpTiming(unconfirmedEmail).cooldownSeconds > 0
+                      ? '去输入邮箱验证码'
+                      : '重发验证码激活此邮箱'}
                   </button>
                 </div>
               )}

@@ -2,6 +2,14 @@ import 'fake-indexeddb/auto';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { resetStore, saveStore } from '../../src/core/storage';
 import { API_CONFIG_STORAGE_KEY, createDefaultApiConfig } from '../../src/services/apiConfig';
+import {
+  OTP_COOLDOWN_SECONDS,
+  OTP_VALIDITY_SECONDS,
+  clearOtpTiming,
+  getOtpTiming,
+  recordOtpSent,
+  resetAllOtpTimingsForTests,
+} from '../../src/components/Auth/otpThrottle';
 import { normalizeAccount, validateEmailOtp } from '../../src/services/db/account';
 import { readGuestData } from '../../src/services/db/guestData';
 import { savePendingUpgrade, readPendingUpgrade } from '../../src/services/db/guestUpgrade';
@@ -12,6 +20,7 @@ describe('database accounts and guest migration', () => {
   beforeEach(() => {
     localStorage.clear();
     sessionStorage.clear();
+    resetAllOtpTimingsForTests();
   });
 
   it('normalizes email identifiers and rejects phone numbers and reserved aliases', () => {
@@ -76,5 +85,36 @@ describe('database accounts and guest migration', () => {
     const failedOpen = vi.spyOn(indexedDB, 'open').mockImplementation(() => { throw new Error('Storage unavailable'); });
     try { await expect(readGuestData()).rejects.toThrow(); } finally { failedOpen.mockRestore(); }
     expect((await readGuestData()).banks.some(({ id }) => id === bank.id)).toBe(true);
+  });
+
+  it('enforces a 60s per-email OTP resend cooldown and 5-minute validity window', () => {
+    expect(OTP_COOLDOWN_SECONDS).toBe(60);
+    expect(OTP_VALIDITY_SECONDS).toBe(300);
+
+    const t0 = 1_700_000_000_000;
+    expect(recordOtpSent(' User@Example.com ', t0)).toMatchObject({
+      sent: true,
+      cooldownSeconds: 60,
+      remainingSeconds: 300,
+    });
+    expect(getOtpTiming('other@example.com', t0).sent).toBe(false);
+    expect(getOtpTiming('user@example.com', t0 + 30_000)).toMatchObject({
+      sent: true,
+      cooldownSeconds: 30,
+      remainingSeconds: 270,
+    });
+    expect(getOtpTiming('user@example.com', t0 + 60_000)).toMatchObject({
+      sent: true,
+      cooldownSeconds: 0,
+      remainingSeconds: 240,
+    });
+    expect(getOtpTiming('user@example.com', t0 + 300_000)).toMatchObject({
+      sent: true,
+      cooldownSeconds: 0,
+      remainingSeconds: 0,
+    });
+
+    clearOtpTiming('user@example.com');
+    expect(getOtpTiming('user@example.com', t0 + 10_000).sent).toBe(false);
   });
 });
