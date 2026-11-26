@@ -63,6 +63,7 @@ test.describe('Tier 6: Auth UI with the Supabase client (Email + OTP)', () => {
     await expect(page.getByTestId('auth-notice')).toContainText('验证码已发送至 learner@example.com');
     await expect(page.getByTestId('auth-otp-input')).toBeVisible();
     await expect(page.getByTestId('auth-send-otp-btn')).toBeDisabled();
+    await expect(page.getByTestId('auth-send-otp-btn')).toHaveText(/^\d+秒后再次发送$/);
     await expect(page.getByTestId('user-menu-trigger')).toHaveCount(0);
 
     await page.getByTestId('auth-tab-login').click();
@@ -74,6 +75,7 @@ test.describe('Tier 6: Auth UI with the Supabase client (Email + OTP)', () => {
     await page.getByTestId('auth-go-verify-btn').click();
     await expect(page.getByTestId('auth-notice')).toContainText('验证码已发送至 learner@example.com');
     await expect(page.getByTestId('auth-send-otp-btn')).toBeDisabled();
+    await expect(page.getByTestId('auth-send-otp-btn')).toHaveText(/^\d+秒后再次发送$/);
 
     healthTrap.expectHttpError('http://127.0.0.1:49391/auth/v1/verify', 400);
     await page.getByTestId('auth-otp-input').fill('000000');
@@ -131,6 +133,7 @@ test.describe('Tier 6: Auth UI with the Supabase client (Email + OTP)', () => {
     await page.getByTestId('auth-send-otp-btn').click();
     await expect(page.getByTestId('auth-notice')).toContainText('验证码已发送至 otpuser@example.com');
     await expect(page.getByTestId('auth-send-otp-btn')).toBeDisabled();
+    await expect(page.getByTestId('auth-send-otp-btn')).toHaveText(/^\d+秒后再次发送$/);
     await assertFullLayoutAudit(page);
 
     healthTrap.expectHttpError('http://127.0.0.1:49391/auth/v1/verify', 400);
@@ -159,7 +162,15 @@ test.describe('Tier 6: Auth UI with the Supabase client (Email + OTP)', () => {
     await expect(page.getByTestId('auth-otp-expiry')).toContainText('5 分钟内有效');
     const sendBtn = page.getByTestId('auth-send-otp-btn');
     await expect(sendBtn).toBeDisabled();
-    await expect(sendBtn).toContainText('后重发');
+    await expect(sendBtn).toHaveText(/^(58|59|60)秒后再次发送$/);
+    const initialText = await sendBtn.innerText();
+    const initialSeconds = Number.parseInt(initialText, 10);
+
+    await page.clock.fastForward(3_000);
+    await expect(sendBtn).toHaveText(/^\d+秒后再次发送$/);
+    const tickedText = await sendBtn.innerText();
+    const tickedSeconds = Number.parseInt(tickedText, 10);
+    expect(tickedSeconds).toBeLessThanOrEqual(initialSeconds - 2);
 
     // Reopen modal in OTP login for the same email: 60s cooldown persists and cannot be bypassed
     await page.getByTestId('auth-modal-close').click();
@@ -169,8 +180,8 @@ test.describe('Tier 6: Auth UI with the Supabase client (Email + OTP)', () => {
     await expect(sendBtn).toBeDisabled();
     await expect(page.getByTestId('auth-otp-expiry')).toContainText('5 分钟内有效');
 
-    // Fast-forward 61s: resend button becomes active as "重发验证码"
-    await page.clock.fastForward(61_000);
+    // Fast-forward remaining 58s: resend button becomes active as "重发验证码"
+    await page.clock.fastForward(58_000);
     await expect(sendBtn).toBeEnabled();
     await expect(sendBtn).toHaveText('重发验证码');
 
@@ -187,6 +198,7 @@ test.describe('Tier 6: Auth UI with the Supabase client (Email + OTP)', () => {
     await sendBtn.click();
     await expect(page.getByTestId('auth-notice')).toContainText('验证码已重新发送至 resend@example.com');
     await expect(sendBtn).toBeDisabled();
+    await expect(sendBtn).toHaveText(/^\d+秒后再次发送$/);
     await assertFullLayoutAudit(page);
 
     await page.getByTestId('auth-otp-input').fill('654321');
@@ -211,6 +223,7 @@ test.describe('Tier 6: Auth UI with the Supabase client (Email + OTP)', () => {
     await expect(page.getByTestId('auth-notice')).toContainText('验证码已重新发送至 resend@example.com');
     await expect(page.getByTestId('auth-otp-expiry')).toContainText('5 分钟内有效');
     await expect(sendBtn).toBeDisabled();
+    await expect(sendBtn).toHaveText(/^\d+秒后再次发送$/);
   });
 
   test('preserves guest intent through existing-account login and reports upload failure until retry succeeds', async ({ page, healthTrap }) => {
