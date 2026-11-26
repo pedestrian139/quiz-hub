@@ -126,11 +126,14 @@ export function AuthModal({ open: controlledOpen, initialMode, onClose, onAuthSu
   useEffect(() => {
     if (!isOpen || !otpTargetEmail) return;
     if (otpCooldown <= 0 && otpRemainingSeconds <= 0) return;
+    const targetMs = otpCooldown > 0 ? otpTiming.cooldownUntil : otpTiming.expiresAt;
+    const msLeft = targetMs ? Math.max(0, targetMs - Date.now()) : 0;
+    const delay = msLeft > 0 ? Math.max(20, ((msLeft - 1) % 1000) + 1) : 20;
     const timer = window.setTimeout(() => {
       setOtpTick((n) => n + 1);
-    }, 1000);
+    }, delay);
     return () => window.clearTimeout(timer);
-  }, [isOpen, otpTargetEmail, otpCooldown, otpRemainingSeconds, otpTick]);
+  }, [isOpen, otpTargetEmail, otpCooldown, otpRemainingSeconds, otpTiming.cooldownUntil, otpTiming.expiresAt, otpTick]);
 
   useEffect(() => {
     if (pendingVerifyEmail) {
@@ -262,7 +265,7 @@ export function AuthModal({ open: controlledOpen, initialMode, onClose, onAuthSu
       setPasswordTouched(false);
       setOtpCode('');
       setOtpTouched(false);
-      setNotice(`验证码已发送至 ${targetEmail}（5 分钟内有效），请查收邮件或 ${currentTiming.cooldownSeconds}s 后重发。`);
+      setNotice(`验证码已发送至 ${targetEmail}（5 分钟内有效），请查收邮件并输入验证码。`);
       return;
     }
 
@@ -652,7 +655,7 @@ export function AuthModal({ open: controlledOpen, initialMode, onClose, onAuthSu
                       {sendingOtp
                         ? '发送中…'
                         : otpCooldown > 0
-                          ? `${otpCooldown}s 后重发`
+                          ? `${otpCooldown}秒后再次发送`
                           : (pendingVerifyEmail || otpSent)
                             ? '重发验证码'
                             : '获取验证码'}
