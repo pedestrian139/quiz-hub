@@ -47,11 +47,20 @@ export {
 } from './llmClient';
 
 export {
+  ApiClientError,
   askQuestionFollowUpStream,
   explainQuestionStream,
   generateQuestionsFromText,
   gradeSubjectiveDraft,
+  retryWashChunk,
+  splitTextIntoWashChunks,
+  washQuestionsChunked,
+  type FailedWashChunk,
   type GenerateQuestionsOptions,
   type QuestionExplainContext,
   type SubjectiveGradeFeedback,
+  type WashProgressEvent,
+  type WashQuestionsCallbacks,
+  type WashQuestionsOptions,
+  type WashQuestionsResult,
 } from './quizAiService';

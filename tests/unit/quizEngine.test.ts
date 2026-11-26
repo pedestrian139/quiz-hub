@@ -383,5 +383,36 @@ describe('quizEngine', () => {
       const favs = getFavoriteQuestions(MOCK_QUESTIONS, MOCK_STORE_WITH_STALE_IDS);
       expect(favs.map((q) => q.id)).toEqual(['qb-c1-tf-01', 'syn-c5-short-01']);
     });
+
+    it('handles Phase 1 questions missing explain in search and preserves aiExplanations across store mutations', () => {
+      const legacyNoExplain = {
+        ...MOCK_QUESTIONS[0],
+        explain: undefined,
+      } as unknown as Question;
+
+      expect(() =>
+        buildQueue([legacyNoExplain], baseOpts({ search: '1956' })),
+      ).not.toThrow();
+      expect(buildQueue([legacyNoExplain], baseOpts({ search: '1956' }))).toHaveLength(1);
+
+      const storeWithAi = {
+        ...EMPTY_STORE,
+        aiExplanations: {
+          'qb-c1-choice-01': { content: 'AI 缓存解析', updatedAt: 999 },
+        },
+      };
+
+      const { store: afterObj } = recordObjectiveAnswer(storeWithAi, MOCK_QUESTIONS[0], 1, 1000);
+      expect(afterObj.aiExplanations).toEqual(storeWithAi.aiExplanations);
+
+      const afterSubj = recordSubjectiveMastery(afterObj, 'syn-c5-short-01', 1, 1001);
+      expect(afterSubj.aiExplanations).toEqual(storeWithAi.aiExplanations);
+
+      const afterFav = toggleFavorite(afterSubj, 'qb-c1-choice-01');
+      expect(afterFav.aiExplanations).toEqual(storeWithAi.aiExplanations);
+
+      const afterClear = clearWrongRecords(afterFav);
+      expect(afterClear.aiExplanations).toEqual(storeWithAi.aiExplanations);
+    });
   });
 });

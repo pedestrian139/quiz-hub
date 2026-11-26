@@ -55,30 +55,44 @@ const INLINE_TYPE_TAG_RE =
   /^\s*(?:【([^】]+)】|\[([^\]]+)\]|[(（](单选|单选题|多选|多选题|判断|判断题|简答|简答题|分析|综合分析|综合分析题|填空|问答)[)）])\s*(.*)$/;
 
 const CHAPTER_HEADING_RE =
-  /^\s*(?:#{1,3}\s*)?(?:【\s*)?(第\s*[0-9一二三四五六七八九十两]+\s*[章讲单元]\s*(?:[·:：.\s-].*)?|(?:chapter|ch\.?)\s*\d+.*)$/i;
+  /^\s*(?:#{1,6}\s*)?(?:\*{1,2})?(?:【\s*)?(第\s*[0-9一二三四五六七八九十两]+\s*[章讲单元]\s*(?:[·:：.\s-].*)?|(?:chapter|ch\.?)\s*\d+.*)$/i;
 
 const SECTION_TYPE_HEADING_RE =
-  /^\s*(?:#{1,4}\s*)?(?:[一二三四五六七八九十]+、|【)?\s*(单选题?|多选题?|多项选择题?|不定项选择题?|判断题?|是非题?|简答题?|填空题?|名词解释|问答题?|论述题?|综合分析题?|案例分析题?)\s*(?:】)?\s*[:：]?\s*(?:[(（].*[)）])?\s*$/;
+  /^\s*(?:#{1,6}\s*)?(?:\*{1,2})?(?:[一二三四五六七八九十]+、|【)?\s*(单选题?|多选题?|多项选择题?|不定项选择题?|判断题?|是非题?|简答题?|填空题?|名词解释|问答题?|论述题?|综合分析题?|案例分析题?)\s*(?:】)?(?:\*{1,2})?\s*[:：]?\s*(?:[(（].*[)）])?\s*$/;
 
 const QUESTION_START_RE =
-  /^\s*(?:#{1,4}\s*)?(?:Q?\d+[.、)）:：]|[(（]\d+[)）]|第\s*\d+\s*题)\s*(.*)$/i;
+  /^\s*(?:#{1,6}\s*)?(?:[-*+]\s+)?(?:\*{1,2})?(?:Q?\d+[.、)）:：]|[(（]\d+[)）]|第\s*\d+\s*题)\s*(.*)$/i;
 
-const OPTION_LINE_RE = /^\s*[(\[（【]?([A-Ha-h])[)\]）】.、:：]\s*(.+)$/;
+const OPTION_LINE_RE =
+  /^\s*(?:[-*+]\s+)?(?:\*{1,2})?[(\[（【]?([A-Ha-h])(?:\*{1,2})?[)\]）】.、:：](?:\*{1,2})?\s*(.+)$/;
 
 const ANSWER_LINE_RE =
-  /^\s*(?:>\s*)?(?:\*{1,2})?(?:参考答案|正确答案|标准答案|答案|答|Answer|Ans)(?:\*{1,2})?\s*[:：]\s*(.*)$/i;
+  /^\s*(?:>\s*)?(?:[-*+]\s+)?(?:\*{1,2})?(?:参考答案|正确答案|标准答案|答案|答|Answer|Ans)(?:\*{1,2})?\s*[:：]\s*(?:\*{1,2})?\s*(.*)$/i;
 
-const ANSWER_BRACKET_RE = /^\s*【(?:参考)?答案】\s*(.*)$/;
+const ANSWER_BRACKET_RE = /^\s*(?:>\s*)?(?:[-*+]\s+)?【(?:参考)?答案】\s*(.*)$/;
 const EXPLAIN_LINE_RE =
-  /^\s*(?:>\s*)?(?:\*{1,2})?(?:答案解析|试题解析|解析|分析|详解|说明|Explanation|Explain)(?:\*{1,2})?\s*[:：]\s*(.*)$/i;
-const EXPLAIN_BRACKET_RE = /^\s*【(?:答案)?解析】\s*(.*)$/;
-const KEYPOINTS_LINE_RE = /^\s*(?:核心)?(?:采分要点|采分点|评分标准|要点|KeyPoints)\s*[:：]\s*(.*)$/i;
-const TAGS_LINE_RE = /^\s*(?:标签|考点|Tags)\s*[:：]\s*(.*)$/i;
-const QUESTION_LABEL_RE = /^\s*(?:题目|题干|问题|问|Question|Q)\s*[:：]\s*(.+)$/i;
+  /^\s*(?:>\s*)?(?:[-*+]\s+)?(?:\*{1,2})?(?:答案解析|试题解析|解析|分析|详解|说明|Explanation|Explain)(?:\*{1,2})?\s*[:：]\s*(?:\*{1,2})?\s*(.*)$/i;
+const EXPLAIN_BRACKET_RE = /^\s*(?:>\s*)?(?:[-*+]\s+)?【(?:答案)?解析】\s*(.*)$/;
+const KEYPOINTS_LINE_RE =
+  /^\s*(?:>\s*)?(?:[-*+]\s+)?(?:\*{1,2})?(?:核心)?(?:采分要点|采分点|评分标准|要点|KeyPoints)(?:\*{1,2})?\s*[:：]\s*(?:\*{1,2})?\s*(.*)$/i;
+const TAGS_LINE_RE =
+  /^\s*(?:>\s*)?(?:[-*+]\s+)?(?:\*{1,2})?(?:标签|考点|Tags)(?:\*{1,2})?\s*[:：]\s*(?:\*{1,2})?\s*(.*)$/i;
+const QUESTION_LABEL_RE =
+  /^\s*(?:>\s*)?(?:[-*+]\s+)?(?:\*{1,2})?(?:题目|题干|问题|问|Question|Q)(?:\*{1,2})?\s*[:：]\s*(?:\*{1,2})?\s*(.+)$/i;
+
+function stripOrphanMdBold(text: string): string {
+  const trimmed = cleanText(text);
+  if (!trimmed) return '';
+  const boldCount = (trimmed.match(/\*\*/g) ?? []).length;
+  if (boldCount === 1) {
+    return cleanText(trimmed.replace(/\*\*/g, ''));
+  }
+  return trimmed;
+}
 
 function matchSectionHeadingType(line: string): QuestionType | null {
   const norm = normalizeFullwidthAscii(cleanText(line));
-  if (!norm || norm.length > 36) return null;
+  if (!norm || norm.length > 48) return null;
   const m = norm.match(SECTION_TYPE_HEADING_RE);
   if (!m) return null;
   return parseQuestionType(m[1]!);
@@ -86,7 +100,8 @@ function matchSectionHeadingType(line: string): QuestionType | null {
 
 function matchChapterHeading(line: string): { chapter: number; chapterName: string } | null {
   const norm = normalizeFullwidthAscii(cleanText(line))
-    .replace(/^#{1,3}\s*/, '')
+    .replace(/^#{1,6}\s*/, '')
+    .replace(/^\*{1,2}|\*{1,2}$/g, '')
     .replace(/^【|】$/g, '')
     .trim();
   if (!norm || norm.length > 60) return null;
@@ -309,6 +324,8 @@ export function parseTextQuestions(
   for (let bIdx = 0; bIdx < blocks.length; bIdx++) {
     const block = blocks[bIdx]!;
     let explicitTypeText = '';
+    let hasExplicitQuestionMarker = false;
+    let hasAnswerLine = false;
     const stemParts: string[] = [];
     const options: string[] = [];
     let rawAnswer = '';
@@ -325,23 +342,27 @@ export function parseTextQuestions(
       if (lIdx === 0) {
         const numStrip = line.match(QUESTION_START_RE);
         if (numStrip) {
-          line = numStrip[1]!.trim();
+          hasExplicitQuestionMarker = true;
+          line = stripOrphanMdBold(numStrip[1]!);
         }
         const qLabStrip = line.match(QUESTION_LABEL_RE);
         if (qLabStrip) {
-          line = qLabStrip[1]!.trim();
+          hasExplicitQuestionMarker = true;
+          line = stripOrphanMdBold(qLabStrip[1]!);
         }
         const tagMatch = line.match(INLINE_TYPE_TAG_RE);
         if (tagMatch) {
+          hasExplicitQuestionMarker = true;
           explicitTypeText = (tagMatch[1] ?? tagMatch[2] ?? tagMatch[3] ?? '').trim();
-          line = (tagMatch[4] ?? '').trim();
+          line = stripOrphanMdBold(tagMatch[4] ?? '');
         }
       }
 
       const ansM = line.match(ANSWER_LINE_RE) ?? line.match(ANSWER_BRACKET_RE);
       if (ansM) {
         section = 'answer';
-        const val = cleanText(ansM[1]);
+        hasAnswerLine = true;
+        const val = stripOrphanMdBold(ansM[1]);
         if (val) answerParts.push(val);
         continue;
       }
@@ -349,14 +370,14 @@ export function parseTextQuestions(
       const expM = line.match(EXPLAIN_LINE_RE) ?? line.match(EXPLAIN_BRACKET_RE);
       if (expM) {
         section = 'explain';
-        const val = cleanText(expM[1]);
+        const val = stripOrphanMdBold(expM[1]);
         if (val) explainParts.push(val);
         continue;
       }
 
       const kpM = line.match(KEYPOINTS_LINE_RE);
       if (kpM) {
-        const items = cleanText(kpM[1])
+        const items = stripOrphanMdBold(kpM[1])
           .split(/[,，;；|、]+/)
           .map((s) => s.trim())
           .filter(Boolean);
@@ -366,7 +387,7 @@ export function parseTextQuestions(
 
       const tagM = line.match(TAGS_LINE_RE);
       if (tagM) {
-        const items = cleanText(tagM[1])
+        const items = stripOrphanMdBold(tagM[1])
           .split(/[,，;；|、]+/)
           .map((s) => s.trim())
           .filter(Boolean);
@@ -387,7 +408,7 @@ export function parseTextQuestions(
 
         const optM = normalizeFullwidthAscii(line).match(OPTION_LINE_RE);
         if (optM) {
-          options.push(cleanText(optM[2]));
+          options.push(stripOrphanMdBold(optM[2]));
           section = 'options';
           continue;
         }
@@ -418,6 +439,10 @@ export function parseTextQuestions(
       if (inlineAns.extractedAnswer) {
         stem = inlineAns.cleanedStem;
       }
+    }
+
+    if (!hasExplicitQuestionMarker && options.length === 0 && !hasAnswerLine) {
+      continue;
     }
 
     const type = parseQuestionType(

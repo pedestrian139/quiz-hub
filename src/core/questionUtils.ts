@@ -1,4 +1,4 @@
-import type { Question, QuestionOrigin, QuestionType } from '../types/quiz';
+import type { Question, QuestionOrigin, QuestionType, UserStore } from '../types/quiz';
 
 export function getOptionLabel(index: number): string {
   if (!Number.isInteger(index) || index < 0) {
@@ -62,12 +62,27 @@ export function getTypeLabel(type: QuestionType): string {
 export function getOriginLabel(origin: QuestionOrigin): string {
   switch (origin) {
     case 'comprehensive_bank':
-      return '综合题库';
+      return '标准题库';
     case 'video_popup':
-      return '视频课弹题';
+      return 'AI 洗题 / 精选';
     case 'review_notes_synthesized':
-      return '复习资料提炼';
+      return '引导与提炼';
   }
+}
+
+export function getQuestionAiExplanation(q: Question, store?: UserStore): string {
+  const candidates = [
+    store?.aiExplanations?.[q.id]?.content,
+    q.aiAnalysis,
+    q.explanation,
+    q.explain,
+  ];
+  for (const candidate of candidates) {
+    if (typeof candidate === 'string' && candidate.trim().length > 0) {
+      return candidate;
+    }
+  }
+  return '';
 }
 
 export function isObjectiveQuestion(type: QuestionType): boolean {

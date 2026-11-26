@@ -3,22 +3,27 @@ import type { HomeStats, UserStore } from '../types/quiz';
 import { getOriginLabel } from '../core/questionUtils';
 import { computeHomeStats } from '../core/quizEngine';
 import {
-  CHAPTERS,
-  COUNTS,
   NOTES,
   QUESTION_ORIGINS,
   QUESTION_TYPES,
-  QUESTIONS,
   SECTION_COUNT,
   TYPE_NAME,
 } from '../data/catalog';
+import type { BankViewModel } from '../utils/bankCatalog';
+import type { ImportModalTab } from '../utils/BankLibraryContext';
+import { BUILTIN_AI_BANK_ID, type BankRecord } from '../utils/quizImportTypes';
 import { ROUTE_HASH } from '../router/useHashRoute';
 import { Icon } from '../components/Icons';
 
 interface HubPageProps {
+  viewModel: BankViewModel;
+  banks: BankRecord[];
+  activeBankId: string;
   stats: HomeStats;
   store: UserStore;
   onPracticeChapter: (chapterId: number) => void;
+  onSwitchBank: (bankId: string) => void;
+  onOpenImport: (tab?: ImportModalTab) => void;
 }
 
 interface ChapterProgress {
@@ -41,15 +46,28 @@ function accuracyTone(pct: number | null): 'none' | 'ok' | 'brand' | 'warn' | 'b
   return 'bad';
 }
 
-export function HubPage({ stats, store, onPracticeChapter }: HubPageProps) {
+export function HubPage({
+  viewModel,
+  banks,
+  activeBankId,
+  stats,
+  store,
+  onPracticeChapter,
+  onSwitchBank,
+  onOpenImport,
+}: HubPageProps) {
+  const { bank, counts, chapters, questions } = viewModel;
+  const isBuiltinBank = activeBankId === BUILTIN_AI_BANK_ID;
   const accuracyLabel = stats.accuracyPct === null ? '—' : `${stats.accuracyPct}%`;
   const overallCoverage =
     stats.totalCount > 0 ? Math.round((stats.practicedCount / stats.totalCount) * 100) : 0;
 
   const chapterProgress = useMemo<ChapterProgress[]>(() => {
-    const sectionsById = new Map(NOTES.chapters.map((c) => [c.id, c.sections.length]));
-    return CHAPTERS.map((ch) => {
-      const scoped = QUESTIONS.filter((q) => q.chapter === ch.id);
+    const sectionsById = isBuiltinBank
+      ? new Map(NOTES.chapters.map((c) => [c.id, c.sections.length]))
+      : new Map<number, number>();
+    return chapters.map((ch) => {
+      const scoped = questions.filter((q) => q.chapter === ch.id);
       const s = computeHomeStats(scoped, store);
       return {
         id: ch.id,
@@ -63,7 +81,7 @@ export function HubPage({ stats, store, onPracticeChapter }: HubPageProps) {
         coveragePct: s.totalCount > 0 ? Math.round((s.practicedCount / s.totalCount) * 100) : 0,
       };
     });
-  }, [store]);
+  }, [chapters, isBuiltinBank, questions, store]);
 
   return (
     <div className="page-wrap page-wrap--hub">
@@ -71,32 +89,66 @@ export function HubPage({ stats, store, onPracticeChapter }: HubPageProps) {
         <div className="hero-eyebrow">
           <span className="pill pill--brand">
             <Icon name="sparkles" size={13} />
-            人工智能导论 · 期末备考门户
+            QuizHub · AI 智能刷题门户
           </span>
           <span className="pill pill--subtle">
             <Icon name="shield" size={13} />
-            本地保存进度 · 支持离线刷题
+            多题库管理 · 本地与云端同步
           </span>
         </div>
 
         <h1 className="hero-title">
-          人工智能导论 · <span className="hero-title__accent">复习中心</span>
+          QuizHub · <span className="hero-title__accent">复习中心</span>
         </h1>
         <p className="hero-subtitle">
-          聚合课程综合题库、视频课随堂弹题与期末复习讲义提炼题，配套全书 9 章 {SECTION_COUNT}{' '}
-          节结构化知识点手册与高频易混对照表，助你系统梳理脉络、高效查漏补缺。
+          集「AI 智能洗题导入」「沉浸式刷题工作台」与「流式 AI 深度解析与多轮追问」于一体的自主学习平台。当前激活题库为「{bank.name}」，支持随时导入自定义题库并多端同步学习进度。
         </p>
+
+        <div className="bank-switcher-bar" aria-label="题库切换与智能导入">
+          <div className="bank-switcher-bar__control">
+            <label className="bank-switcher-bar__label" htmlFor="hub-bank-switcher">
+              当前题库
+            </label>
+            <select
+              id="hub-bank-switcher"
+              data-testid="bank-switcher"
+              aria-label="切换当前题库"
+              className="bank-switcher__select"
+              value={activeBankId}
+              onChange={(e) => onSwitchBank(e.target.value)}
+            >
+              {banks.map((b) => (
+                <option key={b.id} value={b.id}>
+                  {b.name}（{b.data.questions.length} 题）
+                </option>
+              ))}
+            </select>
+          </div>
+
+          <div className="bank-switcher-bar__actions">
+            <button
+              type="button"
+              className="btn btn--soft-brand btn--sm"
+              onClick={() => onOpenImport('import')}
+            >
+              <Icon name="sparkles" size={14} />
+              AI 智能洗题 / 导入
+            </button>
+          </div>
+        </div>
 
         <div className="badge-row" aria-label="题库概览统计">
           <span data-testid="hub-badge-total" className="pill pill--primary">
-            共 {COUNTS.total} 道题
+            共 {counts.total} 道题
           </span>
           <span data-testid="hub-badge-chapters" className="pill pill--neutral">
-            覆盖 {CHAPTERS.length} 章 · {SECTION_COUNT} 小节
+            {isBuiltinBank
+              ? `覆盖 ${chapters.length} 章 · ${SECTION_COUNT} 小节`
+              : `覆盖 ${chapters.length} 章`}
           </span>
           {QUESTION_TYPES.map((type) => (
             <span key={type} className={`pill pill--type pill--type-${type}`}>
-              {TYPE_NAME[type]} {COUNTS.byType[type]}
+              {TYPE_NAME[type]} {counts.byType[type]}
             </span>
           ))}
         </div>
@@ -105,7 +157,7 @@ export function HubPage({ stats, store, onPracticeChapter }: HubPageProps) {
           {QUESTION_ORIGINS.map((origin) => (
             <span key={origin} className={`origin-chip origin-chip--${origin}`}>
               <span className="origin-chip__dot" aria-hidden="true" />
-              {getOriginLabel(origin)}：{COUNTS.byOrigin[origin]} 题
+              {getOriginLabel(origin)}：{counts.byOrigin[origin]} 题
             </span>
           ))}
         </div>
@@ -121,11 +173,11 @@ export function HubPage({ stats, store, onPracticeChapter }: HubPageProps) {
             <span className="hub-card__icon" aria-hidden="true">
               <Icon name="pen" size={22} />
             </span>
-            <span className="pill pill--brand">{COUNTS.total} 题全题型演练</span>
+            <span className="pill pill--brand">{counts.total} 题全题型演练</span>
           </div>
           <h2 className="hub-card__title">刷题工具</h2>
           <p className="hub-card__desc">
-            支持单选、多选、判断、简答与综合分析五种模式；提供章节多选、来源筛选、关键词检索、答题卡速跳、主观题三级掌握度自评及错题自动归集。
+            支持单选、多选、判断、简答与综合分析五种题型；提供章节多选、来源筛选、关键词检索、答题卡筛选速跳、LaTeX 公式排版与 AI 深度解析追问。
           </p>
           <div className="hub-card__meta">
             <span>
@@ -155,19 +207,19 @@ export function HubPage({ stats, store, onPracticeChapter }: HubPageProps) {
               <Icon name="book" size={22} />
             </span>
             <span className="pill pill--teal">
-              {CHAPTERS.length} 章 · {NOTES.appendices.length} 附录
+              {NOTES.chapters.length} 章 · {NOTES.appendices.length} 附录
             </span>
           </div>
           <h2 className="hub-card__title">知识点手册</h2>
           <p className="hub-card__desc">
-            涵盖 AI 发展史、脑科学双通路、知识图谱与描述逻辑、机器学习、视觉/听觉/NLP 大模型、类脑与机器人全章精要，支持关键词检索与打印。
+            涵盖 QuizHub 使用指南、沉浸式工作台快捷键体系、AI 智能洗题分段校对流程与多轮追问技巧，支持关键词检索与打印。
           </p>
           <div className="hub-card__meta">
             <span>
               <strong>{SECTION_COUNT}</strong> 核心小节
             </span>
             <span className="hub-card__sep" aria-hidden="true">·</span>
-            <span>时间线/易混表/答题模板</span>
+            <span>快捷键 / 洗题技巧 / 速查表</span>
           </div>
           <span className="hub-card__cta">
             查阅知识点手册 <Icon name="arrowRight" size={16} />
@@ -178,9 +230,9 @@ export function HubPage({ stats, store, onPracticeChapter }: HubPageProps) {
       <section className="chapter-preview-card" aria-label="分章掌握进度">
         <div className="section-head">
           <div className="section-head__main">
-            <h2 className="section-head__title">全书 9 章知识版图</h2>
+            <h2 className="section-head__title">当前题库知识版图（{bank.name}）</h2>
             <span className="section-head__hint">
-              所有做题记录与收藏均自动保存在本地浏览器（localStorage）
+              做题记录、错题本与收藏进度按题库独立保存并支持云端同步
             </span>
           </div>
           <div className="mastery-summary" aria-label="总体练习覆盖率">
@@ -220,7 +272,9 @@ export function HubPage({ stats, store, onPracticeChapter }: HubPageProps) {
                   <span className="chapter-mini-item__body">
                     <span className="chapter-mini-item__title">{ch.short}</span>
                     <span className="chapter-mini-item__sub">
-                      {ch.sectionCount} 个核心考点小节 · {ch.total} 题
+                      {ch.sectionCount > 0
+                        ? `${ch.sectionCount} 个核心考点小节 · ${ch.total} 题`
+                        : `共 ${ch.total} 题`}
                     </span>
                   </span>
                   <span className={`acc-badge acc-badge--${tone}`}>

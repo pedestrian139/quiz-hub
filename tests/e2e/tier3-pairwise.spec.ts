@@ -1,3 +1,4 @@
+import type { Page } from '@playwright/test';
 import {
   expect,
   onlyDesktop,
@@ -9,6 +10,13 @@ import {
   assertHandbookTablesContained,
   assertNoHorizontalOverflow,
 } from './helpers/audit.ts';
+import {
+  FIXTURE_BANK,
+  FIXTURE_BANK_ID,
+  QUIZ_DB_NAME,
+  QUIZ_DB_VERSION,
+  seedFixtureBank,
+} from './helpers/fixtureBank.ts';
 import {
   answerCurrentQuestion,
   btnExportJson,
@@ -54,22 +62,52 @@ import {
   captureJsonExport,
   findQuestionByStem,
   importJsonFile,
-  loadBankCatalog,
+  loadNotesCatalog,
+  makeEmptyStore,
   makeSeededStore,
   pickQuestion,
   pickQuestions,
-  readPersistedStore,
-  seedStaleIdsStoreAndReload,
-  seedStoreAndReload,
+  type UserStore,
 } from './helpers/storage.ts';
+
+async function readIdbBankProgress(page: Page, bankId: string): Promise<UserStore | null> {
+  return page.evaluate(
+    async ({ dbName, dbVersion, targetBankId }) => {
+      return new Promise<UserStore | null>((resolve, reject) => {
+        const req = window.indexedDB.open(dbName, dbVersion);
+        req.onerror = () => reject(req.error ?? new Error('Failed to open quizhub-v2 IDB'));
+        req.onsuccess = () => {
+          const db = req.result;
+          if (!db.objectStoreNames.contains('progress')) {
+            db.close();
+            resolve(null);
+            return;
+          }
+          const tx = db.transaction('progress', 'readonly');
+          const getReq = tx.objectStore('progress').get(targetBankId);
+          getReq.onerror = () => {
+            db.close();
+            reject(getReq.error ?? new Error('Failed to read progress store'));
+          };
+          getReq.onsuccess = () => {
+            const record = getReq.result as { store?: UserStore } | undefined;
+            db.close();
+            resolve(record?.store ?? null);
+          };
+        };
+      });
+    },
+    { dbName: QUIZ_DB_NAME, dbVersion: QUIZ_DB_VERSION, targetBankId: bankId },
+  );
+}
 
 test.describe('Tier 3: Cross-Feature Pairwise Interactions (T3-001..T3-024)', () => {
   test('T3-001 Chapter x Origin x Order x Count x Type combination', async ({
     page,
   }, testInfo) => {
     onlyDesktop(testInfo);
-    const stemMap = buildQuestionStemMap();
-    await gotoRoute(page, '#/quiz');
+    const stemMap = buildQuestionStemMap(FIXTURE_BANK);
+    await seedFixtureBank(page, FIXTURE_BANK, makeEmptyStore(), { targetHashRoute: '#/quiz' });
     await selectQuizFilters(page, {
       chapters: [2, 3],
       origin: 'comprehensive_bank',
@@ -93,7 +131,7 @@ test.describe('Tier 3: Cross-Feature Pairwise Interactions (T3-001..T3-024)', ()
       expect(q.source.origin).toBe('comprehensive_bank');
       expect(q.chapter).toBeGreaterThanOrEqual(prevCh);
       prevCh = q.chapter;
-      await expect(qSourceTag(page)).toContainText(/综合/);
+      await expect(qSourceTag(page)).toContainText(/标准题库/);
       if (i < Math.min(total, 5) - 1) await btnNext(page).click();
     }
   });
@@ -102,20 +140,20 @@ test.describe('Tier 3: Cross-Feature Pairwise Interactions (T3-001..T3-024)', ()
     page,
   }, testInfo) => {
     onlyDesktop(testInfo);
-    const ch1VideoChoice = pickQuestions({
-      chapter: 1,
-      origin: 'video_popup',
-      type: 'choice',
-    });
-    await gotoRoute(page, '#/quiz');
+    const ch1VideoChoice = pickQuestions(
+      { chapter: 1, origin: 'video_popup', type: 'choice' },
+      FIXTURE_BANK,
+    );
+    await seedFixtureBank(page, FIXTURE_BANK, makeEmptyStore(), { targetHashRoute: '#/quiz' });
     await selectQuizFilters(page, { chapters: [1], origin: 'video_popup', count: 10 });
 
     if (ch1VideoChoice.length > 0) {
-      const stemMap = buildQuestionStemMap();
+      const stemMap = buildQuestionStemMap(FIXTURE_BANK);
       await modeCard(page, 'choice').click();
       const q = findQuestionByStem(await qStem(page).innerText(), stemMap);
       expect(q.chapter).toBe(1);
       expect(q.source.origin).toBe('video_popup');
+      await expect(qSourceTag(page)).toContainText(/AI 洗题|精选/);
     } else {
       page.once('dialog', (d) => d.accept());
       await modeCard(page, 'choice').click();
@@ -127,8 +165,8 @@ test.describe('Tier 3: Cross-Feature Pairwise Interactions (T3-001..T3-024)', ()
     page,
   }, testInfo) => {
     onlyDesktop(testInfo);
-    const stemMap = buildQuestionStemMap();
-    await gotoRoute(page, '#/quiz');
+    const stemMap = buildQuestionStemMap(FIXTURE_BANK);
+    await seedFixtureBank(page, FIXTURE_BANK, makeEmptyStore(), { targetHashRoute: '#/quiz' });
     await selectQuizFilters(page, { count: 10 });
     await modeCard(page, 'choice').click();
     await answerCurrentQuestion(page, stemMap, 'wrong');
@@ -148,9 +186,14 @@ test.describe('Tier 3: Cross-Feature Pairwise Interactions (T3-001..T3-024)', ()
     page,
   }, testInfo) => {
     onlyDesktop(testInfo);
-    const stemMap = buildQuestionStemMap();
-    const multiQ = pickQuestion({ type: 'multi' });
-    await seedStoreAndReload(page, makeSeededStore({ favIds: [multiQ.id] }), '#/fav');
+    const stemMap = buildQuestionStemMap(FIXTURE_BANK);
+    const multiQ = pickQuestion({ type: 'multi' }, FIXTURE_BANK);
+    await seedFixtureBank(
+      page,
+      FIXTURE_BANK,
+      makeSeededStore({ favIds: [multiQ.id] }, FIXTURE_BANK),
+      { targetHashRoute: '#/fav' },
+    );
     await listRedoAll(page).click();
     await answerCurrentQuestion(page, stemMap, 'partial');
     await btnNext(page).click();
@@ -168,7 +211,7 @@ test.describe('Tier 3: Cross-Feature Pairwise Interactions (T3-001..T3-024)', ()
     page,
   }, testInfo) => {
     onlyDesktop(testInfo);
-    await gotoRoute(page, '#/quiz');
+    await seedFixtureBank(page, FIXTURE_BANK, makeEmptyStore(), { targetHashRoute: '#/quiz' });
     await selectQuizFilters(page, { count: 10 });
     await modeCard(page, 'choice').click();
     await btnStar(page).click();
@@ -184,31 +227,41 @@ test.describe('Tier 3: Cross-Feature Pairwise Interactions (T3-001..T3-024)', ()
     await expect(quizProgressText(page)).toContainText('1 / 2');
   });
 
-  test('T3-006 Handbook Chapter 6 刷本章题 -> Quiz Home only Ch6 -> session only Ch6', async ({
+  test('T3-006 Handbook Chapter 刷本章题 -> Quiz Home only selected chapter -> session only selected chapter', async ({
     page,
   }, testInfo) => {
     onlyDesktop(testInfo);
-    const stemMap = buildQuestionStemMap();
-    await gotoRoute(page, '#/notes');
-    await btnQuizChapter(page, 6).click();
-    await expect(chapterChip(page, 6)).toHaveAttribute('aria-pressed', 'true');
-    await expect(chapterChip(page, 1)).toHaveAttribute('aria-pressed', 'false');
+    const notes = loadNotesCatalog();
+    const targetCh = notes.chapters[notes.chapters.length - 1] ?? notes.chapters[0]!;
+    const otherCh = notes.chapters.find((c) => c.id !== targetCh.id);
+    const stemMap = buildQuestionStemMap(FIXTURE_BANK);
+
+    await seedFixtureBank(page, FIXTURE_BANK, makeEmptyStore(), { targetHashRoute: '#/notes' });
+    await btnQuizChapter(page, targetCh.id).click();
+    await expect(chapterChip(page, targetCh.id)).toHaveAttribute('aria-pressed', 'true');
+    if (otherCh) {
+      await expect(chapterChip(page, otherCh.id)).toHaveAttribute('aria-pressed', 'false');
+    }
 
     await modeCard(page, 'all').click();
     const q = findQuestionByStem(await qStem(page).innerText(), stemMap);
-    expect(q.chapter).toBe(6);
+    expect(q.chapter).toBe(targetCh.id);
   });
 
   test('T3-007 Handbook search -> 刷本章题 -> global nav back to Handbook', async ({
     page,
   }, testInfo) => {
     onlyDesktop(testInfo);
+    const notes = loadNotesCatalog();
+    const targetCh = notes.chapters[notes.chapters.length - 1] ?? notes.chapters[0]!;
+    const keyword = targetCh.sections[0]?.terms?.[0]?.term || targetCh.short;
+
     await gotoRoute(page, '#/notes');
-    await notesSearch(page).fill('知识图谱');
-    await expect(page.getByText(/知识图谱/).first()).toBeVisible();
-    await btnQuizChapter(page, 3).click();
+    await notesSearch(page).fill(keyword);
+    await expect(page.getByText(keyword).first()).toBeVisible();
+    await btnQuizChapter(page, targetCh.id).click();
     await expect(page).toHaveURL(/#\/quiz/);
-    await expect(chapterChip(page, 3)).toHaveAttribute('aria-pressed', 'true');
+    await expect(chapterChip(page, targetCh.id)).toHaveAttribute('aria-pressed', 'true');
     await navLink(page, 'notes').click();
     await expect(page).toHaveURL(/#\/notes/);
   });
@@ -217,13 +270,16 @@ test.describe('Tier 3: Cross-Feature Pairwise Interactions (T3-001..T3-024)', ()
     page,
   }, testInfo) => {
     onlyDesktop(testInfo);
-    const qs = pickQuestions({ type: 'choice', limit: 3 });
-    const store = makeSeededStore({
-      correctIds: [qs[0]!.id, qs[1]!.id],
-      wrongIds: [qs[2]!.id],
-      favIds: [qs[0]!.id],
-    });
-    await seedStoreAndReload(page, store, '#/quiz');
+    const qs = pickQuestions({ type: 'choice', limit: 3 }, FIXTURE_BANK);
+    const store = makeSeededStore(
+      {
+        correctIds: [qs[0]!.id, qs[1]!.id],
+        wrongIds: [qs[2]!.id],
+        favIds: [qs[0]!.id],
+      },
+      FIXTURE_BANK,
+    );
+    await seedFixtureBank(page, FIXTURE_BANK, store, { targetHashRoute: '#/quiz' });
 
     const exported = await captureJsonExport(page, () => btnExportJson(page).click());
     page.once('dialog', (d) => d.accept());
@@ -247,7 +303,7 @@ test.describe('Tier 3: Cross-Feature Pairwise Interactions (T3-001..T3-024)', ()
     page,
   }, testInfo) => {
     onlyDesktop(testInfo);
-    await gotoRoute(page, '#/quiz');
+    await seedFixtureBank(page, FIXTURE_BANK, makeEmptyStore(), { targetHashRoute: '#/quiz' });
     await selectQuizFilters(page, { count: 10 });
     await modeCard(page, 'short').click();
     await btnRevealAnswer(page).click();
@@ -269,11 +325,11 @@ test.describe('Tier 3: Cross-Feature Pairwise Interactions (T3-001..T3-024)', ()
     page,
   }, testInfo) => {
     onlyDesktop(testInfo);
-    const analysisPool = pickQuestions({ type: 'analysis' });
+    const analysisPool = pickQuestions({ type: 'analysis' }, FIXTURE_BANK);
     const mode = analysisPool.length >= 3 ? 'analysis' : 'short';
-    const stemMap = buildQuestionStemMap();
+    const stemMap = buildQuestionStemMap(FIXTURE_BANK);
 
-    await gotoRoute(page, '#/quiz');
+    await seedFixtureBank(page, FIXTURE_BANK, makeEmptyStore(), { targetHashRoute: '#/quiz' });
     await selectQuizFilters(page, { count: 10, order: 'seq' });
     await modeCard(page, mode).click();
 
@@ -300,8 +356,8 @@ test.describe('Tier 3: Cross-Feature Pairwise Interactions (T3-001..T3-024)', ()
     page,
   }, testInfo) => {
     onlyDesktop(testInfo);
-    const stemMap = buildQuestionStemMap();
-    await gotoRoute(page, '#/quiz');
+    const stemMap = buildQuestionStemMap(FIXTURE_BANK);
+    await seedFixtureBank(page, FIXTURE_BANK, makeEmptyStore(), { targetHashRoute: '#/quiz' });
     await selectQuizFilters(page, { count: 10 });
     await modeCard(page, 'choice').click();
 
@@ -323,8 +379,8 @@ test.describe('Tier 3: Cross-Feature Pairwise Interactions (T3-001..T3-024)', ()
     page,
   }, testInfo) => {
     onlyDesktop(testInfo);
-    const stemMap = buildQuestionStemMap();
-    await gotoRoute(page, '#/quiz');
+    const stemMap = buildQuestionStemMap(FIXTURE_BANK);
+    await seedFixtureBank(page, FIXTURE_BANK, makeEmptyStore(), { targetHashRoute: '#/quiz' });
     await selectQuizFilters(page, { count: 10 });
     await modeCard(page, 'multi').click();
 
@@ -348,8 +404,8 @@ test.describe('Tier 3: Cross-Feature Pairwise Interactions (T3-001..T3-024)', ()
     page,
   }, testInfo) => {
     onlyDesktop(testInfo);
-    const stemMap = buildQuestionStemMap();
-    await gotoRoute(page, '#/quiz');
+    const stemMap = buildQuestionStemMap(FIXTURE_BANK);
+    await seedFixtureBank(page, FIXTURE_BANK, makeEmptyStore(), { targetHashRoute: '#/quiz' });
     await selectQuizFilters(page, { chapters: 'all', count: 0, order: 'random' });
     await modeCard(page, 'all').click();
 
@@ -371,14 +427,15 @@ test.describe('Tier 3: Cross-Feature Pairwise Interactions (T3-001..T3-024)', ()
     await expect(statCard(page, 'done')).toContainText('4');
   });
 
-  test('T3-014 Result 再来一组 preserves Ch1 + review_notes_synthesized origin filter', async ({
+  test('T3-014 Result 再来一组 preserves target chapter + review_notes_synthesized origin filter', async ({
     page,
   }, testInfo) => {
     onlyDesktop(testInfo);
-    const stemMap = buildQuestionStemMap();
-    await gotoRoute(page, '#/quiz');
+    const targetCh = pickQuestion({ origin: 'review_notes_synthesized' }, FIXTURE_BANK).chapter;
+    const stemMap = buildQuestionStemMap(FIXTURE_BANK);
+    await seedFixtureBank(page, FIXTURE_BANK, makeEmptyStore(), { targetHashRoute: '#/quiz' });
     await selectQuizFilters(page, {
-      chapters: [1],
+      chapters: [targetCh],
       origin: 'review_notes_synthesized',
       count: 10,
     });
@@ -393,20 +450,25 @@ test.describe('Tier 3: Cross-Feature Pairwise Interactions (T3-001..T3-024)', ()
 
     await btnRetryMore(page).click();
     const q = findQuestionByStem(await qStem(page).innerText(), stemMap);
-    expect(q.chapter).toBe(1);
+    expect(q.chapter).toBe(targetCh);
     expect(q.source.origin).toBe('review_notes_synthesized');
+    await expect(qSourceTag(page)).toContainText(/引导与提炼/);
   });
 
   test('T3-015 Stale IDs seeded -> Home stats=2, Wrong Book=2, Export JSON clean', async ({
     page,
   }, testInfo) => {
     onlyDesktop(testInfo);
-    const qs = pickQuestions({ type: 'choice', limit: 2 });
-    await seedStaleIdsStoreAndReload(
-      page,
-      { validWrongIds: qs.map((q) => q.id), staleCount: 2 },
-      '#/quiz',
-    );
+    const qs = pickQuestions({ type: 'choice', limit: 2 }, FIXTURE_BANK);
+    const store = makeSeededStore({ wrongIds: qs.map((q) => q.id) }, FIXTURE_BANK);
+    for (let i = 1; i <= 2; i++) {
+      const staleId = `__stale_removed_q${i}`;
+      store.records[staleId] = { ok: 0, choice: 0, ts: 1_700_000_000_000 + i };
+      store.fav[staleId] = true;
+      store.mastery[staleId] = 1;
+    }
+    await seedFixtureBank(page, FIXTURE_BANK, store, { targetHashRoute: '#/quiz' });
+
     await expect(statCard(page, 'wrong')).toContainText('2');
     const exported = await captureJsonExport(page, () => btnExportJson(page).click());
     expect(exported.parsed).toBeTruthy();
@@ -419,8 +481,8 @@ test.describe('Tier 3: Cross-Feature Pairwise Interactions (T3-001..T3-024)', ()
     page,
   }, testInfo) => {
     onlyDesktop(testInfo);
-    const stemMap = buildQuestionStemMap();
-    await gotoRoute(page, '#/quiz');
+    const stemMap = buildQuestionStemMap(FIXTURE_BANK);
+    await seedFixtureBank(page, FIXTURE_BANK, makeEmptyStore(), { targetHashRoute: '#/quiz' });
     await selectQuizFilters(page, { count: 10 });
     await modeCard(page, 'choice').click();
     await answerCurrentQuestion(page, stemMap, 'wrong');
@@ -434,7 +496,7 @@ test.describe('Tier 3: Cross-Feature Pairwise Interactions (T3-001..T3-024)', ()
     page,
   }, testInfo) => {
     onlyDesktop(testInfo);
-    await gotoRoute(page, '#/quiz');
+    await seedFixtureBank(page, FIXTURE_BANK, makeEmptyStore(), { targetHashRoute: '#/quiz' });
     await selectQuizFilters(page, { count: 10 });
     await modeCard(page, 'all').click();
     await page.keyboard.press('ArrowRight');
@@ -450,8 +512,13 @@ test.describe('Tier 3: Cross-Feature Pairwise Interactions (T3-001..T3-024)', ()
     page,
   }, testInfo) => {
     onlyDesktop(testInfo);
-    const q = pickQuestion({ type: 'choice' });
-    await seedStoreAndReload(page, makeSeededStore({ favIds: [q.id] }), '#/fav');
+    const q = pickQuestion({ type: 'choice' }, FIXTURE_BANK);
+    await seedFixtureBank(
+      page,
+      FIXTURE_BANK,
+      makeSeededStore({ favIds: [q.id] }, FIXTURE_BANK),
+      { targetHashRoute: '#/fav' },
+    );
     await listRedoAll(page).click();
     await expect(btnStar(page)).toHaveAttribute('aria-pressed', 'true');
     await btnStar(page).click();
@@ -468,9 +535,14 @@ test.describe('Tier 3: Cross-Feature Pairwise Interactions (T3-001..T3-024)', ()
     page,
   }, testInfo) => {
     onlyMobile(testInfo);
+    const notes = loadNotesCatalog();
+    const targetCh = notes.chapters[notes.chapters.length - 1] ?? notes.chapters[0]!;
     await gotoRoute(page, '#/notes');
-    await notesToc(page).getByText(/第\s*6\s*章|第六章/).first().click();
-    await expect(notesChapter(page, 6)).toBeVisible();
+    await notesToc(page)
+      .getByText(new RegExp(`第\\s*${targetCh.id}\\s*章`))
+      .first()
+      .click();
+    await expect(notesChapter(page, targetCh.id)).toBeVisible();
     await assertHandbookTablesContained(page);
     await assertFullLayoutAudit(page, { checkTables: true });
   });
@@ -479,12 +551,13 @@ test.describe('Tier 3: Cross-Feature Pairwise Interactions (T3-001..T3-024)', ()
     page,
   }, testInfo) => {
     onlyDesktop(testInfo);
-    const choiceQ = pickQuestion({ type: 'choice' });
-    const tfQ = pickQuestion({ type: 'tf' });
-    await seedStoreAndReload(
+    const choiceQ = pickQuestion({ type: 'choice' }, FIXTURE_BANK);
+    const tfQ = pickQuestion({ type: 'tf' }, FIXTURE_BANK);
+    await seedFixtureBank(
       page,
-      makeSeededStore({ correctIds: [choiceQ.id], wrongIds: [tfQ.id] }),
-      '#/quiz',
+      FIXTURE_BANK,
+      makeSeededStore({ correctIds: [choiceQ.id], wrongIds: [tfQ.id] }, FIXTURE_BANK),
+      { targetHashRoute: '#/quiz' },
     );
     await expect(modeCard(page, 'choice')).toContainText('100%');
     await expect(modeCard(page, 'tf')).toContainText('0%');
@@ -495,14 +568,18 @@ test.describe('Tier 3: Cross-Feature Pairwise Interactions (T3-001..T3-024)', ()
     page,
   }, testInfo) => {
     onlyDesktop(testInfo);
-    const qs = pickQuestions({ type: 'choice', limit: 4 });
-    await seedStoreAndReload(
+    const qs = pickQuestions({ type: 'choice', limit: 4 }, FIXTURE_BANK);
+    await seedFixtureBank(
       page,
-      makeSeededStore({
-        wrongIds: [qs[0]!.id, qs[1]!.id, qs[2]!.id],
-        favIds: [qs[3]!.id],
-      }),
-      '#/wrong',
+      FIXTURE_BANK,
+      makeSeededStore(
+        {
+          wrongIds: [qs[0]!.id, qs[1]!.id, qs[2]!.id],
+          favIds: [qs[3]!.id],
+        },
+        FIXTURE_BANK,
+      ),
+      { targetHashRoute: '#/wrong' },
     );
     page.once('dialog', (d) => d.accept());
     await listClearWrong(page).click();
@@ -532,16 +609,19 @@ test.describe('Tier 3: Cross-Feature Pairwise Interactions (T3-001..T3-024)', ()
     page,
   }, testInfo) => {
     onlyDesktop(testInfo);
-    const shorts = pickQuestions({ type: 'short', limit: 3 });
-    const store = makeSeededStore({
-      favIds: [shorts[0]!.id],
-      mastery: {
-        [shorts[0]!.id]: 0,
-        [shorts[1]!.id]: 1,
-        [shorts[2]!.id]: 2,
+    const shorts = pickQuestions({ type: 'short', limit: 3 }, FIXTURE_BANK);
+    const store = makeSeededStore(
+      {
+        favIds: [shorts[0]!.id],
+        mastery: {
+          [shorts[0]!.id]: 0,
+          [shorts[1]!.id]: 1,
+          [shorts[2]!.id]: 2,
+        },
       },
-    });
-    await seedStoreAndReload(page, store, '#/quiz');
+      FIXTURE_BANK,
+    );
+    await seedFixtureBank(page, FIXTURE_BANK, store, { targetHashRoute: '#/quiz' });
     const exported = await captureJsonExport(page, () => btnExportJson(page).click());
 
     page.once('dialog', (d) => d.accept());
@@ -554,7 +634,8 @@ test.describe('Tier 3: Cross-Feature Pairwise Interactions (T3-001..T3-024)', ()
     }
 
     await importJsonFile(inputImportFile(page), exported.raw, exported.filename);
-    const restored = await readPersistedStore(page);
+    await expect(statCard(page, 'done')).toContainText('3');
+    const restored = await readIdbBankProgress(page, FIXTURE_BANK_ID);
     expect(restored?.mastery[shorts[0]!.id]).toBe(0);
     expect(restored?.mastery[shorts[1]!.id]).toBe(1);
     expect(restored?.mastery[shorts[2]!.id]).toBe(2);
@@ -568,11 +649,10 @@ test.describe('Tier 3: Cross-Feature Pairwise Interactions (T3-001..T3-024)', ()
     page,
   }, testInfo) => {
     onlyDesktop(testInfo);
-    const bank = loadBankCatalog();
-    await gotoRoute(page, '#/quiz');
+    await seedFixtureBank(page, FIXTURE_BANK, makeEmptyStore(), { targetHashRoute: '#/quiz' });
     await selectQuizFilters(page, { chapters: [1], origin: 'comprehensive_bank' });
 
-    const subset = bank.questions.filter(
+    const subset = FIXTURE_BANK.questions.filter(
       (q) => q.chapter === 1 && q.source.origin === 'comprehensive_bank',
     );
     await expect(modeCard(page, 'all')).toContainText(`${subset.length}`);

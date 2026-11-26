@@ -26,8 +26,8 @@ const loadedBank: BankData | undefined = bankModules['./bank.json'];
 
 const emptyBank: BankData = {
   meta: {
-    title: '人工智能导论题库',
-    version: '1.0.0',
+    title: 'QuizHub 使用引导示例题库',
+    version: '2.0.0',
     generatedAt: NOTES.meta.generatedAt,
     counts: {
       total: 0,

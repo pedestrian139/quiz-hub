@@ -16,7 +16,8 @@ function matchesSearch(q: Question, query: string): boolean {
   const fields: string[] = [
     q.stem,
     ...(q.options ?? []),
-    q.explain,
+    q.explain ?? '',
+    q.explanation ?? '',
     ...(q.tags ?? []),
     ...(q.keyPoints ?? []),
     typeof q.answer === 'string' ? q.answer : '',
@@ -255,10 +256,15 @@ export function recordObjectiveAnswer(
     choice: normalizedChoice,
     ts,
   };
+  const preservedAi =
+    store.aiExplanations && Object.keys(store.aiExplanations).length > 0
+      ? { aiExplanations: { ...store.aiExplanations } }
+      : {};
   const nextStore: UserStore = {
     records: { ...store.records, [q.id]: record },
     fav: { ...store.fav },
     mastery: { ...store.mastery },
+    ...preservedAi,
   };
   return { store: nextStore, record, isCorrect };
 }
@@ -273,10 +279,15 @@ export function recordSubjectiveMastery(
     ok: level === 2 ? 1 : 0,
     ts,
   };
+  const preservedAi =
+    store.aiExplanations && Object.keys(store.aiExplanations).length > 0
+      ? { aiExplanations: { ...store.aiExplanations } }
+      : {};
   return {
     records: { ...store.records, [questionId]: record },
     fav: { ...store.fav },
     mastery: { ...store.mastery, [questionId]: level },
+    ...preservedAi,
   };
 }
 
@@ -287,10 +298,15 @@ export function toggleFavorite(store: UserStore, questionId: string): UserStore 
   } else {
     nextFav[questionId] = true;
   }
+  const preservedAi =
+    store.aiExplanations && Object.keys(store.aiExplanations).length > 0
+      ? { aiExplanations: { ...store.aiExplanations } }
+      : {};
   return {
     records: { ...store.records },
     fav: nextFav,
     mastery: { ...store.mastery },
+    ...preservedAi,
   };
 }
 
@@ -307,10 +323,15 @@ export function clearWrongRecords(store: UserStore): UserStore {
       nextMastery[id] = level;
     }
   }
+  const preservedAi =
+    store.aiExplanations && Object.keys(store.aiExplanations).length > 0
+      ? { aiExplanations: { ...store.aiExplanations } }
+      : {};
   return {
     records: nextRecords,
     fav: { ...store.fav },
     mastery: nextMastery,
+    ...preservedAi,
   };
 }
 

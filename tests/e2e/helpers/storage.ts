@@ -36,6 +36,9 @@ export interface Question {
   options?: string[];
   answer: number | number[] | boolean | string;
   explain: string;
+  explanation?: string;
+  aiAnalysis?: string;
+  aiInferredAnswer?: boolean;
   keyPoints?: string[];
   tags?: string[];
   source: QuestionSource;
@@ -104,10 +107,17 @@ export interface UserRecord {
   ts: number;
 }
 
+export interface CachedAiExplanation {
+  content: string;
+  updatedAt: number;
+  model?: string;
+}
+
 export interface UserStore {
   records: Record<string, UserRecord>;
   fav: Record<string, boolean>;
   mastery: Record<string, MasteryLevel>;
+  aiExplanations?: Record<string, CachedAiExplanation>;
 }
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -134,18 +144,22 @@ export function loadNotesCatalog(): NotesData {
   return cachedNotes;
 }
 
-export function pickQuestions(filter?: {
-  type?: QuestionType;
-  chapter?: number;
-  chapters?: number[];
-  origin?: QuestionOrigin;
-  hasKeyPoints?: boolean;
-  withoutKeyPoints?: boolean;
-  minAnswerLen?: number;
-  limit?: number;
-  excludeIds?: string[];
-}): Question[] {
-  const bank = loadBankCatalog();
+export function pickQuestions(
+  filter?: {
+    type?: QuestionType;
+    chapter?: number;
+    chapters?: number[];
+    origin?: QuestionOrigin;
+    hasKeyPoints?: boolean;
+    withoutKeyPoints?: boolean;
+    minAnswerLen?: number;
+    limit?: number;
+    excludeIds?: string[];
+    bank?: BankData;
+  },
+  bankArg?: BankData,
+): Question[] {
+  const bank = bankArg ?? filter?.bank ?? loadBankCatalog();
   const excluded = new Set(filter?.excludeIds ?? []);
   let list = bank.questions.filter((q) => {
     if (excluded.has(q.id)) return false;
@@ -171,8 +185,11 @@ export function pickQuestions(filter?: {
   return list;
 }
 
-export function pickQuestion(filter?: Parameters<typeof pickQuestions>[0]): Question {
-  const list = pickQuestions({ ...filter, limit: 1 });
+export function pickQuestion(
+  filter?: Parameters<typeof pickQuestions>[0],
+  bankArg?: BankData,
+): Question {
+  const list = pickQuestions({ ...filter, limit: 1 }, bankArg);
   if (list.length === 0 || !list[0]) {
     throw new Error(`No question matched filter: ${JSON.stringify(filter)}`);
   }
@@ -249,19 +266,24 @@ export function makeEmptyStore(): UserStore {
   return { records: {}, fav: {}, mastery: {} };
 }
 
-export function makeSeededStore(opts?: {
-  correctIds?: string[];
-  wrongIds?: string[];
-  favIds?: string[];
-  mastery?: Record<string, MasteryLevel>;
-  extraRecords?: Record<string, UserRecord>;
-  baseTs?: number;
-}): UserStore {
+export function makeSeededStore(
+  opts?: {
+    correctIds?: string[];
+    wrongIds?: string[];
+    favIds?: string[];
+    mastery?: Record<string, MasteryLevel>;
+    extraRecords?: Record<string, UserRecord>;
+    aiExplanations?: Record<string, CachedAiExplanation>;
+    baseTs?: number;
+    bank?: BankData;
+  },
+  bankArg?: BankData,
+): UserStore {
   const store = makeEmptyStore();
+  const bank = bankArg ?? opts?.bank ?? loadBankCatalog();
   let ts = opts?.baseTs ?? 1_700_000_000_000;
 
   for (const id of opts?.correctIds ?? []) {
-    const bank = loadBankCatalog();
     const q = bank.questions.find((item) => item.id === id);
     const choice =
       q && (q.type === 'choice' || q.type === 'multi' || q.type === 'tf')
@@ -271,7 +293,6 @@ export function makeSeededStore(opts?: {
   }
 
   for (const id of opts?.wrongIds ?? []) {
-    const bank = loadBankCatalog();
     const q = bank.questions.find((item) => item.id === id);
     const choice =
       q && (q.type === 'choice' || q.type === 'multi' || q.type === 'tf')
@@ -295,6 +316,10 @@ export function makeSeededStore(opts?: {
 
   if (opts?.extraRecords) {
     Object.assign(store.records, opts.extraRecords);
+  }
+
+  if (opts?.aiExplanations) {
+    store.aiExplanations = { ...opts.aiExplanations };
   }
 
   return store;
@@ -360,6 +385,7 @@ export async function seedStaleIdsStoreAndReload(
     validWrongIds?: string[];
     validFavIds?: string[];
     staleCount?: number;
+    bank?: BankData;
   },
   targetHashRoute = '#/',
 ): Promise<UserStore> {
@@ -367,6 +393,7 @@ export async function seedStaleIdsStoreAndReload(
     correctIds: opts?.validCorrectIds,
     wrongIds: opts?.validWrongIds,
     favIds: opts?.validFavIds,
+    bank: opts?.bank,
   });
 
   const staleCount = opts?.staleCount ?? 2;
@@ -430,7 +457,7 @@ export async function captureJsonExport(
 export async function importJsonFile(
   fileInput: Locator,
   payload: unknown | string,
-  filename = 'ai-intro-quiz-backup.json',
+  filename = 'quizhub-backup.json',
 ): Promise<void> {
   const text = typeof payload === 'string' ? payload : JSON.stringify(payload, null, 2);
   await fileInput.setInputFiles({

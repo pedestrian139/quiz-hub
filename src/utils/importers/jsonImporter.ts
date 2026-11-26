@@ -195,16 +195,32 @@ function parseExternalQuestionArray(
       chapterName = info.chapterName;
     }
 
-    const explain = cleanText(
-      rawItem.explain ??
-        rawItem.explanation ??
-        rawItem.analysis ??
-        rawItem.rationale ??
-        rawItem.解析 ??
-        rawItem.答案解析,
-    );
+    const explainCandidates = [
+      rawItem.explain,
+      rawItem.explanation,
+      rawItem.aiAnalysis,
+      rawItem.analysis,
+      rawItem.rationale,
+      rawItem.解析,
+      rawItem.答案解析,
+    ];
+    let explain = '';
+    for (const candidate of explainCandidates) {
+      if (
+        typeof candidate !== 'string' &&
+        !(typeof candidate === 'number' && Number.isFinite(candidate))
+      ) {
+        continue;
+      }
+      const cleaned = cleanText(candidate);
+      if (cleaned) {
+        explain = cleaned;
+        break;
+      }
+    }
     const keyPoints = normalizeStringList(rawItem.keyPoints ?? rawItem.points ?? rawItem.要点 ?? rawItem.采分点);
     const tags = normalizeStringList(rawItem.tags ?? rawItem.标签);
+    const aiInferredAnswer = rawItem.aiInferredAnswer === true;
 
     let sourceRef = `JSON #${idx + 1}`;
     let sourceNote: string | undefined;
@@ -238,6 +254,7 @@ function parseExternalQuestionArray(
       sourceRef,
       ...(sourceNote ? { sourceNote } : {}),
       ...(preserveOrigin ? { preserveOrigin } : {}),
+      ...(aiInferredAnswer ? { aiInferredAnswer: true } : {}),
       issues: answerIssues,
       included: true,
     };

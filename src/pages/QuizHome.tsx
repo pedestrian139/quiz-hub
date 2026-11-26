@@ -1,13 +1,11 @@
 import { useMemo, useRef, type ChangeEvent, type KeyboardEvent } from 'react';
 import type { HomeStats, QuestionOrigin, QuestionType, UserStore } from '../types/quiz';
+import { getOriginLabel } from '../core/questionUtils';
 import { buildQueue, computeModeStats } from '../core/quizEngine';
 import { exportStoreJson, importStoreJson } from '../core/storage';
-import {
-  ALL_CHAPTER_IDS,
-  CHAPTERS,
-  COUNTS,
-  QUESTIONS,
-} from '../data/catalog';
+import type { BankViewModel } from '../utils/bankCatalog';
+import type { ImportModalTab } from '../utils/BankLibraryContext';
+import type { BankRecord } from '../utils/quizImportTypes';
 import type { Route } from '../router/useHashRoute';
 import { Icon, type IconName } from '../components/Icons';
 import type { CountOption, FilterState, Notify } from './quizTypes';
@@ -34,7 +32,7 @@ const MODE_CARDS: ModeCardDef[] = [
   {
     mode: 'choice',
     title: '单选题',
-    subtitle: '四选一概念与方法辨析，点击或按数字键即时判分',
+    subtitle: '选项概念与方法辨析，点击或按数字/字母键即时判分',
     badgeTone: 'brand',
     icon: 'circleDot',
   },
@@ -69,10 +67,15 @@ const MODE_CARDS: ModeCardDef[] = [
 ];
 
 interface QuizHomeProps {
+  viewModel: BankViewModel;
+  banks: BankRecord[];
+  activeBankId: string;
   store: UserStore;
   stats: HomeStats;
   filters: FilterState;
   onChangeFilters: (next: FilterState) => void;
+  onSwitchBank: (bankId: string) => void;
+  onOpenImport: (tab?: ImportModalTab) => void;
   onStartMode: (mode: 'all' | QuestionType, matchingCount: number) => void;
   onNavigate: (route: Route) => void;
   onImportStore: (next: UserStore) => void;
@@ -81,10 +84,15 @@ interface QuizHomeProps {
 }
 
 export function QuizHome({
+  viewModel,
+  banks,
+  activeBankId,
   store,
   stats,
   filters,
   onChangeFilters,
+  onSwitchBank,
+  onOpenImport,
   onStartMode,
   onNavigate,
   onImportStore,
@@ -94,8 +102,10 @@ export function QuizHome({
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const searchInputRef = useRef<HTMLInputElement | null>(null);
 
+  const { bank, questions, chapters, allChapterIds, counts } = viewModel;
   const selectedChapterSet = useMemo(() => new Set(filters.chapters), [filters.chapters]);
-  const allChaptersSelected = filters.chapters.length === CHAPTERS.length;
+  const allChaptersSelected =
+    chapters.length > 0 && filters.chapters.length === chapters.length;
   const searchQuery = filters.search ?? '';
   const hasSearch = searchQuery.trim().length > 0;
 
@@ -111,7 +121,7 @@ export function QuizHome({
       analysis: 0,
     };
     for (const def of MODE_CARDS) {
-      result[def.mode] = buildQueue(QUESTIONS, {
+      result[def.mode] = buildQueue(questions, {
         mode: def.mode,
         chapters: filters.chapters,
         origins,
@@ -121,23 +131,23 @@ export function QuizHome({
       }).length;
     }
     return result;
-  }, [filters.chapters, filters.origin, searchQuery]);
+  }, [filters.chapters, filters.origin, questions, searchQuery]);
 
   const modeStatsMap = useMemo(() => {
     return {
-      all: computeModeStats(QUESTIONS, store, 'all'),
-      choice: computeModeStats(QUESTIONS, store, 'choice'),
-      multi: computeModeStats(QUESTIONS, store, 'multi'),
-      tf: computeModeStats(QUESTIONS, store, 'tf'),
-      short: computeModeStats(QUESTIONS, store, 'short'),
-      analysis: computeModeStats(QUESTIONS, store, 'analysis'),
+      all: computeModeStats(questions, store, 'all'),
+      choice: computeModeStats(questions, store, 'choice'),
+      multi: computeModeStats(questions, store, 'multi'),
+      tf: computeModeStats(questions, store, 'tf'),
+      short: computeModeStats(questions, store, 'short'),
+      analysis: computeModeStats(questions, store, 'analysis'),
     };
-  }, [store]);
+  }, [questions, store]);
 
   const handleToggleAllChapters = () => {
     onChangeFilters({
       ...filters,
-      chapters: [...ALL_CHAPTER_IDS],
+      chapters: [...allChapterIds],
     });
   };
 
@@ -184,7 +194,6 @@ export function QuizHome({
   };
 
   const handleSearchKeyDown = (e: KeyboardEvent<HTMLInputElement>) => {
-    // Keep typing isolated from any global shortcut listeners.
     e.stopPropagation();
     if (e.key === 'Escape' && searchQuery.length > 0) {
       e.preventDefault();
@@ -198,7 +207,7 @@ export function QuizHome({
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
     a.href = url;
-    a.download = 'ai-intro-quiz-backup.json';
+    a.download = 'quizhub-backup.json';
     a.style.display = 'none';
     document.body.appendChild(a);
     a.click();
@@ -235,9 +244,9 @@ export function QuizHome({
   };
 
   const handleReset = () => {
-    if (safeConfirm('确定要清空全部做题记录、错题与收藏进度吗？此操作不可恢复。')) {
+    if (safeConfirm('确定要清空当前题库的全部做题记录、错题与收藏进度吗？此操作不可恢复。')) {
       onResetStore();
-      notify('已清空全部本地做题记录', 'info');
+      notify('已清空当前题库的本地做题记录', 'info');
     }
   };
 
@@ -246,20 +255,53 @@ export function QuizHome({
       <section className="hero-card hero-card--quiz">
         <div className="hero-eyebrow">
           <span data-testid="quiz-badge-total" className="pill pill--primary">
-            题库共 {COUNTS.total} 道题
+            题库共 {counts.total} 道题
           </span>
-          <span className="pill pill--neutral">{CHAPTERS.length} 章全覆盖</span>
+          <span className="pill pill--neutral">{chapters.length} 章全覆盖</span>
           <span className="pill pill--subtle">
             <Icon name="shield" size={13} />
-            本地保存进度
+            独立保存进度 · 支持云同步
           </span>
         </div>
         <h1 className="hero-title">
-          人工智能导论 · <span className="hero-title__accent">自助刷题工具</span>
+          {bank.name} · <span className="hero-title__accent">刷题工作台</span>
         </h1>
         <p className="hero-subtitle">
-          先在下方按需筛选章节、题目来源与单次题量，再点击任一题型卡片即可开始练习。支持键盘快捷键（1–4 / A–D、T/F、空格看答案、方向键切题）。
+          先选择目标题库并按需筛选章节、题目来源与单次题量，再点击任一题型卡片即可开始练习。支持键盘快捷键（1–4 / A–D、T/F、空格看答案、方向键切题）与 AI 深度解析。
         </p>
+
+        <div className="bank-switcher-bar" aria-label="切换当前练习题库">
+          <div className="bank-switcher-bar__control">
+            <label className="bank-switcher-bar__label" htmlFor="quiz-bank-switcher">
+              当前题库
+            </label>
+            <select
+              id="quiz-bank-switcher"
+              data-testid="bank-switcher"
+              aria-label="切换当前题库"
+              className="bank-switcher__select"
+              value={activeBankId}
+              onChange={(e) => onSwitchBank(e.target.value)}
+            >
+              {banks.map((b) => (
+                <option key={b.id} value={b.id}>
+                  {b.name}（{b.data.questions.length} 题）
+                </option>
+              ))}
+            </select>
+          </div>
+
+          <div className="bank-switcher-bar__actions">
+            <button
+              type="button"
+              className="btn btn--soft-brand btn--sm"
+              onClick={() => onOpenImport('import')}
+            >
+              <Icon name="sparkles" size={14} />
+              AI 洗题导入
+            </button>
+          </div>
+        </div>
 
         <div className="stats-grid" aria-label="做题统计概览">
           <div data-testid="stat-done" className="stat-card">
@@ -293,7 +335,8 @@ export function QuizHome({
         <div className="section-head">
           <h2 className="section-head__title">选择刷题模式</h2>
           <span className="section-head__hint">
-            当前筛选范围：{filters.chapters.length === CHAPTERS.length ? '全部 9 章' : `已选 ${filters.chapters.length} 章`}
+            当前筛选范围：
+            {allChaptersSelected ? `全部 ${chapters.length} 章` : `已选 ${filters.chapters.length} 章`}
             {hasSearch ? ` · 关键词“${searchQuery.trim()}”` : ''} · 匹配{' '}
             <strong>{matchingCounts.all}</strong> 题
           </span>
@@ -398,7 +441,7 @@ export function QuizHome({
           <div className="filter-group__head">
             <span className="filter-group__label">章节范围（可多选，至少保留 1 章）</span>
             <span className="filter-group__meta">
-              已选 {filters.chapters.length} / {CHAPTERS.length} 章
+              已选 {filters.chapters.length} / {chapters.length} 章
             </span>
           </div>
           <div className="chip-list">
@@ -411,7 +454,7 @@ export function QuizHome({
             >
               全部
             </button>
-            {CHAPTERS.map((ch) => {
+            {chapters.map((ch) => {
               const active = selectedChapterSet.has(ch.id);
               return (
                 <button
@@ -445,15 +488,15 @@ export function QuizHome({
                 })
               }
             >
-              <option value="all">全部来源（{COUNTS.total} 题）</option>
+              <option value="all">全部来源（{counts.total} 题）</option>
               <option value="comprehensive_bank">
-                综合题库（{COUNTS.byOrigin.comprehensive_bank} 题）
+                {getOriginLabel('comprehensive_bank')}（{counts.byOrigin.comprehensive_bank} 题）
               </option>
               <option value="video_popup">
-                视频课弹题（{COUNTS.byOrigin.video_popup} 题）
+                {getOriginLabel('video_popup')}（{counts.byOrigin.video_popup} 题）
               </option>
               <option value="review_notes_synthesized">
-                复习资料提炼（{COUNTS.byOrigin.review_notes_synthesized} 题）
+                {getOriginLabel('review_notes_synthesized')}（{counts.byOrigin.review_notes_synthesized} 题）
               </option>
             </select>
           </label>

@@ -9,6 +9,10 @@ import {
   assertNoHorizontalOverflow,
 } from './helpers/audit.ts';
 import {
+  FIXTURE_BANK,
+  seedFixtureBank,
+} from './helpers/fixtureBank.ts';
+import {
   chapterChip,
   filterCount,
   filterOrder,
@@ -20,6 +24,7 @@ import {
   hubCardQuiz,
   modeCard,
   navLink,
+  notesChapter,
   qSourceTag,
   qStem,
   qTypeTag,
@@ -33,19 +38,22 @@ import {
   buildQuestionStemMap,
   findQuestionByStem,
   loadBankCatalog,
+  loadNotesCatalog,
+  makeEmptyStore,
   makeSeededStore,
   pickQuestions,
-  seedStoreAndReload,
 } from './helpers/storage.ts';
 
 test.describe('Tier 1: Portal Hub, Navigation & Quiz Home (UF01-UF06)', () => {
-  test('T1-001 [UF01] Portal Hub renders title, subtitle, and offline hint', async ({
+  test('T1-001 [UF01] Portal Hub renders QuizHub brand, onboarding bank title, and storage hint', async ({
     page,
   }, testInfo) => {
     onlyDesktop(testInfo);
     await gotoRoute(page, '#/');
-    await expect(page.getByRole('heading', { name: /人工智能导论.*复习中心/ })).toBeVisible();
-    await expect(page.getByText(/本地保存进度|离线|localStorage/i).first()).toBeVisible();
+    await expect(page.getByRole('heading', { name: /QuizHub/i })).toBeVisible();
+    await expect(page.getByText(/QuizHub 使用引导示例题库/).first()).toBeVisible();
+    await expect(page.getByText(/本地保存进度|离线|localStorage|云端/i).first()).toBeVisible();
+    await expect(page.locator('body')).not.toContainText('人工智能导论');
   });
 
   test('T1-002 [UF01] Portal Hub displays two primary clickable entry cards', async ({
@@ -57,15 +65,15 @@ test.describe('Tier 1: Portal Hub, Navigation & Quiz Home (UF01-UF06)', () => {
     await expect(hubCardNotes(page)).toBeVisible();
   });
 
-  test('T1-003 [UF01] Portal Hub displays dynamic bank summary tags', async ({
+  test('T1-003 [UF01] Portal Hub displays dynamic onboarding bank summary tags', async ({
     page,
   }, testInfo) => {
     onlyDesktop(testInfo);
     const bank = loadBankCatalog();
+    expect(bank.meta.counts.total).toBeGreaterThanOrEqual(2);
     await gotoRoute(page, '#/');
     await expect(hubBadgeTotal(page)).toContainText(`${bank.meta.counts.total}`);
-    expect(bank.meta.counts.total).toBeGreaterThan(190);
-    await expect(hubBadgeChapters(page)).toContainText('9');
+    await expect(hubBadgeChapters(page)).toContainText(`${bank.chapters.length}`);
     await expect(page.getByText(/单选|选择/).first()).toBeVisible();
     await expect(page.getByText(/多选/).first()).toBeVisible();
   });
@@ -84,11 +92,13 @@ test.describe('Tier 1: Portal Hub, Navigation & Quiz Home (UF01-UF06)', () => {
     page,
   }, testInfo) => {
     onlyDesktop(testInfo);
+    const notes = loadNotesCatalog();
+    const firstChapterId = notes.chapters[0]?.id ?? 1;
     await gotoRoute(page, '#/');
     await hubCardNotes(page).click();
     await expect(page).toHaveURL(/#\/notes/);
-    await expect(page.getByText('复习总纲').first()).toBeVisible();
-    await expect(page.getByTestId('notes-chapter-1')).toBeVisible();
+    await expect(page.getByText(notes.overview.title).first()).toBeVisible();
+    await expect(notesChapter(page, firstChapterId)).toBeVisible();
   });
 
   test('T1-006 [UF02] Global nav switches across all 5 routes with active state', async ({
@@ -122,10 +132,12 @@ test.describe('Tier 1: Portal Hub, Navigation & Quiz Home (UF01-UF06)', () => {
     page,
   }, testInfo) => {
     onlyDesktop(testInfo);
+    const notes = loadNotesCatalog();
+    const firstChapterId = notes.chapters[0]?.id ?? 1;
     await gotoRoute(page, '#/quiz');
     await navLink(page, 'notes').click();
     await expect(page).toHaveURL(/#\/notes/);
-    await expect(page.getByTestId('notes-chapter-1')).toBeVisible();
+    await expect(notesChapter(page, firstChapterId)).toBeVisible();
   });
 
   test('T1-008 [UF02] Global nav transitions cleanly from #/notes to #/quiz', async ({
@@ -162,15 +174,19 @@ test.describe('Tier 1: Portal Hub, Navigation & Quiz Home (UF01-UF06)', () => {
     await assertNoHorizontalOverflow(page);
   });
 
-  test('T1-011 [UF03] Quiz Home hero displays title and dynamic bank badges', async ({
+  test('T1-011 [UF03] Quiz Home hero displays QuizHub title and dynamic onboarding bank badges', async ({
     page,
   }, testInfo) => {
     onlyDesktop(testInfo);
     const bank = loadBankCatalog();
+    expect(bank.meta.counts.total).toBeGreaterThanOrEqual(2);
     await gotoRoute(page, '#/quiz');
-    await expect(page.getByRole('heading', { name: /人工智能导论.*刷题/ })).toBeVisible();
+    await expect(page.getByRole('heading', { name: /QuizHub/i })).toBeVisible();
+    await expect(page.locator('body')).not.toContainText('人工智能导论');
     await expect(quizBadgeTotal(page)).toContainText(`${bank.meta.counts.total}`);
-    await expect(page.getByText(/9\s*章/).first()).toBeVisible();
+    await expect(
+      page.getByText(new RegExp(`${bank.chapters.length}\\s*章`)).first(),
+    ).toBeVisible();
     await expect(page.getByText(/本地保存进度/).first()).toBeVisible();
   });
 
@@ -189,13 +205,16 @@ test.describe('Tier 1: Portal Hub, Navigation & Quiz Home (UF01-UF06)', () => {
     page,
   }, testInfo) => {
     onlyDesktop(testInfo);
-    const choices = pickQuestions({ type: 'choice', limit: 3 });
-    const store = makeSeededStore({
-      correctIds: [choices[0]!.id, choices[1]!.id],
-      wrongIds: [choices[2]!.id],
-      favIds: [choices[0]!.id, choices[1]!.id],
-    });
-    await seedStoreAndReload(page, store, '#/quiz');
+    const choices = pickQuestions({ type: 'choice', limit: 3 }, FIXTURE_BANK);
+    const store = makeSeededStore(
+      {
+        correctIds: [choices[0]!.id, choices[1]!.id],
+        wrongIds: [choices[2]!.id],
+        favIds: [choices[0]!.id, choices[1]!.id],
+      },
+      FIXTURE_BANK,
+    );
+    await seedFixtureBank(page, FIXTURE_BANK, store, { targetHashRoute: '#/quiz' });
     await expect(statCard(page, 'done')).toContainText('3');
     await expect(statCard(page, 'acc')).toContainText('67%');
     await expect(statCard(page, 'wrong')).toContainText('1');
@@ -206,13 +225,14 @@ test.describe('Tier 1: Portal Hub, Navigation & Quiz Home (UF01-UF06)', () => {
     page,
   }, testInfo) => {
     onlyDesktop(testInfo);
-    const tfs = pickQuestions({ type: 'tf', limit: 2 });
-    const store = makeSeededStore({ correctIds: [tfs[0]!.id] });
-    await seedStoreAndReload(page, store, '#/quiz');
+    const ch1Tf = pickQuestions({ type: 'tf', chapter: 1, limit: 1 }, FIXTURE_BANK)[0]!;
+    const ch2Tf = pickQuestions({ type: 'tf', chapter: 2, limit: 1 }, FIXTURE_BANK)[0]!;
+    const store = makeSeededStore({ correctIds: [ch1Tf.id] }, FIXTURE_BANK);
+    await seedFixtureBank(page, FIXTURE_BANK, store, { targetHashRoute: '#/quiz' });
     await expect(statCard(page, 'done')).toContainText('1');
 
-    const stemMap = buildQuestionStemMap();
-    await selectQuizFilters(page, { chapters: [tfs[1]!.chapter], count: 10 });
+    const stemMap = buildQuestionStemMap(FIXTURE_BANK);
+    await selectQuizFilters(page, { chapters: [ch2Tf.chapter], count: 10 });
     await modeCard(page, 'tf').click();
     const stem = (await qStem(page).innerText()).trim();
     const current = findQuestionByStem(stem, stemMap);
@@ -239,13 +259,12 @@ test.describe('Tier 1: Portal Hub, Navigation & Quiz Home (UF01-UF06)', () => {
     page,
   }, testInfo) => {
     onlyDesktop(testInfo);
-    const bank = loadBankCatalog();
-    await gotoRoute(page, '#/quiz');
-    await expect(modeCard(page, 'all')).toContainText(`${bank.meta.counts.total}`);
+    await seedFixtureBank(page, FIXTURE_BANK, makeEmptyStore(), { targetHashRoute: '#/quiz' });
+    await expect(modeCard(page, 'all')).toContainText(`${FIXTURE_BANK.meta.counts.total}`);
     for (const mode of ['choice', 'multi', 'tf', 'short', 'analysis'] as const) {
       const card = modeCard(page, mode);
       await expect(card).toBeVisible();
-      await expect(card).toContainText(`${bank.meta.counts.byType[mode]}`);
+      await expect(card).toContainText(`${FIXTURE_BANK.meta.counts.byType[mode]}`);
     }
   });
 
@@ -253,7 +272,7 @@ test.describe('Tier 1: Portal Hub, Navigation & Quiz Home (UF01-UF06)', () => {
     page,
   }, testInfo) => {
     onlyDesktop(testInfo);
-    await gotoRoute(page, '#/quiz');
+    await seedFixtureBank(page, FIXTURE_BANK, makeEmptyStore(), { targetHashRoute: '#/quiz' });
     await selectQuizFilters(page, { count: 10 });
     await modeCard(page, 'all').click();
     await expect(quizProgressText(page)).toContainText('1 / 10');
@@ -264,7 +283,7 @@ test.describe('Tier 1: Portal Hub, Navigation & Quiz Home (UF01-UF06)', () => {
     page,
   }, testInfo) => {
     onlyDesktop(testInfo);
-    await gotoRoute(page, '#/quiz');
+    await seedFixtureBank(page, FIXTURE_BANK, makeEmptyStore(), { targetHashRoute: '#/quiz' });
     await selectQuizFilters(page, { count: 10 });
     await modeCard(page, 'choice').click();
     await expect(qTypeTag(page)).toContainText(/单选|选择/);
@@ -274,7 +293,7 @@ test.describe('Tier 1: Portal Hub, Navigation & Quiz Home (UF01-UF06)', () => {
     page,
   }, testInfo) => {
     onlyDesktop(testInfo);
-    await gotoRoute(page, '#/quiz');
+    await seedFixtureBank(page, FIXTURE_BANK, makeEmptyStore(), { targetHashRoute: '#/quiz' });
     await selectQuizFilters(page, { count: 10 });
     await modeCard(page, 'multi').click();
     await expect(qTypeTag(page)).toContainText(/多选/);
@@ -284,12 +303,15 @@ test.describe('Tier 1: Portal Hub, Navigation & Quiz Home (UF01-UF06)', () => {
     page,
   }, testInfo) => {
     onlyDesktop(testInfo);
-    const tfQ = pickQuestions({ type: 'tf', limit: 2 });
-    const store = makeSeededStore({
-      correctIds: [tfQ[0]!.id],
-      wrongIds: [tfQ[1]!.id],
-    });
-    await seedStoreAndReload(page, store, '#/quiz');
+    const tfQ = pickQuestions({ type: 'tf', limit: 2 }, FIXTURE_BANK);
+    const store = makeSeededStore(
+      {
+        correctIds: [tfQ[0]!.id],
+        wrongIds: [tfQ[1]!.id],
+      },
+      FIXTURE_BANK,
+    );
+    await seedFixtureBank(page, FIXTURE_BANK, store, { targetHashRoute: '#/quiz' });
     await expect(modeCard(page, 'tf')).toContainText('50%');
 
     await selectQuizFilters(page, { count: 10 });
@@ -309,11 +331,11 @@ test.describe('Tier 1: Portal Hub, Navigation & Quiz Home (UF01-UF06)', () => {
     page,
   }, testInfo) => {
     onlyDesktop(testInfo);
-    await gotoRoute(page, '#/quiz');
+    await seedFixtureBank(page, FIXTURE_BANK, makeEmptyStore(), { targetHashRoute: '#/quiz' });
     await expect(chapterChip(page, 'all')).toHaveAttribute('aria-pressed', 'true');
-    for (let ch = 1; ch <= 9; ch++) {
-      await expect(chapterChip(page, ch)).toBeVisible();
-      await expect(chapterChip(page, ch)).toHaveAttribute('aria-pressed', 'true');
+    for (const ch of FIXTURE_BANK.chapters) {
+      await expect(chapterChip(page, ch.id)).toBeVisible();
+      await expect(chapterChip(page, ch.id)).toHaveAttribute('aria-pressed', 'true');
     }
   });
 
@@ -321,9 +343,8 @@ test.describe('Tier 1: Portal Hub, Navigation & Quiz Home (UF01-UF06)', () => {
     page,
   }, testInfo) => {
     onlyDesktop(testInfo);
-    const bank = loadBankCatalog();
-    await gotoRoute(page, '#/quiz');
-    for (const ch of bank.chapters) {
+    await seedFixtureBank(page, FIXTURE_BANK, makeEmptyStore(), { targetHashRoute: '#/quiz' });
+    for (const ch of FIXTURE_BANK.chapters) {
       const chip = chapterChip(page, ch.id);
       await expect(chip).toContainText(ch.short);
       await expect(chip).toHaveAttribute('title', ch.title);
@@ -334,9 +355,8 @@ test.describe('Tier 1: Portal Hub, Navigation & Quiz Home (UF01-UF06)', () => {
     page,
   }, testInfo) => {
     onlyDesktop(testInfo);
-    const bank = loadBankCatalog();
-    const ch1Short = bank.chapters.find((c) => c.id === 1)!.short;
-    await gotoRoute(page, '#/quiz');
+    const ch1Short = FIXTURE_BANK.chapters.find((c) => c.id === 1)!.short;
+    await seedFixtureBank(page, FIXTURE_BANK, makeEmptyStore(), { targetHashRoute: '#/quiz' });
     await selectQuizFilters(page, { chapters: [1], count: 10 });
     await modeCard(page, 'all').click();
     for (let i = 0; i < 3; i++) {
@@ -351,25 +371,24 @@ test.describe('Tier 1: Portal Hub, Navigation & Quiz Home (UF01-UF06)', () => {
     page,
   }, testInfo) => {
     onlyDesktop(testInfo);
-    const bank = loadBankCatalog();
-    await gotoRoute(page, '#/quiz');
+    await seedFixtureBank(page, FIXTURE_BANK, makeEmptyStore(), { targetHashRoute: '#/quiz' });
     await selectOnlyChapters(page, [1, 2]);
     await expect(chapterChip(page, 3)).toHaveAttribute('aria-pressed', 'false');
 
     await chapterChip(page, 'all').click();
-    for (let ch = 1; ch <= 9; ch++) {
-      await expect(chapterChip(page, ch)).toHaveAttribute('aria-pressed', 'true');
+    for (const ch of FIXTURE_BANK.chapters) {
+      await expect(chapterChip(page, ch.id)).toHaveAttribute('aria-pressed', 'true');
     }
-    await expect(modeCard(page, 'all')).toContainText(`${bank.meta.counts.total}`);
+    await expect(modeCard(page, 'all')).toContainText(`${FIXTURE_BANK.meta.counts.total}`);
   });
 
   test('T1-025 [UF05] Combining Chapter 3 + Chapter 5 updates mode card count to exact sum', async ({
     page,
   }, testInfo) => {
     onlyDesktop(testInfo);
-    const ch3Count = pickQuestions({ chapter: 3 }).length;
-    const ch5Count = pickQuestions({ chapter: 5 }).length;
-    await gotoRoute(page, '#/quiz');
+    const ch3Count = pickQuestions({ chapter: 3 }, FIXTURE_BANK).length;
+    const ch5Count = pickQuestions({ chapter: 5 }, FIXTURE_BANK).length;
+    await seedFixtureBank(page, FIXTURE_BANK, makeEmptyStore(), { targetHashRoute: '#/quiz' });
     await selectOnlyChapters(page, [3]);
     await expect(modeCard(page, 'all')).toContainText(`${ch3Count}`);
 
@@ -381,7 +400,7 @@ test.describe('Tier 1: Portal Hub, Navigation & Quiz Home (UF01-UF06)', () => {
     page,
   }, testInfo) => {
     onlyDesktop(testInfo);
-    await gotoRoute(page, '#/quiz');
+    await seedFixtureBank(page, FIXTURE_BANK, makeEmptyStore(), { targetHashRoute: '#/quiz' });
     await selectQuizFilters(page, { chapters: 'all', count: 10 });
     await modeCard(page, 'all').click();
     await expect(quizProgressText(page)).toContainText('1 / 10');
@@ -391,8 +410,8 @@ test.describe('Tier 1: Portal Hub, Navigation & Quiz Home (UF01-UF06)', () => {
     page,
   }, testInfo) => {
     onlyDesktop(testInfo);
-    const ch1Count = pickQuestions({ chapter: 1 }).length;
-    await gotoRoute(page, '#/quiz');
+    const ch1Count = pickQuestions({ chapter: 1 }, FIXTURE_BANK).length;
+    await seedFixtureBank(page, FIXTURE_BANK, makeEmptyStore(), { targetHashRoute: '#/quiz' });
     await selectQuizFilters(page, { chapters: [1], count: 30 });
     await modeCard(page, 'all').click();
     await expect(quizProgressText(page)).toContainText(`1 / ${Math.min(30, ch1Count)}`);
@@ -407,8 +426,8 @@ test.describe('Tier 1: Portal Hub, Navigation & Quiz Home (UF01-UF06)', () => {
     page,
   }, testInfo) => {
     onlyDesktop(testInfo);
-    const stemMap = buildQuestionStemMap();
-    await gotoRoute(page, '#/quiz');
+    const stemMap = buildQuestionStemMap(FIXTURE_BANK);
+    await seedFixtureBank(page, FIXTURE_BANK, makeEmptyStore(), { targetHashRoute: '#/quiz' });
     await selectQuizFilters(page, {
       chapters: [1, 2, 3],
       order: 'seq',
@@ -428,11 +447,11 @@ test.describe('Tier 1: Portal Hub, Navigation & Quiz Home (UF01-UF06)', () => {
     }
   });
 
-  test('T1-029 [UF06] Origin filter 视频弹题 restricts session strictly to video_popup', async ({
+  test('T1-029 [UF06] Origin filter AI 洗题 / 精选 restricts session strictly to video_popup', async ({
     page,
   }, testInfo) => {
     onlyDesktop(testInfo);
-    await gotoRoute(page, '#/quiz');
+    await seedFixtureBank(page, FIXTURE_BANK, makeEmptyStore(), { targetHashRoute: '#/quiz' });
     await selectQuizFilters(page, {
       chapters: 'all',
       origin: 'video_popup',
@@ -440,31 +459,30 @@ test.describe('Tier 1: Portal Hub, Navigation & Quiz Home (UF01-UF06)', () => {
     });
     await modeCard(page, 'all').click();
     for (let i = 0; i < 3; i++) {
-      await expect(qSourceTag(page)).toContainText(/视频/);
+      await expect(qSourceTag(page)).toContainText(/AI 洗题|精选/);
       await page.getByTestId('btn-next').click();
     }
   });
 
-  test('T1-030 [UF06] Origin filters 综合题库 and 复习资料精编 update counts and queue', async ({
+  test('T1-030 [UF06] Origin filters 标准题库 and 引导与提炼 update counts and queue', async ({
     page,
   }, testInfo) => {
     onlyDesktop(testInfo);
-    const bank = loadBankCatalog();
-    await gotoRoute(page, '#/quiz');
+    await seedFixtureBank(page, FIXTURE_BANK, makeEmptyStore(), { targetHashRoute: '#/quiz' });
 
     await filterOrigin(page).selectOption('comprehensive_bank');
     await expect(modeCard(page, 'all')).toContainText(
-      `${bank.meta.counts.byOrigin.comprehensive_bank}`,
+      `${FIXTURE_BANK.meta.counts.byOrigin.comprehensive_bank}`,
     );
 
     await filterOrigin(page).selectOption('review_notes_synthesized');
     await expect(modeCard(page, 'all')).toContainText(
-      `${bank.meta.counts.byOrigin.review_notes_synthesized}`,
+      `${FIXTURE_BANK.meta.counts.byOrigin.review_notes_synthesized}`,
     );
 
     await filterCount(page).selectOption('10');
     await filterOrder(page).selectOption('seq');
     await modeCard(page, 'all').click();
-    await expect(qSourceTag(page)).toContainText(/复习资料|精编|提炼/);
+    await expect(qSourceTag(page)).toContainText(/引导与提炼/);
   });
 });

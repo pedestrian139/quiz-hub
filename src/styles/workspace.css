@@ -1,0 +1,324 @@
+/* QuizHub Phase 2 Workspace & Bank Switcher Layout */
+
+/* Bank Switcher Bar (Hub & QuizHome) */
+.bank-switcher-bar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 12px 14px;
+  border-radius: 14px;
+  border: 1px solid var(--line);
+  background: var(--surface-subtle);
+}
+
+.bank-switcher-bar__control {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex: 1 1 260px;
+  min-width: 0;
+}
+
+.bank-switcher-bar__label {
+  font-size: 13px;
+  font-weight: 700;
+  color: var(--sub);
+  white-space: nowrap;
+}
+
+.bank-switcher__select {
+  flex: 1 1 auto;
+  min-width: 0;
+  max-width: 360px;
+  height: 38px;
+  padding: 0 12px;
+  border-radius: 10px;
+  border: 1px solid var(--line-strong);
+  background: var(--card);
+  color: var(--ink);
+  font-size: 13.5px;
+  font-weight: 650;
+}
+
+.bank-switcher__select:focus {
+  outline: none;
+  border-color: var(--brand);
+  box-shadow: 0 0 0 3px var(--ring-focus);
+}
+
+.bank-switcher-bar__actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+
+/* Quiz Session Workspace */
+.page-wrap--session {
+  max-width: 920px;
+}
+
+@media (min-width: 1024px) {
+  .page-wrap--session.has-drawer {
+    max-width: 1260px;
+  }
+}
+
+@media (max-width: 1023px) {
+  .page-wrap--session {
+    padding-bottom: calc(28px + env(safe-area-inset-bottom));
+  }
+}
+
+.session-bank-name {
+  display: inline-flex;
+  align-items: center;
+  max-width: 220px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  padding: 3px 10px;
+  border-radius: 999px;
+  border: 1px solid var(--line);
+  background: var(--surface-subtle);
+  color: var(--sub);
+  font-size: 12px;
+  font-weight: 650;
+}
+
+@media (max-width: 640px) {
+  .session-bank-name {
+    max-width: 140px;
+  }
+}
+
+.workspace-layout {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  min-width: 0;
+}
+
+@media (min-width: 1024px) {
+  .workspace-layout.has-drawer {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) minmax(350px, 420px);
+    gap: 20px;
+    align-items: start;
+  }
+}
+
+.workspace-main {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  min-width: 0;
+}
+
+/* Rich content overflow containment (ensures table scroll wrappers satisfy layout audits) */
+.question-stem,
+.quiz-feedback__explain,
+.ref-answer-card__text,
+.ref-answer-card__explain,
+.ai-explain-card,
+.ai-chat-card,
+.list-item-card__stem,
+.list-item-answer {
+  min-width: 0;
+  max-width: 100%;
+  overflow-x: auto;
+}
+
+.option-btn__text {
+  min-width: 0;
+  max-width: 100%;
+  overflow-wrap: anywhere;
+}
+
+/* AI Workspace Controls Bar (always accessible outside ai-tutor-panel) */
+.ai-workspace-controls {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding-top: 12px;
+  border-top: 1px dashed var(--line);
+}
+
+.workspace-auto-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 36px;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--sub);
+  cursor: pointer;
+  user-select: none;
+}
+
+.workspace-auto-toggle input[type='checkbox'] {
+  width: 16px;
+  height: 16px;
+  margin: 0;
+  accent-color: var(--brand);
+  cursor: pointer;
+}
+
+/* Navigation / Mobile Thumb Bar */
+.workspace-mobile-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  min-width: 0;
+}
+
+@media (max-width: 1023px) {
+  .workspace-mobile-bar {
+    background: var(--card);
+    border: 1px solid var(--line);
+    border-radius: var(--radius);
+    box-shadow: var(--shadow);
+    padding: 10px 12px;
+  }
+
+  .workspace-mobile-bar .btn {
+    flex: 1 1 0;
+    min-height: 44px;
+    justify-content: center;
+  }
+}
+
+/* Filterable Answer Sheet */
+.sheet-filter-bar {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.sheet-filter-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  min-height: 34px;
+  padding: 5px 11px;
+  border-radius: 999px;
+  border: 1px solid var(--line-strong);
+  background: var(--surface-elevated);
+  color: var(--sub);
+  font-size: 12.5px;
+  font-weight: 650;
+  cursor: pointer;
+  transition: border-color 0.14s ease, background-color 0.14s ease, color 0.14s ease;
+}
+
+.sheet-filter-btn:hover {
+  border-color: var(--brand);
+  color: var(--brand);
+}
+
+.sheet-filter-btn.is-active {
+  border-color: var(--brand);
+  background: var(--brand-2);
+  color: var(--brand);
+}
+
+.sheet-btn.is-fav {
+  box-shadow: inset 0 0 0 1.5px var(--warn);
+}
+
+.sheet-empty-hint {
+  font-size: 13px;
+  color: var(--muted);
+  padding: 10px 4px;
+}
+
+/* AI Deep Explanation Drawer (Desktop right split / Mobile expandable panel) */
+.ai-explain-drawer {
+  background: var(--card);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow);
+  padding: 18px;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  min-width: 0;
+  max-width: 100%;
+}
+
+.ai-explain-drawer__head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding-bottom: 10px;
+  border-bottom: 1px solid var(--line);
+}
+
+.ai-explain-drawer__title-group {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+  min-width: 0;
+}
+
+.ai-explain-drawer__title {
+  margin: 0;
+  font-size: 15px;
+  font-weight: 760;
+  color: var(--ink);
+}
+
+.ai-explain-drawer__actions {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.ai-followup-pills {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.ai-followup-pill {
+  display: inline-flex;
+  align-items: center;
+  min-height: 34px;
+  padding: 6px 12px;
+  border-radius: 999px;
+  border: 1px solid var(--brand-line);
+  background: var(--brand-2);
+  color: var(--brand);
+  font-size: 12.5px;
+  font-weight: 650;
+  text-align: left;
+  cursor: pointer;
+  transition: border-color 0.14s ease, filter 0.14s ease;
+}
+
+.ai-followup-pill:hover:not(:disabled) {
+  border-color: var(--brand);
+  filter: brightness(0.97);
+}
+
+.ai-followup-pill:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+
+@media print {
+  .workspace-mobile-bar,
+  .ai-workspace-controls,
+  .ai-explain-drawer,
+  .bank-switcher-bar {
+    display: none !important;
+  }
+}

@@ -1,9 +1,9 @@
 import type { Page } from '@playwright/test';
 
-interface TestProfile { user_id: string; email: string | null; phone: string | null; nickname: string }
-interface TestAccount extends TestProfile { password: string; verified: boolean }
+export interface TestProfile { user_id: string; email: string | null; phone: string | null; nickname: string }
+export interface TestAccount extends TestProfile { password: string; verified: boolean }
 
-interface CloudBankEntry {
+export interface CloudBankEntry {
   user_id: string;
   bank_id: string;
   name: string;
@@ -16,15 +16,20 @@ interface CloudBankEntry {
   deleted_at: string | null;
 }
 
-interface CloudProgressEntry {
+export interface CloudProgressEntry {
   user_id: string;
   bank_id: string;
-  store: { records: Record<string, unknown>; fav: Record<string, boolean>; mastery: Record<string, number> };
+  store: {
+    records: Record<string, unknown>;
+    fav: Record<string, boolean>;
+    mastery: Record<string, number>;
+    aiExplanations?: Record<string, { content: string; updatedAt: number; model?: string }>;
+  };
   revision: number;
   reset_at: string | null;
 }
 
-interface CloudApiEntry {
+export interface CloudApiEntry {
   provider: string;
   baseUrl: string;
   model: string;
@@ -49,6 +54,18 @@ export async function installAuthGateway(page: Page) {
   const imports: Record<string, unknown>[] = [];
   const apiSaveCalls: Array<{ userId: string; config: Record<string, unknown> }> = [];
   const apiClearCalls: string[] = [];
+  const saveBankCalls: Array<{
+    bankId: string;
+    revision: number;
+    updatedAt: number;
+    payload: CloudBankEntry;
+  }> = [];
+  const saveProgressCalls: Array<{
+    bankId: string;
+    revision: number;
+    reset: boolean;
+    store: CloudProgressEntry['store'];
+  }> = [];
   let acceptImports = true;
   let acceptApiSaves = true;
   let nextUser = 1;
@@ -279,6 +296,12 @@ export async function installAuthGateway(page: Page) {
             deleted_at: null,
           };
           map.set(pBank.id, created);
+          saveBankCalls.push({
+            bankId: created.bank_id,
+            revision: created.revision,
+            updatedAt: created.updated_at_ms,
+            payload: structuredClone(created),
+          });
           const { deleted_at: _deleted, user_id: _uid, ...row } = created;
           return respond(row);
         }
@@ -296,6 +319,12 @@ export async function installAuthGateway(page: Page) {
           revision: existing.revision + 1,
         };
         map.set(pBank.id, updated);
+        saveBankCalls.push({
+          bankId: updated.bank_id,
+          revision: updated.revision,
+          updatedAt: updated.updated_at_ms,
+          payload: structuredClone(updated),
+        });
         const { deleted_at: _deleted, user_id: _uid, ...row } = updated;
         return respond(row);
       }
@@ -342,6 +371,12 @@ export async function installAuthGateway(page: Page) {
             reset_at: pReset ? new Date().toISOString() : null,
           };
           map.set(bankId, created);
+          saveProgressCalls.push({
+            bankId,
+            revision: created.revision,
+            reset: pReset,
+            store: structuredClone(created.store),
+          });
           return respond({ store: created.store, revision: created.revision, reset_at: created.reset_at });
         }
 
@@ -355,6 +390,12 @@ export async function installAuthGateway(page: Page) {
           reset_at: pReset ? new Date().toISOString() : existing.reset_at,
         };
         map.set(bankId, updated);
+        saveProgressCalls.push({
+          bankId,
+          revision: updated.revision,
+          reset: pReset,
+          store: structuredClone(updated.store),
+        });
         return respond({ store: updated.store, revision: updated.revision, reset_at: updated.reset_at });
       }
       case '/functions/v1/user-data': {
@@ -433,6 +474,8 @@ export async function installAuthGateway(page: Page) {
     imports,
     apiSaveCalls,
     apiClearCalls,
+    saveBankCalls,
+    saveProgressCalls,
     allowImports: (allowed: boolean) => { acceptImports = allowed; },
     allowApiSaves: (allowed: boolean) => { acceptApiSaves = allowed; },
     getCloudBanks: (email: string) => {
@@ -465,6 +508,28 @@ export async function installAuthGateway(page: Page) {
       const updated: CloudProgressEntry = {
         ...prev,
         store: mutator(prev.store),
+        revision: prev.revision + 1,
+      };
+      map.set(bankId, updated);
+      return updated;
+    },
+    mutateCloudBankExternally: (
+      email: string,
+      bankId: string,
+      mutator: (prev: CloudBankEntry) => CloudBankEntry,
+    ) => {
+      const account = accounts.get(email.trim().toLowerCase());
+      if (!account) throw new Error(`Account ${email} not found`);
+      const map = userBanks(account.user_id);
+      const prev = map.get(bankId);
+      if (!prev || prev.deleted_at) {
+        throw new Error(`Cloud bank ${bankId} not found for ${email}`);
+      }
+      const mutated = mutator(structuredClone(prev));
+      const updated: CloudBankEntry = {
+        ...mutated,
+        user_id: account.user_id,
+        bank_id: bankId,
         revision: prev.revision + 1,
       };
       map.set(bankId, updated);

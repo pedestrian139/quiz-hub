@@ -49,6 +49,8 @@ export interface DraftQuestion {
   sourceRef: string;
   sourceNote?: string;
   preserveOrigin?: 'comprehensive_bank' | 'video_popup' | 'review_notes_synthesized';
+  aiInferredAnswer?: boolean;
+  washedByAi?: boolean;
   issues: ImportIssue[];
   included: boolean;
 }

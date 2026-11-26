@@ -23,6 +23,8 @@ export type SessionKind = 'mode' | 'wrong' | 'fav' | 'retry' | 'review';
 export interface SessionConfig {
   kind: SessionKind;
   title: string;
+  bankId?: string;
+  bankName?: string;
   opts: QuizFilterOptions;
 }
 

@@ -37,11 +37,11 @@ export function TopNav({ route, wrongCount, favCount, onNavClick }: TopNavProps)
       <div className="site-header__inner">
         <div className="brand">
           <span className="brand__logo" aria-hidden="true">
-            AI
+            QH
           </span>
           <span className="brand__text">
-            <span className="brand__title">人工智能导论</span>
-            <span className="brand__sub">期末复习 · 自助刷题</span>
+            <span className="brand__title">QuizHub</span>
+            <span className="brand__sub">AI 智能刷题工作台</span>
           </span>
         </div>
 

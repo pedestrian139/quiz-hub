@@ -2,14 +2,19 @@ import { useEffect, useState } from 'react';
 import { computeHomeStats } from '../../core/quizEngine';
 import { safeConfirm } from '../../pages/quizTypes';
 import type { QuestionType } from '../../types/quiz';
+import {
+  useOptionalBankLibraryContext,
+  type ImportModalTab,
+} from '../../utils/BankLibraryContext';
 import { exportBankSharePackage } from '../../utils/bankDb';
+import { appendDraftsToBank } from '../../utils/importers';
 import { BUILTIN_AI_BANK_ID, type BankRecord } from '../../utils/quizImportTypes';
-import { useBankLibrary } from '../../utils/useBankLibrary';
+import { useBankLibrary, type BankLibraryApi } from '../../utils/useBankLibrary';
 import { CustomBankPractice } from './CustomBankPractice';
 import { ImportWorkbench } from './ImportWorkbench';
 import './QuizImport.css';
 
-type PortalTab = 'import' | 'banks' | 'practice';
+type PortalTab = ImportModalTab;
 
 function downloadShareJson(bank: BankRecord): void {
   const payload = exportBankSharePackage(bank);
@@ -30,10 +35,22 @@ function downloadShareJson(bank: BankRecord): void {
   window.setTimeout(() => URL.revokeObjectURL(url), 1000);
 }
 
-export function QuizImportPortal() {
-  const library = useBankLibrary();
-  const [open, setOpen] = useState(false);
-  const [tab, setTab] = useState<PortalTab>('import');
+interface QuizImportPortalInnerProps {
+  library: BankLibraryApi;
+  open: boolean;
+  setOpen: (open: boolean) => void;
+  initialTab: PortalTab;
+  onOpenDefault?: () => void;
+}
+
+function QuizImportPortalInner({
+  library,
+  open,
+  setOpen,
+  initialTab,
+  onOpenDefault,
+}: QuizImportPortalInnerProps) {
+  const [tab, setTab] = useState<PortalTab>(initialTab);
   const [toast, setToast] = useState<{ msg: string; tone: 'info' | 'success' | 'error' } | null>(
     null,
   );
@@ -51,6 +68,12 @@ export function QuizImportPortal() {
   const notify = (msg: string, tone: 'info' | 'success' | 'error' = 'info') => {
     setToast({ msg, tone });
   };
+
+  useEffect(() => {
+    if (open) {
+      setTab(initialTab);
+    }
+  }, [open, initialTab]);
 
   useEffect(() => {
     if (library.migratedFromV1) {
@@ -132,7 +155,7 @@ export function QuizImportPortal() {
       <div className="qi-bar" role="region" aria-label="多题库离线导入扩展栏">
         <div className="qi-bar__inner">
           <div className="qi-bar__info">
-            <span className="qi-bar__badge">题库导入扩展</span>
+            <span className="qi-bar__badge">AI 洗题 &amp; 多题库中心</span>
             <span>
               已保存 {library.banks.length} 个题库
               {customBanks.length > 0 ? `（含 ${customBanks.length} 个自定义题库）` : ''}
@@ -145,11 +168,15 @@ export function QuizImportPortal() {
               data-testid="btn-open-quiz-import"
               className="qi-trigger-btn"
               onClick={() => {
-                setTab('import');
-                setOpen(true);
+                if (onOpenDefault) {
+                  onOpenDefault();
+                } else {
+                  setTab('import');
+                  setOpen(true);
+                }
               }}
             >
-              导入题库 / 题库管理
+              AI 洗题导入 / 题库管理
             </button>
           </div>
         </div>
@@ -166,14 +193,14 @@ export function QuizImportPortal() {
             data-testid="quiz-import-dialog"
             role="dialog"
             aria-modal="true"
-            aria-label="多题库管理与离线导入"
+            aria-label="多题库管理与 AI 智能洗题导入"
             className="qi-modal"
           >
             <div className="qi-modal__header">
               <div className="qi-modal__title-wrap">
-                <h2 className="qi-modal__title">多学科题库导入与管理中心</h2>
+                <h2 className="qi-modal__title">QuizHub 智能洗题与多题库管理中心</h2>
                 <span className="qi-modal__sub">
-                  纯前端离线解析 Excel / CSV / Word / TXT / Markdown / JSON，独立 IndexedDB 存储
+                  支持 AI 非结构化洗题、Excel / CSV / Word / TXT / Markdown / JSON 导入与云端同步
                 </span>
               </div>
               <button
@@ -195,7 +222,7 @@ export function QuizImportPortal() {
                 className={`qi-tab${tab === 'import' ? ' is-active' : ''}`}
                 onClick={() => setTab('import')}
               >
-                导入新题库
+                导入 / AI 洗题
               </button>
               <button
                 type="button"
@@ -233,14 +260,37 @@ export function QuizImportPortal() {
 
               {tab === 'import' && (
                 <ImportWorkbench
+                  existingBanks={library.banks}
                   notify={notify}
-                  onCommitBank={async (input) => {
-                    const created = await library.importNewBank(input, true);
-                    notify(
-                      `成功导入题库《${created.name}》（共 ${created.data.questions.length} 题）`,
-                      'success',
-                    );
-                    setTab('practice');
+                  onCommit={async (payload) => {
+                    if (payload.mode === 'new') {
+                      const created = await library.importNewBank(payload.input, true);
+                      await library.selectBank(created.id);
+                      notify(
+                        `成功导入题库《${created.name}》（共 ${created.data.questions.length} 题）`,
+                        'success',
+                      );
+                    } else {
+                      const target = library.banks.find(
+                        (b) => b.id === payload.targetBankId && !b.builtin,
+                      );
+                      if (!target) {
+                        throw new Error('未找到目标自定义题库，请重新选择');
+                      }
+                      const merged = appendDraftsToBank(target, payload.drafts, {
+                        sourceFormat: payload.sourceFormat,
+                      });
+                      const saved = await library.saveBank(merged);
+                      await library.selectBank(saved.id);
+                      notify(
+                        `已向题库《${saved.name}》追加题目（当前共 ${saved.data.questions.length} 题）`,
+                        'success',
+                      );
+                    }
+                    setOpen(false);
+                    if (typeof window !== 'undefined' && window.location.hash !== '#/quiz') {
+                      window.location.hash = '#/quiz';
+                    }
                   }}
                 />
               )}
@@ -424,7 +474,7 @@ export function QuizImportPortal() {
                                 data-testid={`btn-switch-bank-${bank.id}`}
                                 className="qi-btn qi-btn--sm qi-btn--primary"
                                 onClick={async () => {
-                                  await library.switchBank(bank.id);
+                                  await library.selectBank(bank.id);
                                   setOpen(false);
                                 }}
                               >
@@ -437,7 +487,7 @@ export function QuizImportPortal() {
                                 className="qi-btn qi-btn--sm qi-btn--primary"
                                 disabled={bank.data.questions.length === 0}
                                 onClick={async () => {
-                                  await library.switchBank(bank.id);
+                                  await library.selectBank(bank.id);
                                   setTab('practice');
                                 }}
                               >
@@ -536,4 +586,33 @@ export function QuizImportPortal() {
       )}
     </>
   );
+}
+
+function QuizImportPortalStandalone() {
+  const library = useBankLibrary();
+  const [open, setOpen] = useState(false);
+  return (
+    <QuizImportPortalInner
+      library={library}
+      open={open}
+      setOpen={setOpen}
+      initialTab="import"
+    />
+  );
+}
+
+export function QuizImportPortal() {
+  const ctx = useOptionalBankLibraryContext();
+  if (ctx) {
+    return (
+      <QuizImportPortalInner
+        library={ctx}
+        open={ctx.importModalOpen}
+        setOpen={ctx.setImportModalOpen}
+        initialTab={ctx.importInitialTab}
+        onOpenDefault={() => ctx.openImportModal('import')}
+      />
+    );
+  }
+  return <QuizImportPortalStandalone />;
 }

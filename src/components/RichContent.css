@@ -1,0 +1,189 @@
+.rich-content {
+  color: var(--ink-2);
+  font-size: 0.95rem;
+  line-height: 1.7;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+}
+
+.rich-content--inline {
+  display: inline;
+  line-height: inherit;
+}
+
+.rich-content--block > :first-child {
+  margin-top: 0;
+}
+
+.rich-content--block > :last-child {
+  margin-bottom: 0;
+}
+
+.rich-content p {
+  margin: 0.5em 0;
+}
+
+.rich-content h1,
+.rich-content h2,
+.rich-content h3,
+.rich-content h4,
+.rich-content h5,
+.rich-content h6 {
+  color: var(--ink);
+  font-weight: 700;
+  line-height: 1.4;
+  margin: 1em 0 0.45em;
+}
+
+.rich-content h1 {
+  font-size: 1.25em;
+}
+
+.rich-content h2 {
+  font-size: 1.15em;
+}
+
+.rich-content h3 {
+  font-size: 1.05em;
+}
+
+.rich-content h4,
+.rich-content h5,
+.rich-content h6 {
+  font-size: 0.98em;
+}
+
+.rich-content ul,
+.rich-content ol {
+  margin: 0.5em 0;
+  padding-left: 1.45em;
+}
+
+.rich-content li + li {
+  margin-top: 0.25em;
+}
+
+.rich-content strong {
+  color: var(--ink);
+  font-weight: 700;
+}
+
+.rich-content a {
+  color: var(--brand);
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+
+.rich-content a:hover {
+  color: var(--brand-hover, var(--brand));
+}
+
+.rich-content code {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace;
+  font-size: 0.88em;
+  background: var(--surface-muted);
+  color: var(--ink);
+  border: 1px solid var(--line);
+  border-radius: 5px;
+  padding: 0.1em 0.38em;
+}
+
+.rich-content pre {
+  margin: 0.7em 0;
+  padding: 0.85em 1em;
+  background: var(--surface-subtle);
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  overflow-x: auto;
+  line-height: 1.55;
+}
+
+.rich-content pre code {
+  background: transparent;
+  border: none;
+  padding: 0;
+  font-size: 0.86em;
+}
+
+.rich-content blockquote {
+  margin: 0.7em 0;
+  padding: 0.55em 0.9em;
+  background: var(--callout-bg);
+  color: var(--callout-ink);
+  border-left: 3px solid var(--brand);
+  border-radius: 0 8px 8px 0;
+}
+
+.rich-content blockquote > :first-child {
+  margin-top: 0;
+}
+
+.rich-content blockquote > :last-child {
+  margin-bottom: 0;
+}
+
+.rich-content table {
+  width: 100%;
+  border-collapse: collapse;
+  margin: 0.75em 0;
+  font-size: 0.9em;
+  display: block;
+  overflow-x: auto;
+}
+
+.rich-content th,
+.rich-content td {
+  border: 1px solid var(--line);
+  padding: 0.45em 0.7em;
+  text-align: left;
+  vertical-align: top;
+}
+
+.rich-content th {
+  background: var(--table-head);
+  color: var(--ink);
+  font-weight: 600;
+}
+
+.rich-content tbody tr:nth-child(even) td {
+  background: var(--table-stripe);
+}
+
+.rich-content hr {
+  border: none;
+  border-top: 1px solid var(--line);
+  margin: 0.9em 0;
+}
+
+.rich-content .katex {
+  font-size: 1.04em;
+}
+
+.rich-content .katex-display {
+  margin: 0.75em 0;
+  padding: 0.35em 0;
+  overflow-x: auto;
+  overflow-y: hidden;
+  max-width: 100%;
+}
+
+@media print {
+  .rich-content {
+    color: #1f2937;
+  }
+
+  .rich-content pre,
+  .rich-content code {
+    background: #f5f5f5;
+    border-color: #cccccc;
+  }
+
+  .rich-content blockquote {
+    background: #f3f6fc;
+    color: #111827;
+  }
+
+  .rich-content table {
+    display: table;
+  }
+}

@@ -1,3 +1,4 @@
+import type { Page } from '@playwright/test';
 import {
   expect,
   onlyDesktop,
@@ -9,6 +10,13 @@ import {
   assertHandbookTablesContained,
   assertNoHorizontalOverflow,
 } from './helpers/audit.ts';
+import {
+  FIXTURE_BANK,
+  FIXTURE_BANK_ID,
+  QUIZ_DB_NAME,
+  QUIZ_DB_VERSION,
+  seedFixtureBank,
+} from './helpers/fixtureBank.ts';
 import {
   answerCurrentQuestion,
   btnExportJson,
@@ -54,28 +62,63 @@ import {
   getCorrectChoiceFor,
   importJsonFile,
   loadNotesCatalog,
+  makeEmptyStore,
   makeSeededStore,
   pickQuestions,
-  readPersistedStore,
-  seedStoreAndReload,
+  type UserStore,
 } from './helpers/storage.ts';
+
+async function readIdbBankProgress(page: Page, bankId: string): Promise<UserStore | null> {
+  return page.evaluate(
+    async ({ dbName, dbVersion, targetBankId }) => {
+      return new Promise<UserStore | null>((resolve, reject) => {
+        const req = window.indexedDB.open(dbName, dbVersion);
+        req.onerror = () => reject(req.error ?? new Error('Failed to open quizhub-v2 IDB'));
+        req.onsuccess = () => {
+          const db = req.result;
+          if (!db.objectStoreNames.contains('progress')) {
+            db.close();
+            resolve(null);
+            return;
+          }
+          const tx = db.transaction('progress', 'readonly');
+          const getReq = tx.objectStore('progress').get(targetBankId);
+          getReq.onerror = () => {
+            db.close();
+            reject(getReq.error ?? new Error('Failed to read progress store'));
+          };
+          getReq.onsuccess = () => {
+            const record = getReq.result as { store?: UserStore } | undefined;
+            db.close();
+            resolve(record?.store ?? null);
+          };
+        };
+      });
+    },
+    { dbName: QUIZ_DB_NAME, dbVersion: QUIZ_DB_VERSION, targetBankId: bankId },
+  );
+}
 
 test.describe('Tier 4: Real-World Student Journeys (T4-001..T4-012)', () => {
   test('T4-001 First-Time Onboarding: Hub -> Handbook search -> Chapter Practice -> Settlement', async ({
     page,
   }, testInfo) => {
     onlyDesktop(testInfo);
-    const stemMap = buildQuestionStemMap();
-    await gotoRoute(page, '#/');
+    const notes = loadNotesCatalog();
+    const targetCh = notes.chapters[0]!;
+    const keyword = targetCh.sections[0]?.terms?.[0]?.term || targetCh.short;
+    const stemMap = buildQuestionStemMap(FIXTURE_BANK);
+
+    await seedFixtureBank(page, FIXTURE_BANK, makeEmptyStore(), { targetHashRoute: '#/' });
     await assertFullLayoutAudit(page);
     await hubCardNotes(page).click();
 
     await expect(page).toHaveURL(/#\/notes/);
-    await notesSearch(page).fill('启发式搜索');
-    await expect(page.getByText(/启发式/).first()).toBeVisible();
+    await notesSearch(page).fill(keyword);
+    await expect(page.getByText(keyword).first()).toBeVisible();
     await notesSearch(page).fill('');
 
-    await btnQuizChapter(page, 3).click();
+    await btnQuizChapter(page, targetCh.id).click();
     await selectQuizFilters(page, { count: 10 });
     await modeCard(page, 'all').click();
 
@@ -101,10 +144,10 @@ test.describe('Tier 4: Real-World Student Journeys (T4-001..T4-012)', () => {
     page,
   }, testInfo) => {
     onlyMobile(testInfo);
-    const stemMap = buildQuestionStemMap();
-    await gotoRoute(page, '#/quiz');
+    const stemMap = buildQuestionStemMap(FIXTURE_BANK);
+    await seedFixtureBank(page, FIXTURE_BANK, makeEmptyStore(), { targetHashRoute: '#/quiz' });
     await assertFullLayoutAudit(page);
-    await selectQuizFilters(page, { chapters: [1, 2, 3], count: 10 });
+    await selectQuizFilters(page, { chapters: [1, 2, 3, 4, 5], count: 10 });
     await modeCard(page, 'choice').click();
 
     for (let i = 0; i < 10; i++) {
@@ -125,10 +168,10 @@ test.describe('Tier 4: Real-World Student Journeys (T4-001..T4-012)', () => {
   }, testInfo) => {
     onlyDesktop(testInfo);
     const notes = loadNotesCatalog();
-    const shortIdxApp = notes.appendices.find((a) => a.type === 'short_index');
-    await gotoRoute(page, '#/notes');
-    if (shortIdxApp) {
-      await expect(page.getByText(shortIdxApp.title).first()).toBeVisible();
+    const firstAppendix = notes.appendices[0];
+    await seedFixtureBank(page, FIXTURE_BANK, makeEmptyStore(), { targetHashRoute: '#/notes' });
+    if (firstAppendix) {
+      await expect(page.getByText(firstAppendix.title).first()).toBeVisible();
     }
 
     await navLink(page, 'quiz').click();
@@ -162,12 +205,17 @@ test.describe('Tier 4: Real-World Student Journeys (T4-001..T4-012)', () => {
     page,
   }, testInfo) => {
     onlyMobile(testInfo);
-    const stemMap = buildQuestionStemMap();
-    await gotoRoute(page, '#/notes');
-    await notesToc(page).getByText(/易混|对照|第\s*2\s*章/).first().click();
+    const notes = loadNotesCatalog();
+    const targetCh = notes.chapters[notes.chapters.length - 1] ?? notes.chapters[0]!;
+    const stemMap = buildQuestionStemMap(FIXTURE_BANK);
+    await seedFixtureBank(page, FIXTURE_BANK, makeEmptyStore(), { targetHashRoute: '#/notes' });
+    await notesToc(page)
+      .getByText(new RegExp(`第\\s*${targetCh.id}\\s*章`))
+      .first()
+      .click();
     await assertHandbookTablesContained(page);
 
-    await btnQuizChapter(page, 2).click();
+    await btnQuizChapter(page, targetCh.id).click();
     await selectQuizFilters(page, { count: 10 });
     await modeCard(page, 'tf').click();
 
@@ -196,14 +244,14 @@ test.describe('Tier 4: Real-World Student Journeys (T4-001..T4-012)', () => {
     page,
   }, testInfo) => {
     onlyDesktop(testInfo);
-    const stemMap = buildQuestionStemMap();
-    const vidMultis = pickQuestions({ origin: 'video_popup', type: 'multi' });
-    await gotoRoute(page, '#/quiz');
+    const stemMap = buildQuestionStemMap(FIXTURE_BANK);
+    const vidMultis = pickQuestions({ origin: 'video_popup', type: 'multi' }, FIXTURE_BANK);
+    await seedFixtureBank(page, FIXTURE_BANK, makeEmptyStore(), { targetHashRoute: '#/quiz' });
     await selectQuizFilters(page, { origin: 'video_popup', count: 10 });
     const mode = vidMultis.length > 0 ? 'multi' : 'all';
     await modeCard(page, mode).click();
 
-    await expect(qSourceTag(page)).toContainText(/视频/);
+    await expect(qSourceTag(page)).toContainText(/AI 洗题|精选/);
     await answerCurrentQuestion(page, stemMap, vidMultis.length > 0 ? 'partial' : 'wrong');
     await expect(quizFeedback(page)).toContainText('回答错误');
     await quizExit(page).click();
@@ -212,13 +260,18 @@ test.describe('Tier 4: Real-World Student Journeys (T4-001..T4-012)', () => {
 
   test('T4-006 Wrong Book Cleanup Marathon', async ({ page }, testInfo) => {
     onlyDesktop(testInfo);
-    const stemMap = buildQuestionStemMap();
-    const ch1 = pickQuestions({ chapter: 1, type: 'tf', limit: 2 });
-    const ch4 = pickQuestions({ chapter: 4, type: 'tf', limit: 2 });
-    const ch7 = pickQuestions({ chapter: 7, type: 'tf', limit: 1 });
+    const stemMap = buildQuestionStemMap(FIXTURE_BANK);
+    const ch1 = pickQuestions({ chapter: 1, type: 'tf', limit: 2 }, FIXTURE_BANK);
+    const ch4 = pickQuestions({ chapter: 4, type: 'tf', limit: 2 }, FIXTURE_BANK);
+    const ch7 = pickQuestions({ chapter: 7, type: 'tf', limit: 1 }, FIXTURE_BANK);
     const wrongIds = [...ch1, ...ch4, ...ch7].map((q) => q.id);
 
-    await seedStoreAndReload(page, makeSeededStore({ wrongIds }), '#/wrong');
+    await seedFixtureBank(
+      page,
+      FIXTURE_BANK,
+      makeSeededStore({ wrongIds }, FIXTURE_BANK),
+      { targetHashRoute: '#/wrong' },
+    );
     await expect(listItems(page)).toHaveCount(5);
 
     await listItemToggle(listItems(page).nth(0)).click();
@@ -253,15 +306,18 @@ test.describe('Tier 4: Real-World Student Journeys (T4-001..T4-012)', () => {
     browser,
   }, testInfo) => {
     onlyDesktop(testInfo);
-    const choices = pickQuestions({ type: 'choice', limit: 4 });
-    const shorts = pickQuestions({ type: 'short', limit: 2 });
-    const seed = makeSeededStore({
-      correctIds: [choices[0]!.id, choices[1]!.id],
-      wrongIds: [choices[2]!.id, choices[3]!.id],
-      favIds: [choices[0]!.id, shorts[0]!.id],
-      mastery: { [shorts[0]!.id]: 2, [shorts[1]!.id]: 1 },
-    });
-    await seedStoreAndReload(page, seed, '#/quiz');
+    const choices = pickQuestions({ type: 'choice', limit: 4 }, FIXTURE_BANK);
+    const shorts = pickQuestions({ type: 'short', limit: 2 }, FIXTURE_BANK);
+    const seed = makeSeededStore(
+      {
+        correctIds: [choices[0]!.id, choices[1]!.id],
+        wrongIds: [choices[2]!.id, choices[3]!.id],
+        favIds: [choices[0]!.id, shorts[0]!.id],
+        mastery: { [shorts[0]!.id]: 2, [shorts[1]!.id]: 1 },
+      },
+      FIXTURE_BANK,
+    );
+    await seedFixtureBank(page, FIXTURE_BANK, seed, { targetHashRoute: '#/quiz' });
     const exported = await captureJsonExport(page, () => btnExportJson(page).click());
 
     const mobileCtx = await browser.newContext({
@@ -271,7 +327,7 @@ test.describe('Tier 4: Real-World Student Journeys (T4-001..T4-012)', () => {
     });
     try {
       const mPage = await mobileCtx.newPage();
-      await mPage.goto(page.url(), { waitUntil: 'domcontentloaded' });
+      await seedFixtureBank(mPage, FIXTURE_BANK, makeEmptyStore(), { targetHashRoute: '#/quiz' });
       await importJsonFile(inputImportFile(mPage), exported.raw, exported.filename);
       await expect(statCard(mPage, 'done')).toContainText('6');
       await expect(statCard(mPage, 'wrong')).toContainText('3');
@@ -284,8 +340,8 @@ test.describe('Tier 4: Real-World Student Journeys (T4-001..T4-012)', () => {
 
   test('T4-008 Keyboard-Only Power User Session', async ({ page }, testInfo) => {
     onlyDesktop(testInfo);
-    const stemMap = buildQuestionStemMap();
-    await gotoRoute(page, '#/quiz');
+    const stemMap = buildQuestionStemMap(FIXTURE_BANK);
+    await seedFixtureBank(page, FIXTURE_BANK, makeEmptyStore(), { targetHashRoute: '#/quiz' });
     await selectQuizFilters(page, { count: 10 });
     await modeCard(page, 'choice').click();
 
@@ -310,7 +366,7 @@ test.describe('Tier 4: Real-World Student Journeys (T4-001..T4-012)', () => {
     page,
   }, testInfo) => {
     onlyMobile(testInfo);
-    await gotoRoute(page, '#/quiz');
+    await seedFixtureBank(page, FIXTURE_BANK, makeEmptyStore(), { targetHashRoute: '#/quiz' });
     await selectQuizFilters(page, { count: 10 });
     await modeCard(page, 'all').click();
 
@@ -338,8 +394,8 @@ test.describe('Tier 4: Real-World Student Journeys (T4-001..T4-012)', () => {
     page,
   }, testInfo) => {
     onlyDesktop(testInfo);
-    const stemMap = buildQuestionStemMap();
-    await gotoRoute(page, '#/quiz');
+    const stemMap = buildQuestionStemMap(FIXTURE_BANK);
+    await seedFixtureBank(page, FIXTURE_BANK, makeEmptyStore(), { targetHashRoute: '#/quiz' });
     await selectQuizFilters(page, { count: 20 });
     await modeCard(page, 'tf').click();
 
@@ -355,21 +411,22 @@ test.describe('Tier 4: Real-World Student Journeys (T4-001..T4-012)', () => {
     await gotoRoute(page, '#/quiz');
     await expect(statCard(page, 'done')).toContainText('5');
     await expect(statCard(page, 'wrong')).toContainText('1');
-    const persisted = await readPersistedStore(page);
+    const persisted = await readIdbBankProgress(page, FIXTURE_BANK_ID);
     expect(Object.keys(persisted?.records ?? {})).toHaveLength(5);
   });
 
   test('T4-011 Handbook Print-to-PDF Preparation', async ({ page }, testInfo) => {
     onlyDesktop(testInfo);
+    const notes = loadNotesCatalog();
     await gotoRoute(page, '#/notes');
     await notesSearch(page).fill('');
     await page.emulateMedia({ media: 'print' });
 
     await expect(navLink(page, 'hub')).toBeHidden();
     await expect(notesSearch(page)).toBeHidden();
-    await expect(btnQuizChapter(page, 1)).toBeHidden();
-    for (let ch = 1; ch <= 9; ch++) {
-      await expect(notesChapter(page, ch)).toBeVisible();
+    for (const ch of notes.chapters) {
+      await expect(btnQuizChapter(page, ch.id)).toBeHidden();
+      await expect(notesChapter(page, ch.id)).toBeVisible();
     }
   });
 

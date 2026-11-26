@@ -6,6 +6,10 @@ import {
 } from './helpers/fixtures.ts';
 import { assertNoHorizontalOverflow } from './helpers/audit.ts';
 import {
+  FIXTURE_BANK,
+  seedFixtureBank,
+} from './helpers/fixtureBank.ts';
+import {
   answerCurrentQuestion,
   btnNext,
   btnPrev,
@@ -16,7 +20,6 @@ import {
   btnStar,
   btnSubmitMulti,
   ensureAnswerSheetOpen,
-  gotoRoute,
   modeCard,
   qChapterTag,
   qRefAnswer,
@@ -44,7 +47,7 @@ import {
   buildQuestionStemMap,
   findQuestionByStem,
   getCorrectChoiceFor,
-  loadBankCatalog,
+  makeEmptyStore,
   pickQuestion,
 } from './helpers/storage.ts';
 
@@ -53,7 +56,7 @@ test.describe('Tier 1: Quiz Session, Modes, Answer Sheet & Result (UF07-UF15)', 
     page,
   }, testInfo) => {
     onlyDesktop(testInfo);
-    await gotoRoute(page, '#/quiz');
+    await seedFixtureBank(page, FIXTURE_BANK, makeEmptyStore(), { targetHashRoute: '#/quiz' });
     await selectQuizFilters(page, { count: 10 });
     await modeCard(page, 'all').click();
 
@@ -69,7 +72,7 @@ test.describe('Tier 1: Quiz Session, Modes, Answer Sheet & Result (UF07-UF15)', 
     page,
   }, testInfo) => {
     onlyDesktop(testInfo);
-    await gotoRoute(page, '#/quiz');
+    await seedFixtureBank(page, FIXTURE_BANK, makeEmptyStore(), { targetHashRoute: '#/quiz' });
     await selectQuizFilters(page, { count: 10 });
     await modeCard(page, 'all').click();
 
@@ -84,7 +87,7 @@ test.describe('Tier 1: Quiz Session, Modes, Answer Sheet & Result (UF07-UF15)', 
     page,
   }, testInfo) => {
     onlyDesktop(testInfo);
-    await gotoRoute(page, '#/quiz');
+    await seedFixtureBank(page, FIXTURE_BANK, makeEmptyStore(), { targetHashRoute: '#/quiz' });
     await selectQuizFilters(page, { count: 10 });
     await modeCard(page, 'all').click();
     await btnNext(page).click();
@@ -97,8 +100,8 @@ test.describe('Tier 1: Quiz Session, Modes, Answer Sheet & Result (UF07-UF15)', 
     page,
   }, testInfo) => {
     onlyDesktop(testInfo);
-    const stemMap = buildQuestionStemMap();
-    await gotoRoute(page, '#/quiz');
+    const stemMap = buildQuestionStemMap(FIXTURE_BANK);
+    await seedFixtureBank(page, FIXTURE_BANK, makeEmptyStore(), { targetHashRoute: '#/quiz' });
     await selectQuizFilters(page, { count: 10 });
     await modeCard(page, 'choice').click();
     await answerCurrentQuestion(page, stemMap, 'correct');
@@ -110,9 +113,9 @@ test.describe('Tier 1: Quiz Session, Modes, Answer Sheet & Result (UF07-UF15)', 
     page,
   }, testInfo) => {
     onlyDesktop(testInfo);
-    const stemMap = buildQuestionStemMap();
-    const q = pickQuestion({ type: 'tf' });
-    await gotoRoute(page, '#/quiz');
+    const stemMap = buildQuestionStemMap(FIXTURE_BANK);
+    const q = pickQuestion({ type: 'tf' }, FIXTURE_BANK);
+    await seedFixtureBank(page, FIXTURE_BANK, makeEmptyStore(), { targetHashRoute: '#/quiz' });
     await selectQuizFilters(page, { chapters: [q.chapter], count: 10, order: 'seq' });
     await modeCard(page, 'tf').click();
 
@@ -138,7 +141,7 @@ test.describe('Tier 1: Quiz Session, Modes, Answer Sheet & Result (UF07-UF15)', 
     page,
   }, testInfo) => {
     onlyDesktop(testInfo);
-    await gotoRoute(page, '#/quiz');
+    await seedFixtureBank(page, FIXTURE_BANK, makeEmptyStore(), { targetHashRoute: '#/quiz' });
     await selectQuizFilters(page, { count: 10 });
     await modeCard(page, 'all').click();
     await expect(qChapterTag(page)).toBeVisible();
@@ -151,7 +154,7 @@ test.describe('Tier 1: Quiz Session, Modes, Answer Sheet & Result (UF07-UF15)', 
     page,
   }, testInfo) => {
     onlyDesktop(testInfo);
-    await gotoRoute(page, '#/quiz');
+    await seedFixtureBank(page, FIXTURE_BANK, makeEmptyStore(), { targetHashRoute: '#/quiz' });
     await selectQuizFilters(page, { count: 10 });
     await modeCard(page, 'all').click();
     await expect(btnStar(page)).toHaveAttribute('aria-pressed', 'false');
@@ -163,7 +166,7 @@ test.describe('Tier 1: Quiz Session, Modes, Answer Sheet & Result (UF07-UF15)', 
     page,
   }, testInfo) => {
     onlyDesktop(testInfo);
-    await gotoRoute(page, '#/quiz');
+    await seedFixtureBank(page, FIXTURE_BANK, makeEmptyStore(), { targetHashRoute: '#/quiz' });
     await selectQuizFilters(page, { count: 10 });
     await modeCard(page, 'all').click();
     await btnStar(page).click();
@@ -176,7 +179,7 @@ test.describe('Tier 1: Quiz Session, Modes, Answer Sheet & Result (UF07-UF15)', 
     page,
   }, testInfo) => {
     onlyDesktop(testInfo);
-    await gotoRoute(page, '#/quiz');
+    await seedFixtureBank(page, FIXTURE_BANK, makeEmptyStore(), { targetHashRoute: '#/quiz' });
     await selectQuizFilters(page, { count: 10 });
     await modeCard(page, 'all').click();
     await btnStar(page).click();
@@ -191,10 +194,9 @@ test.describe('Tier 1: Quiz Session, Modes, Answer Sheet & Result (UF07-UF15)', 
     page,
   }, testInfo) => {
     onlyDesktop(testInfo);
-    const bank = loadBankCatalog();
-    const ch2Vid = pickQuestion({ chapter: 2, origin: 'video_popup' });
-    const ch2Short = bank.chapters.find((c) => c.id === 2)!.short;
-    await gotoRoute(page, '#/quiz');
+    const ch2Vid = pickQuestion({ chapter: 2, origin: 'video_popup' }, FIXTURE_BANK);
+    const ch2Short = FIXTURE_BANK.chapters.find((c) => c.id === 2)!.short;
+    await seedFixtureBank(page, FIXTURE_BANK, makeEmptyStore(), { targetHashRoute: '#/quiz' });
     await selectQuizFilters(page, {
       chapters: [ch2Vid.chapter],
       origin: 'video_popup',
@@ -204,16 +206,18 @@ test.describe('Tier 1: Quiz Session, Modes, Answer Sheet & Result (UF07-UF15)', 
     await expect(qChapterTag(page)).toContainText(
       new RegExp(`第\\s*2\\s*章|${ch2Short}`),
     );
-    await expect(qSourceTag(page)).toContainText(/视频/);
+    await expect(qSourceTag(page)).toContainText(/AI 洗题|精选/);
   });
 
   test('T1-041 [UF09] Single-choice question renders 4 labeled options A-D', async ({
     page,
   }, testInfo) => {
     onlyDesktop(testInfo);
-    const question = loadBankCatalog().questions.find((item) => item.type === 'choice' && item.options?.length === 4);
+    const question = FIXTURE_BANK.questions.find(
+      (item) => item.type === 'choice' && item.options?.length === 4,
+    );
     if (!question) throw new Error('Expected a choice question with four options');
-    await gotoRoute(page, '#/quiz');
+    await seedFixtureBank(page, FIXTURE_BANK, makeEmptyStore(), { targetHashRoute: '#/quiz' });
     await page.getByTestId('filter-search').fill(question.stem);
     await modeCard(page, 'choice').click();
     await expect(qStem(page)).toContainText(question.stem);
@@ -226,8 +230,8 @@ test.describe('Tier 1: Quiz Session, Modes, Answer Sheet & Result (UF07-UF15)', 
     page,
   }, testInfo) => {
     onlyDesktop(testInfo);
-    const stemMap = buildQuestionStemMap();
-    await gotoRoute(page, '#/quiz');
+    const stemMap = buildQuestionStemMap(FIXTURE_BANK);
+    await seedFixtureBank(page, FIXTURE_BANK, makeEmptyStore(), { targetHashRoute: '#/quiz' });
     await selectQuizFilters(page, { count: 10 });
     await modeCard(page, 'choice').click();
     await answerCurrentQuestion(page, stemMap, 'correct');
@@ -241,8 +245,8 @@ test.describe('Tier 1: Quiz Session, Modes, Answer Sheet & Result (UF07-UF15)', 
     page,
   }, testInfo) => {
     onlyDesktop(testInfo);
-    const stemMap = buildQuestionStemMap();
-    await gotoRoute(page, '#/quiz');
+    const stemMap = buildQuestionStemMap(FIXTURE_BANK);
+    await seedFixtureBank(page, FIXTURE_BANK, makeEmptyStore(), { targetHashRoute: '#/quiz' });
     await selectQuizFilters(page, { count: 10 });
     await modeCard(page, 'choice').click();
     await answerCurrentQuestion(page, stemMap, 'wrong');
@@ -256,7 +260,7 @@ test.describe('Tier 1: Quiz Session, Modes, Answer Sheet & Result (UF07-UF15)', 
     page,
   }, testInfo) => {
     onlyDesktop(testInfo);
-    await gotoRoute(page, '#/quiz');
+    await seedFixtureBank(page, FIXTURE_BANK, makeEmptyStore(), { targetHashRoute: '#/quiz' });
     await selectQuizFilters(page, { count: 10 });
     await modeCard(page, 'choice').click();
     await page.keyboard.press('1');
@@ -268,8 +272,8 @@ test.describe('Tier 1: Quiz Session, Modes, Answer Sheet & Result (UF07-UF15)', 
     page,
   }, testInfo) => {
     onlyDesktop(testInfo);
-    const stemMap = buildQuestionStemMap();
-    await gotoRoute(page, '#/quiz');
+    const stemMap = buildQuestionStemMap(FIXTURE_BANK);
+    await seedFixtureBank(page, FIXTURE_BANK, makeEmptyStore(), { targetHashRoute: '#/quiz' });
     await selectQuizFilters(page, { count: 10 });
     await modeCard(page, 'choice').click();
     await answerCurrentQuestion(page, stemMap, 'wrong');
@@ -282,7 +286,7 @@ test.describe('Tier 1: Quiz Session, Modes, Answer Sheet & Result (UF07-UF15)', 
     page,
   }, testInfo) => {
     onlyDesktop(testInfo);
-    await gotoRoute(page, '#/quiz');
+    await seedFixtureBank(page, FIXTURE_BANK, makeEmptyStore(), { targetHashRoute: '#/quiz' });
     await selectQuizFilters(page, { count: 10 });
     await modeCard(page, 'multi').click();
     await expect(quizOption(page, 0)).toHaveAttribute('aria-pressed', 'false');
@@ -293,7 +297,7 @@ test.describe('Tier 1: Quiz Session, Modes, Answer Sheet & Result (UF07-UF15)', 
     page,
   }, testInfo) => {
     onlyDesktop(testInfo);
-    await gotoRoute(page, '#/quiz');
+    await seedFixtureBank(page, FIXTURE_BANK, makeEmptyStore(), { targetHashRoute: '#/quiz' });
     await selectQuizFilters(page, { count: 10 });
     await modeCard(page, 'multi').click();
     await quizOption(page, 0).click();
@@ -308,8 +312,8 @@ test.describe('Tier 1: Quiz Session, Modes, Answer Sheet & Result (UF07-UF15)', 
     page,
   }, testInfo) => {
     onlyDesktop(testInfo);
-    const stemMap = buildQuestionStemMap();
-    await gotoRoute(page, '#/quiz');
+    const stemMap = buildQuestionStemMap(FIXTURE_BANK);
+    await seedFixtureBank(page, FIXTURE_BANK, makeEmptyStore(), { targetHashRoute: '#/quiz' });
     await selectQuizFilters(page, { count: 10 });
     await modeCard(page, 'multi').click();
     await answerCurrentQuestion(page, stemMap, 'correct');
@@ -323,8 +327,8 @@ test.describe('Tier 1: Quiz Session, Modes, Answer Sheet & Result (UF07-UF15)', 
     page,
   }, testInfo) => {
     onlyDesktop(testInfo);
-    const stemMap = buildQuestionStemMap();
-    await gotoRoute(page, '#/quiz');
+    const stemMap = buildQuestionStemMap(FIXTURE_BANK);
+    await seedFixtureBank(page, FIXTURE_BANK, makeEmptyStore(), { targetHashRoute: '#/quiz' });
     await selectQuizFilters(page, { count: 10 });
     await modeCard(page, 'multi').click();
     await answerCurrentQuestion(page, stemMap, 'wrong');
@@ -338,8 +342,8 @@ test.describe('Tier 1: Quiz Session, Modes, Answer Sheet & Result (UF07-UF15)', 
     page,
   }, testInfo) => {
     onlyDesktop(testInfo);
-    const stemMap = buildQuestionStemMap();
-    await gotoRoute(page, '#/quiz');
+    const stemMap = buildQuestionStemMap(FIXTURE_BANK);
+    await seedFixtureBank(page, FIXTURE_BANK, makeEmptyStore(), { targetHashRoute: '#/quiz' });
     await selectQuizFilters(page, { count: 10, order: 'seq' });
     await modeCard(page, 'multi').click();
 
@@ -356,8 +360,8 @@ test.describe('Tier 1: Quiz Session, Modes, Answer Sheet & Result (UF07-UF15)', 
     page,
   }, testInfo) => {
     onlyDesktop(testInfo);
-    const stemMap = buildQuestionStemMap();
-    await gotoRoute(page, '#/quiz');
+    const stemMap = buildQuestionStemMap(FIXTURE_BANK);
+    await seedFixtureBank(page, FIXTURE_BANK, makeEmptyStore(), { targetHashRoute: '#/quiz' });
     await selectQuizFilters(page, { count: 10 });
     await modeCard(page, 'multi').click();
     const q = await answerCurrentQuestion(page, stemMap, 'wrong');
@@ -371,7 +375,7 @@ test.describe('Tier 1: Quiz Session, Modes, Answer Sheet & Result (UF07-UF15)', 
     page,
   }, testInfo) => {
     onlyDesktop(testInfo);
-    await gotoRoute(page, '#/quiz');
+    await seedFixtureBank(page, FIXTURE_BANK, makeEmptyStore(), { targetHashRoute: '#/quiz' });
     await selectQuizFilters(page, { count: 10 });
     await modeCard(page, 'tf').click();
     await expect(tfBtn(page, true)).toBeVisible();
@@ -382,9 +386,9 @@ test.describe('Tier 1: Quiz Session, Modes, Answer Sheet & Result (UF07-UF15)', 
     page,
   }, testInfo) => {
     onlyDesktop(testInfo);
-    const trueQ = pickQuestion({ type: 'tf' });
-    const stemMap = buildQuestionStemMap();
-    await gotoRoute(page, '#/quiz');
+    const trueQ = pickQuestion({ type: 'tf' }, FIXTURE_BANK);
+    const stemMap = buildQuestionStemMap(FIXTURE_BANK);
+    await seedFixtureBank(page, FIXTURE_BANK, makeEmptyStore(), { targetHashRoute: '#/quiz' });
     await selectQuizFilters(page, { chapters: [trueQ.chapter], count: 0, order: 'seq' });
     await modeCard(page, 'tf').click();
 
@@ -408,8 +412,8 @@ test.describe('Tier 1: Quiz Session, Modes, Answer Sheet & Result (UF07-UF15)', 
     page,
   }, testInfo) => {
     onlyDesktop(testInfo);
-    const stemMap = buildQuestionStemMap();
-    await gotoRoute(page, '#/quiz');
+    const stemMap = buildQuestionStemMap(FIXTURE_BANK);
+    await seedFixtureBank(page, FIXTURE_BANK, makeEmptyStore(), { targetHashRoute: '#/quiz' });
     await selectQuizFilters(page, { count: 10 });
     await modeCard(page, 'tf').click();
     await answerCurrentQuestion(page, stemMap, 'wrong');
@@ -421,7 +425,7 @@ test.describe('Tier 1: Quiz Session, Modes, Answer Sheet & Result (UF07-UF15)', 
     page,
   }, testInfo) => {
     onlyDesktop(testInfo);
-    await gotoRoute(page, '#/quiz');
+    await seedFixtureBank(page, FIXTURE_BANK, makeEmptyStore(), { targetHashRoute: '#/quiz' });
     await selectQuizFilters(page, { count: 10 });
     await modeCard(page, 'tf').click();
     await page.keyboard.press('T');
@@ -433,7 +437,7 @@ test.describe('Tier 1: Quiz Session, Modes, Answer Sheet & Result (UF07-UF15)', 
     page,
   }, testInfo) => {
     onlyDesktop(testInfo);
-    await gotoRoute(page, '#/quiz');
+    await seedFixtureBank(page, FIXTURE_BANK, makeEmptyStore(), { targetHashRoute: '#/quiz' });
     await selectQuizFilters(page, { count: 10 });
     await modeCard(page, 'tf').click();
     await page.keyboard.press('F');
@@ -445,7 +449,7 @@ test.describe('Tier 1: Quiz Session, Modes, Answer Sheet & Result (UF07-UF15)', 
     page,
   }, testInfo) => {
     onlyDesktop(testInfo);
-    await gotoRoute(page, '#/quiz');
+    await seedFixtureBank(page, FIXTURE_BANK, makeEmptyStore(), { targetHashRoute: '#/quiz' });
     await selectQuizFilters(page, { count: 10 });
     await modeCard(page, 'short').click();
     await expect(btnRevealAnswer(page)).toBeVisible();
@@ -456,7 +460,7 @@ test.describe('Tier 1: Quiz Session, Modes, Answer Sheet & Result (UF07-UF15)', 
     page,
   }, testInfo) => {
     onlyDesktop(testInfo);
-    await gotoRoute(page, '#/quiz');
+    await seedFixtureBank(page, FIXTURE_BANK, makeEmptyStore(), { targetHashRoute: '#/quiz' });
     await selectQuizFilters(page, { count: 10 });
     await modeCard(page, 'short').click();
     await btnRevealAnswer(page).click();
@@ -470,7 +474,7 @@ test.describe('Tier 1: Quiz Session, Modes, Answer Sheet & Result (UF07-UF15)', 
     page,
   }, testInfo) => {
     onlyDesktop(testInfo);
-    await gotoRoute(page, '#/quiz');
+    await seedFixtureBank(page, FIXTURE_BANK, makeEmptyStore(), { targetHashRoute: '#/quiz' });
     await selectQuizFilters(page, { count: 10 });
     await modeCard(page, 'short').click();
     await btnRevealAnswer(page).click();
@@ -484,7 +488,7 @@ test.describe('Tier 1: Quiz Session, Modes, Answer Sheet & Result (UF07-UF15)', 
     page,
   }, testInfo) => {
     onlyDesktop(testInfo);
-    await gotoRoute(page, '#/quiz');
+    await seedFixtureBank(page, FIXTURE_BANK, makeEmptyStore(), { targetHashRoute: '#/quiz' });
     await selectQuizFilters(page, { count: 10 });
     await modeCard(page, 'short').click();
     await btnRevealAnswer(page).click();
@@ -497,7 +501,7 @@ test.describe('Tier 1: Quiz Session, Modes, Answer Sheet & Result (UF07-UF15)', 
     page,
   }, testInfo) => {
     onlyDesktop(testInfo);
-    await gotoRoute(page, '#/quiz');
+    await seedFixtureBank(page, FIXTURE_BANK, makeEmptyStore(), { targetHashRoute: '#/quiz' });
     await selectQuizFilters(page, { count: 10 });
     await modeCard(page, 'analysis').click();
     await btnRevealAnswer(page).click();
@@ -510,7 +514,7 @@ test.describe('Tier 1: Quiz Session, Modes, Answer Sheet & Result (UF07-UF15)', 
     page,
   }, testInfo) => {
     onlyDesktop(testInfo);
-    await gotoRoute(page, '#/quiz');
+    await seedFixtureBank(page, FIXTURE_BANK, makeEmptyStore(), { targetHashRoute: '#/quiz' });
     await selectQuizFilters(page, { count: 10 });
     await modeCard(page, 'all').click();
     await expect(btnPrev(page)).toBeDisabled();
@@ -527,8 +531,8 @@ test.describe('Tier 1: Quiz Session, Modes, Answer Sheet & Result (UF07-UF15)', 
     page,
   }, testInfo) => {
     onlyDesktop(testInfo);
-    const stemMap = buildQuestionStemMap();
-    await gotoRoute(page, '#/quiz');
+    const stemMap = buildQuestionStemMap(FIXTURE_BANK);
+    await seedFixtureBank(page, FIXTURE_BANK, makeEmptyStore(), { targetHashRoute: '#/quiz' });
     await selectQuizFilters(page, { count: 10 });
     await modeCard(page, 'choice').click();
     await answerCurrentQuestion(page, stemMap, 'correct');
@@ -542,7 +546,7 @@ test.describe('Tier 1: Quiz Session, Modes, Answer Sheet & Result (UF07-UF15)', 
     page,
   }, testInfo) => {
     onlyDesktop(testInfo);
-    await gotoRoute(page, '#/quiz');
+    await seedFixtureBank(page, FIXTURE_BANK, makeEmptyStore(), { targetHashRoute: '#/quiz' });
     await selectQuizFilters(page, { count: 10 });
     await modeCard(page, 'short').click();
     await btnRevealAnswer(page).click();
@@ -560,7 +564,7 @@ test.describe('Tier 1: Quiz Session, Modes, Answer Sheet & Result (UF07-UF15)', 
     page,
   }, testInfo) => {
     onlyDesktop(testInfo);
-    await gotoRoute(page, '#/quiz');
+    await seedFixtureBank(page, FIXTURE_BANK, makeEmptyStore(), { targetHashRoute: '#/quiz' });
     await selectQuizFilters(page, { count: 10 });
     await modeCard(page, 'all').click();
     await page.keyboard.press('ArrowRight');
@@ -573,7 +577,7 @@ test.describe('Tier 1: Quiz Session, Modes, Answer Sheet & Result (UF07-UF15)', 
     page,
   }, testInfo) => {
     onlyDesktop(testInfo);
-    await gotoRoute(page, '#/quiz');
+    await seedFixtureBank(page, FIXTURE_BANK, makeEmptyStore(), { targetHashRoute: '#/quiz' });
     await selectQuizFilters(page, { count: 10 });
     await modeCard(page, 'all').click();
     await ensureAnswerSheetOpen(page);
@@ -587,7 +591,7 @@ test.describe('Tier 1: Quiz Session, Modes, Answer Sheet & Result (UF07-UF15)', 
     page,
   }, testInfo) => {
     onlyDesktop(testInfo);
-    await gotoRoute(page, '#/quiz');
+    await seedFixtureBank(page, FIXTURE_BANK, makeEmptyStore(), { targetHashRoute: '#/quiz' });
     await selectQuizFilters(page, { count: 10 });
     await modeCard(page, 'all').click();
     await ensureAnswerSheetOpen(page);
@@ -601,7 +605,7 @@ test.describe('Tier 1: Quiz Session, Modes, Answer Sheet & Result (UF07-UF15)', 
     page,
   }, testInfo) => {
     onlyDesktop(testInfo);
-    await gotoRoute(page, '#/quiz');
+    await seedFixtureBank(page, FIXTURE_BANK, makeEmptyStore(), { targetHashRoute: '#/quiz' });
     await selectQuizFilters(page, { count: 10 });
     await modeCard(page, 'all').click();
     await ensureAnswerSheetOpen(page);
@@ -614,8 +618,8 @@ test.describe('Tier 1: Quiz Session, Modes, Answer Sheet & Result (UF07-UF15)', 
     page,
   }, testInfo) => {
     onlyDesktop(testInfo);
-    const stemMap = buildQuestionStemMap();
-    await gotoRoute(page, '#/quiz');
+    const stemMap = buildQuestionStemMap(FIXTURE_BANK);
+    await seedFixtureBank(page, FIXTURE_BANK, makeEmptyStore(), { targetHashRoute: '#/quiz' });
     await selectQuizFilters(page, { count: 10 });
     await modeCard(page, 'choice').click();
     await answerCurrentQuestion(page, stemMap, 'correct');
@@ -632,8 +636,8 @@ test.describe('Tier 1: Quiz Session, Modes, Answer Sheet & Result (UF07-UF15)', 
     page,
   }, testInfo) => {
     onlyDesktop(testInfo);
-    const stemMap = buildQuestionStemMap();
-    await gotoRoute(page, '#/quiz');
+    const stemMap = buildQuestionStemMap(FIXTURE_BANK);
+    await seedFixtureBank(page, FIXTURE_BANK, makeEmptyStore(), { targetHashRoute: '#/quiz' });
     await selectQuizFilters(page, { count: 10 });
     await modeCard(page, 'choice').click();
     await answerCurrentQuestion(page, stemMap, 'correct');
@@ -649,7 +653,7 @@ test.describe('Tier 1: Quiz Session, Modes, Answer Sheet & Result (UF07-UF15)', 
     page,
   }, testInfo) => {
     onlyMobile(testInfo);
-    await gotoRoute(page, '#/quiz');
+    await seedFixtureBank(page, FIXTURE_BANK, makeEmptyStore(), { targetHashRoute: '#/quiz' });
     await selectQuizFilters(page, { count: 20 });
     await modeCard(page, 'all').click();
     await ensureAnswerSheetOpen(page);
@@ -662,8 +666,8 @@ test.describe('Tier 1: Quiz Session, Modes, Answer Sheet & Result (UF07-UF15)', 
     page,
   }, testInfo) => {
     onlyDesktop(testInfo);
-    const stemMap = buildQuestionStemMap();
-    await gotoRoute(page, '#/quiz');
+    const stemMap = buildQuestionStemMap(FIXTURE_BANK);
+    await seedFixtureBank(page, FIXTURE_BANK, makeEmptyStore(), { targetHashRoute: '#/quiz' });
     await selectQuizFilters(page, { count: 10 });
     await modeCard(page, 'choice').click();
 
@@ -682,8 +686,8 @@ test.describe('Tier 1: Quiz Session, Modes, Answer Sheet & Result (UF07-UF15)', 
     page,
   }, testInfo) => {
     onlyDesktop(testInfo);
-    const stemMap = buildQuestionStemMap();
-    await gotoRoute(page, '#/quiz');
+    const stemMap = buildQuestionStemMap(FIXTURE_BANK);
+    await seedFixtureBank(page, FIXTURE_BANK, makeEmptyStore(), { targetHashRoute: '#/quiz' });
     await selectQuizFilters(page, { count: 10 });
     await modeCard(page, 'tf').click();
 
@@ -704,8 +708,8 @@ test.describe('Tier 1: Quiz Session, Modes, Answer Sheet & Result (UF07-UF15)', 
     page,
   }, testInfo) => {
     onlyDesktop(testInfo);
-    const stemMap = buildQuestionStemMap();
-    await gotoRoute(page, '#/quiz');
+    const stemMap = buildQuestionStemMap(FIXTURE_BANK);
+    await seedFixtureBank(page, FIXTURE_BANK, makeEmptyStore(), { targetHashRoute: '#/quiz' });
     await selectQuizFilters(page, { count: 10 });
     await modeCard(page, 'tf').click();
 
@@ -722,8 +726,8 @@ test.describe('Tier 1: Quiz Session, Modes, Answer Sheet & Result (UF07-UF15)', 
     page,
   }, testInfo) => {
     onlyDesktop(testInfo);
-    const stemMap = buildQuestionStemMap();
-    await gotoRoute(page, '#/quiz');
+    const stemMap = buildQuestionStemMap(FIXTURE_BANK);
+    await seedFixtureBank(page, FIXTURE_BANK, makeEmptyStore(), { targetHashRoute: '#/quiz' });
     await selectQuizFilters(page, { chapters: [1], count: 10 });
     await modeCard(page, 'tf').click();
     const total = Number.parseInt(
@@ -746,8 +750,8 @@ test.describe('Tier 1: Quiz Session, Modes, Answer Sheet & Result (UF07-UF15)', 
     page,
   }, testInfo) => {
     onlyDesktop(testInfo);
-    const stemMap = buildQuestionStemMap();
-    await gotoRoute(page, '#/quiz');
+    const stemMap = buildQuestionStemMap(FIXTURE_BANK);
+    await seedFixtureBank(page, FIXTURE_BANK, makeEmptyStore(), { targetHashRoute: '#/quiz' });
     await selectQuizFilters(page, { count: 10 });
     await modeCard(page, 'tf').click();
     for (let i = 0; i < 10; i++) {

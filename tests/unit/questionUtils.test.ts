@@ -4,10 +4,11 @@ import {
   formatElapsed,
   getOptionLabel,
   getOriginLabel,
+  getQuestionAiExplanation,
   getTypeLabel,
   isObjectiveQuestion,
 } from '../../src/core/questionUtils';
-import type { Question } from '../../src/types/quiz';
+import type { Question, UserStore } from '../../src/types/quiz';
 import { MOCK_QUESTIONS } from './fixtures/mockBank';
 
 describe('questionUtils', () => {
@@ -49,9 +50,9 @@ describe('questionUtils', () => {
   });
 
   it('QU-03: getOriginLabel maps all 3 QuestionOrigin values', () => {
-    expect(getOriginLabel('comprehensive_bank')).toBe('综合题库');
-    expect(getOriginLabel('video_popup')).toBe('视频课弹题');
-    expect(getOriginLabel('review_notes_synthesized')).toBe('复习资料提炼');
+    expect(getOriginLabel('comprehensive_bank')).toBe('标准题库');
+    expect(getOriginLabel('video_popup')).toBe('AI 洗题 / 精选');
+    expect(getOriginLabel('review_notes_synthesized')).toBe('引导与提炼');
   });
 
   it('QU-04: getOptionLabel maps 0..25 to A..Z and safely handles >=26 and invalid indices', () => {
@@ -80,5 +81,37 @@ describe('questionUtils', () => {
     expect(isObjectiveQuestion('tf')).toBe(true);
     expect(isObjectiveQuestion('short')).toBe(false);
     expect(isObjectiveQuestion('analysis')).toBe(false);
+  });
+
+  it('QU-07: getQuestionAiExplanation resolves store cache -> aiAnalysis -> explanation -> explain', () => {
+    const baseQ: Question = {
+      ...MOCK_QUESTIONS[0],
+      explain: '原始解析',
+      explanation: '规范解析',
+      aiAnalysis: 'AI 深度解析',
+    };
+    const store: UserStore = {
+      records: {},
+      fav: {},
+      mastery: {},
+      aiExplanations: {
+        [baseQ.id]: { content: '缓存 AI 解析', updatedAt: 1000 },
+      },
+    };
+
+    expect(getQuestionAiExplanation(baseQ, store)).toBe('缓存 AI 解析');
+    expect(getQuestionAiExplanation(baseQ)).toBe('AI 深度解析');
+    expect(getQuestionAiExplanation({ ...baseQ, aiAnalysis: '   ' })).toBe('规范解析');
+    expect(
+      getQuestionAiExplanation({ ...baseQ, aiAnalysis: undefined, explanation: '' }),
+    ).toBe('原始解析');
+    expect(
+      getQuestionAiExplanation({
+        ...baseQ,
+        aiAnalysis: undefined,
+        explanation: undefined,
+        explain: undefined as unknown as string,
+      }),
+    ).toBe('');
   });
 });

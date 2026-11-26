@@ -3,6 +3,7 @@ import { LEGACY_GUEST_SCOPE, practiceStorageKey } from '../core/practiceScope';
 import type { PracticeScope } from '../core/practiceScope';
 import type {
   BankData,
+  CachedAiExplanation,
   ChapterMeta,
   MasteryLevel,
   Question,
@@ -99,6 +100,27 @@ function isValidMastery(value: unknown): value is MasteryLevel {
   return value === 0 || value === 1 || value === 2;
 }
 
+function parseCachedAiExplanation(value: unknown): CachedAiExplanation | null {
+  if (!isPlainObject(value) || hasDangerousOwnKey(value)) return null;
+  if (typeof value.content !== 'string' || value.content.trim().length === 0) return null;
+  if (typeof value.updatedAt !== 'number' || !Number.isFinite(value.updatedAt) || value.updatedAt < 0) {
+    return null;
+  }
+  const model = typeof value.model === 'string' ? value.model.trim() : '';
+  return {
+    content: value.content,
+    updatedAt: value.updatedAt,
+    ...(model.length > 0 ? { model } : {}),
+  };
+}
+
+function normalizeLegacyQuestion(q: Question): Question {
+  return {
+    ...q,
+    explain: typeof q.explain === 'string' ? q.explain : '',
+  };
+}
+
 export function sanitizeUserStore(parsed: unknown): UserStore {
   if (!isPlainObject(parsed)) {
     return createEmptyStore();
@@ -135,6 +157,20 @@ export function sanitizeUserStore(parsed: unknown): UserStore {
     }
   }
 
+  if (isPlainObject(parsed.aiExplanations)) {
+    const aiExplanations: Record<string, CachedAiExplanation> = {};
+    for (const key of Object.getOwnPropertyNames(parsed.aiExplanations)) {
+      if (DANGEROUS_KEYS.has(key)) continue;
+      const valid = parseCachedAiExplanation(parsed.aiExplanations[key]);
+      if (valid) {
+        aiExplanations[key] = valid;
+      }
+    }
+    if (Object.keys(aiExplanations).length > 0) {
+      store.aiExplanations = aiExplanations;
+    }
+  }
+
   return store;
 }
 
@@ -150,7 +186,8 @@ export function isStoreNonEmpty(store: UserStore): boolean {
   return (
     Object.keys(store.records).length > 0 ||
     Object.keys(store.fav).length > 0 ||
-    Object.keys(store.mastery).length > 0
+    Object.keys(store.mastery).length > 0 ||
+    (store.aiExplanations !== undefined && Object.keys(store.aiExplanations).length > 0)
   );
 }
 
@@ -162,10 +199,24 @@ export function mergeUserStores(older: UserStore, newer: UserStore): UserStore {
       mergedRecords[id] = rec;
     }
   }
+  const mergedAi: Record<string, CachedAiExplanation> = {};
+  for (const source of [older.aiExplanations, newer.aiExplanations]) {
+    if (!isPlainObject(source)) continue;
+    for (const key of Object.getOwnPropertyNames(source)) {
+      if (DANGEROUS_KEYS.has(key)) continue;
+      const valid = parseCachedAiExplanation(source[key]);
+      if (!valid) continue;
+      const prev = mergedAi[key];
+      if (!prev || valid.updatedAt >= prev.updatedAt) {
+        mergedAi[key] = valid;
+      }
+    }
+  }
   return {
     records: mergedRecords,
     fav: { ...older.fav, ...newer.fav },
     mastery: { ...older.mastery, ...newer.mastery },
+    ...(Object.keys(mergedAi).length > 0 ? { aiExplanations: mergedAi } : {}),
   };
 }
 
@@ -332,17 +383,23 @@ function createBankDb(scope: PracticeScope) {
 
     return list
       .filter((b) => b && b.id !== BUILTIN_AI_BANK_ID && !b.builtin)
-      .map((b) => ({
-        ...b,
-        builtin: false,
-        data: {
-          ...b.data,
-          meta: {
-            ...b.data.meta,
-            counts: computeV1BankCounts(b.data.questions),
+      .map((b) => {
+        const safeQuestions = Array.isArray(b.data?.questions)
+          ? b.data.questions.map(normalizeLegacyQuestion)
+          : [];
+        return {
+          ...b,
+          builtin: false,
+          data: {
+            ...b.data,
+            questions: safeQuestions,
+            meta: {
+              ...b.data.meta,
+              counts: computeV1BankCounts(safeQuestions),
+            },
           },
-        },
-      }))
+        };
+      })
       .sort((a, b) => b.updatedAt - a.updatedAt || b.createdAt - a.createdAt);
   }
 
@@ -350,18 +407,23 @@ function createBankDb(scope: PracticeScope) {
     if (bank.id === BUILTIN_AI_BANK_ID || bank.builtin) {
       throw new Error('Cannot overwrite built-in example bank');
     }
-    const counts = computeV1BankCounts(bank.data.questions);
+    const safeQuestions = Array.isArray(bank.data?.questions)
+      ? bank.data.questions.map(normalizeLegacyQuestion)
+      : [];
+    const counts = computeV1BankCounts(safeQuestions);
     const cleanName = bank.name.trim() || '未命名题库';
+    const cloned = cloneBankRecord(bank);
     const normalized: BankRecord = {
-      ...cloneBankRecord(bank),
+      ...cloned,
       name: cleanName,
       description: bank.description?.trim() || undefined,
       builtin: false,
       updatedAt: bank.updatedAt || Date.now(),
       data: {
-        ...bank.data,
+        ...cloned.data,
+        questions: safeQuestions,
         meta: {
-          ...bank.data.meta,
+          ...cloned.data.meta,
           title: cleanName,
           counts,
         },
@@ -391,7 +453,7 @@ function createBankDb(scope: PracticeScope) {
         : `bank-${now.toString(36)}-${Math.random().toString(36).slice(2, 7)}`;
 
     const chapters = [...input.chapters].sort((a, b) => a.id - b.id);
-    const questions = input.questions.map((q) => ({ ...q }));
+    const questions = input.questions.map((q) => normalizeLegacyQuestion(q));
     const data: BankData = {
       meta: {
         title: safeName,

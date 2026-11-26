@@ -15,6 +15,7 @@ import {
 } from '../../src/utils/importers/excelImporter';
 import {
   annotateDuplicateStems,
+  appendDraftsToBank,
   finalizeDraftsToBank,
   validateDraftQuestion,
 } from '../../src/utils/importers/normalize';
@@ -23,7 +24,7 @@ import {
   parseDelimitedText,
   parseTabularRows,
 } from '../../src/utils/importers/tabularParser';
-import type { BankRecord } from '../../src/utils/quizImportTypes';
+import type { BankRecord, DraftQuestion } from '../../src/utils/quizImportTypes';
 
 /** Minimal pure-JS STORE ZIP builder for generating real valid .docx ArrayBuffers in tests. */
 function crc32(bytes: Uint8Array): number {
@@ -408,5 +409,498 @@ B. 选项B
     const badFile = new File(['hello'], 'notes.pdf', { type: 'application/pdf' });
     const badRes = await parseImportFile(badFile);
     expect(badRes.fatalError).toContain('暂不支持该文件格式');
+  });
+
+  it('IMP-09: .md and .markdown routing parses Markdown headings/lists/bold options & answers, while messy prose yields 0 drafts with no fatalError', async () => {
+    const mdContent = [
+      '\uFEFF# 第一章 计算机网络',
+      '',
+      '1. **以下哪个协议工作在传输层？**',
+      '- **A.** HTTP',
+      '- **B.** TCP',
+      '- **C.** ARP',
+      '- **D.** DNS',
+      '**答案：** B',
+      '> **解析：** TCP 是面向连接的传输层协议。',
+      '',
+      '2. UDP 提供无连接的不可靠传输服务。',
+      '- 答案：正确',
+    ].join('\n');
+
+    const mdFile = new File([mdContent], 'network-notes.md', { type: 'text/markdown' });
+    const mdRes = await parseImportFile(mdFile);
+    expect(mdRes.fatalError).toBeUndefined();
+    expect(mdRes.suggestedName).toBe('network-notes');
+    expect(mdRes.drafts).toHaveLength(2);
+    expect(mdRes.drafts[0]!.options).toEqual(['HTTP', 'TCP', 'ARP', 'DNS']);
+    expect(mdRes.drafts[0]!.answer).toBe(1);
+    expect(mdRes.drafts[0]!.explain).toContain('TCP 是面向连接的传输层协议');
+    expect(mdRes.drafts[1]!.type).toBe('tf');
+    expect(mdRes.drafts[1]!.answer).toBe(true);
+
+    const messyProse = [
+      '# 课堂随笔',
+      '今天老师主要梳理了机器学习中的正则化方法，包括 L1 稀疏约束与 L2 权重衰减。',
+      '课后需要结合实验数据对比不同超参数在验证集上的收敛表现。',
+    ].join('\n\n');
+    const markdownFile = new File([messyProse], 'lecture.markdown', { type: 'text/markdown' });
+    const messyRes = await parseImportFile(markdownFile);
+    expect(messyRes.fatalError).toBeUndefined();
+    expect(messyRes.drafts).toEqual([]);
+  });
+
+  it('IMP-10: Phase 1 legacy JSON missing explain/explanation/aiAnalysis defaults explain to "" with zero errors', () => {
+    const legacyBankJson = JSON.stringify({
+      meta: {
+        title: 'Phase 1 旧版题库',
+        version: '1.0.0',
+        generatedAt: '2025-12-01T00:00:00Z',
+        counts: {
+          total: 2,
+          byType: { choice: 1, multi: 0, tf: 1, short: 0, analysis: 0 },
+          byOrigin: { comprehensive_bank: 2, video_popup: 0, review_notes_synthesized: 0 },
+        },
+      },
+      chapters: [{ id: 1, short: '算法基础', title: '第一章 算法基础' }],
+      questions: [
+        {
+          id: 'p1-q1',
+          type: 'choice',
+          chapter: 1,
+          stem: '二分查找要求线性表具有什么存储特性？',
+          options: ['顺序存储且有序', '链式存储', '哈希存储', '任意无序存储'],
+          answer: 0,
+          explain: '',
+          source: { origin: 'comprehensive_bank', file: 'legacy.json', ref: '#1' },
+        },
+        {
+          id: 'p1-q2',
+          type: 'tf',
+          chapter: 1,
+          stem: '栈是一种先进后出（FILO）的线性表。',
+          answer: true,
+          source: { origin: 'comprehensive_bank', file: 'legacy.json', ref: '#2' },
+        },
+      ],
+    });
+
+    const parsed = parseJsonBank(legacyBankJson, 'legacy.json');
+    expect(parsed.fatalError).toBeUndefined();
+    expect(parsed.drafts).toHaveLength(2);
+    expect(parsed.drafts[0]!.explain).toBe('');
+    expect(parsed.drafts[1]!.explain).toBe('');
+    expect(parsed.drafts[0]!.aiInferredAnswer).toBeUndefined();
+
+    const finalized = finalizeDraftsToBank(parsed.drafts, { name: parsed.suggestedName });
+    expect(finalized.questions).toHaveLength(2);
+    expect(finalized.questions[0]!.explain).toBe('');
+    expect(finalized.questions[1]!.explain).toBe('');
+  });
+
+  it('IMP-11: jsonImporter picks first non-empty explain candidate and preserves aiInferredAnswer', () => {
+    const jsonText = JSON.stringify([
+      {
+        type: 'choice',
+        stem: 'AI 洗题导入题 1',
+        options: ['选项A', '选项B'],
+        answer: 0,
+        explain: '',
+        explanation: '来自 explanation 字段的解析',
+        aiInferredAnswer: true,
+        tags: ['算法', 'AI洗题'],
+      },
+      {
+        type: 'choice',
+        stem: 'AI 洗题导入题 2',
+        options: ['选项A', '选项B'],
+        answer: 1,
+        aiAnalysis: '来自 aiAnalysis 字段的解析',
+        aiInferredAnswer: false,
+      },
+    ]);
+
+    const res = parseJsonBank(jsonText, 'ai-washed.json');
+    expect(res.fatalError).toBeUndefined();
+    expect(res.drafts).toHaveLength(2);
+    expect(res.drafts[0]!.explain).toBe('来自 explanation 字段的解析');
+    expect(res.drafts[0]!.aiInferredAnswer).toBe(true);
+    expect(res.drafts[0]!.tags).toEqual(['算法', 'AI洗题']);
+    expect(res.drafts[1]!.explain).toBe('来自 aiAnalysis 字段的解析');
+    expect(res.drafts[1]!.aiInferredAnswer).toBeUndefined();
+  });
+
+  it('IMP-12: finalizeDraftsToBank preserves aiInferredAnswer, tags, keyPoints, explain, and source', () => {
+    const res = parseJsonBank(
+      JSON.stringify([
+        {
+          type: 'choice',
+          chapter: 2,
+          chapterName: '神经网络',
+          stem: '反向传播算法主要基于微积分中的哪一定律？',
+          options: ['链式法则', '罗尔定理', '中值定理', '泰勒展开'],
+          answer: 0,
+          explain: '通过链式法则逐层计算梯度。',
+          aiInferredAnswer: true,
+          tags: ['深度学习', '梯度'],
+          keyPoints: ['链式法则', '梯度反向传播'],
+          source: { origin: 'video_popup', ref: 'wash-1', note: 'AI 洗题' },
+        },
+      ]),
+      'deep-learning.json',
+    );
+
+    const finalized = finalizeDraftsToBank(res.drafts, { name: '深度学习题库' });
+    expect(finalized.questions).toHaveLength(1);
+    const q = finalized.questions[0]!;
+    expect(q.aiInferredAnswer).toBe(true);
+    expect(q.tags).toEqual(['深度学习', '梯度']);
+    expect(q.keyPoints).toEqual(['链式法则', '梯度反向传播']);
+    expect(q.explain).toBe('通过链式法则逐层计算梯度。');
+    expect(q.source).toEqual({
+      origin: 'video_popup',
+      file: '深度学习题库',
+      ref: 'wash-1',
+      note: 'AI 洗题',
+    });
+  });
+
+  it('IMP-13: appendDraftsToBank reconciles chapters, avoids Question.id collisions, recomputes counts, and does not mutate existingBank', () => {
+    const existingBank: BankRecord = {
+      id: 'bank-existing-1',
+      name: '计算机基础综合库',
+      description: '已有题库',
+      builtin: false,
+      createdAt: 1000,
+      updatedAt: 2000,
+      sourceFormat: 'txt',
+      data: {
+        meta: {
+          title: '计算机基础综合库',
+          version: '2.0.0',
+          generatedAt: '2026-11-25T00:00:00Z',
+          counts: {
+            total: 2,
+            byType: { choice: 1, multi: 0, tf: 1, short: 0, analysis: 0 },
+            byOrigin: { comprehensive_bank: 2, video_popup: 0, review_notes_synthesized: 0 },
+          },
+        },
+        chapters: [{ id: 1, short: '网络基础', title: '第 1 章 网络基础' }],
+        questions: [
+          {
+            id: 'imp-c1-choice-003',
+            type: 'choice',
+            chapter: 1,
+            stem: 'HTTP 默认端口？',
+            options: ['21', '80'],
+            answer: 1,
+            explain: '80 端口',
+            source: { origin: 'comprehensive_bank', file: '计算机基础综合库', ref: '#1' },
+          },
+          {
+            id: 'imp-c1-tf-004',
+            type: 'tf',
+            chapter: 1,
+            stem: 'TCP 面向连接。',
+            answer: true,
+            explain: '',
+            source: { origin: 'comprehensive_bank', file: '计算机基础综合库', ref: '#2' },
+          },
+        ],
+      },
+    };
+
+    const existingSnapshot = JSON.stringify(existingBank);
+
+    const parsed = parseJsonBank(
+      JSON.stringify([
+        {
+          // Matches existing chapter by title even with chapter: 0
+          chapter: 0,
+          chapterName: '网络基础',
+          type: 'choice',
+          stem: 'HTTPS 默认端口？',
+          options: ['80', '443'],
+          answer: 1,
+          explain: '443 端口',
+          aiInferredAnswer: true,
+          tags: ['网络'],
+          source: { origin: 'video_popup', ref: 'AI #1' },
+        },
+        {
+          // Conflicting custom chapter name on chapter 1 -> allocates new chapter id 2
+          chapter: 1,
+          chapterName: '操作系统',
+          type: 'multi',
+          stem: '以下属于进程调度算法的有？',
+          options: ['FCFS', 'SJF', '冒泡排序'],
+          answer: [0, 1],
+          explain: '冒泡排序不是调度算法',
+          keyPoints: ['先来先服务', '短作业优先'],
+        },
+      ]),
+    );
+
+    const merged = appendDraftsToBank(existingBank, parsed.drafts, { sourceFormat: 'txt' });
+
+    // Non-mutation of original object
+    expect(JSON.stringify(existingBank)).toBe(existingSnapshot);
+
+    expect(merged.data.questions).toHaveLength(4);
+    // Unique Question IDs
+    const ids = merged.data.questions.map((q) => q.id);
+    expect(new Set(ids).size).toBe(4);
+    expect(ids).toContain('imp-c1-choice-003');
+    expect(ids).toContain('imp-c1-tf-004');
+
+    // Reconciled chapters
+    expect(merged.data.chapters).toHaveLength(2);
+    expect(merged.data.chapters[0]!.id).toBe(1);
+    expect(merged.data.chapters[0]!.short).toBe('网络基础');
+    expect(merged.data.chapters[1]!.id).toBe(2);
+    expect(merged.data.chapters[1]!.short).toBe('操作系统');
+
+    const appendedQ1 = merged.data.questions[2]!;
+    expect(appendedQ1.chapter).toBe(1);
+    expect(appendedQ1.aiInferredAnswer).toBe(true);
+    expect(appendedQ1.tags).toEqual(['网络']);
+    expect(appendedQ1.source.origin).toBe('video_popup');
+
+    const appendedQ2 = merged.data.questions[3]!;
+    expect(appendedQ2.chapter).toBe(2);
+    expect(appendedQ2.keyPoints).toEqual(['先来先服务', '短作业优先']);
+
+    // Recomputed counts & updatedAt
+    expect(merged.data.meta.counts).toEqual({
+      total: 4,
+      byType: { choice: 2, multi: 1, tf: 1, short: 0, analysis: 0 },
+      byOrigin: { comprehensive_bank: 3, video_popup: 1, review_notes_synthesized: 0 },
+    });
+    expect(merged.updatedAt).toBeGreaterThan(existingBank.updatedAt);
+  });
+
+  it('IMP-14: Empty option validation catches answers pointing to empty slots and remaps surviving option indices in finalize & append', () => {
+    const baseDraft = (overrides: Partial<DraftQuestion>): DraftQuestion => ({
+      tempId: 'd-opt',
+      sourceLoc: '第 1 项',
+      sourceFormat: 'json',
+      type: 'choice',
+      chapter: 1,
+      chapterName: '第 1 章',
+      stem: '空选项测试题干',
+      options: ['', 'Opt B', 'Opt C'],
+      answer: 0,
+      rawAnswer: 'A',
+      explain: '',
+      keyPoints: [],
+      tags: [],
+      sourceRef: '#1',
+      issues: [],
+      included: true,
+      ...overrides,
+    });
+
+    // 1. Choice answer pointing to empty option -> error + excluded from finalize
+    const badChoice = validateDraftQuestion(baseDraft({ answer: 0, rawAnswer: 'A' }));
+    expect(badChoice.issues.some((i) => i.severity === 'error')).toBe(true);
+    expect(finalizeDraftsToBank([badChoice], { name: '空选项校验库' }).questions).toHaveLength(0);
+
+    // 2. Choice answer pointing to non-empty option after empty slot -> valid + remapped 2 -> 1
+    const shiftedChoice = validateDraftQuestion(baseDraft({ answer: 2, rawAnswer: 'C' }));
+    expect(shiftedChoice.issues.some((i) => i.severity === 'error')).toBe(false);
+    const finalizedChoice = finalizeDraftsToBank([shiftedChoice], { name: '重映射库' });
+    expect(finalizedChoice.questions).toHaveLength(1);
+    expect(finalizedChoice.questions[0]!.options).toEqual(['Opt B', 'Opt C']);
+    expect(finalizedChoice.questions[0]!.answer).toBe(1);
+
+    // 3. Multi answer containing empty option -> error
+    const badMulti = validateDraftQuestion(
+      baseDraft({
+        type: 'multi',
+        options: ['', 'Opt B', '', 'Opt D'],
+        answer: [0, 1],
+        rawAnswer: 'AB',
+      }),
+    );
+    expect(badMulti.issues.some((i) => i.severity === 'error')).toBe(true);
+
+    // 4. Multi answer pointing to surviving non-empty options [1, 3] -> remapped to [0, 1] in both finalize and append
+    const shiftedMulti = validateDraftQuestion(
+      baseDraft({
+        type: 'multi',
+        options: ['', 'Opt B', '', 'Opt D'],
+        answer: [1, 3],
+        rawAnswer: 'BD',
+      }),
+    );
+    expect(shiftedMulti.issues.some((i) => i.severity === 'error')).toBe(false);
+    const finalizedMulti = finalizeDraftsToBank([shiftedMulti], { name: '多选重映射' });
+    expect(finalizedMulti.questions[0]!.options).toEqual(['Opt B', 'Opt D']);
+    expect(finalizedMulti.questions[0]!.answer).toEqual([0, 1]);
+
+    const existingBank: BankRecord = {
+      id: 'bank-remap',
+      name: '重映射目标库',
+      builtin: false,
+      createdAt: 1000,
+      updatedAt: 1000,
+      data: {
+        meta: {
+          title: '重映射目标库',
+          version: '2.0.0',
+          generatedAt: '2026-11-26T00:00:00Z',
+          counts: {
+            total: 0,
+            byType: { choice: 0, multi: 0, tf: 0, short: 0, analysis: 0 },
+            byOrigin: { comprehensive_bank: 0, video_popup: 0, review_notes_synthesized: 0 },
+          },
+        },
+        chapters: [{ id: 1, short: '第一章', title: '第一章' }],
+        questions: [],
+      },
+    };
+    const appended = appendDraftsToBank(existingBank, [shiftedChoice, shiftedMulti]);
+    expect(appended.data.questions).toHaveLength(2);
+    expect(appended.data.questions[0]!.options).toEqual(['Opt B', 'Opt C']);
+    expect(appended.data.questions[0]!.answer).toBe(1);
+    expect(appended.data.questions[1]!.options).toEqual(['Opt B', 'Opt D']);
+    expect(appended.data.questions[1]!.answer).toEqual([0, 1]);
+  });
+
+  it('IMP-15: validateDraftQuestion preserves raw trailing spaces/newlines while finalize & append trim cleanly', () => {
+    const draft = validateDraftQuestion({
+      tempId: 'd-space',
+      sourceLoc: '第 1 项',
+      sourceFormat: 'txt',
+      type: 'choice',
+      chapter: 1,
+      chapterName: '第 1 章',
+      stem: 'Hello ',
+      options: ['Opt A ', 'Opt B\n'],
+      answer: 0,
+      rawAnswer: 'A',
+      explain: 'line1\n',
+      keyPoints: [],
+      tags: [],
+      sourceRef: '#1',
+      issues: [],
+      included: true,
+    });
+
+    expect(draft.stem).toBe('Hello ');
+    expect(draft.options).toEqual(['Opt A ', 'Opt B\n']);
+    expect(draft.explain).toBe('line1\n');
+    expect(draft.issues.some((i) => i.severity === 'error')).toBe(false);
+
+    const finalized = finalizeDraftsToBank([draft], { name: '空格清理库' });
+    expect(finalized.questions[0]!.stem).toBe('Hello');
+    expect(finalized.questions[0]!.options).toEqual(['Opt A', 'Opt B']);
+    expect(finalized.questions[0]!.explain).toBe('line1');
+  });
+
+  it('IMP-16: textImporter does not fabricate ghost drafts from prose with 分析/要点/标签 lines, while keeping real unnumbered questions with 答案：', () => {
+    const lectureProse = [
+      '# 课堂笔记',
+      '今天讨论了排序算法的时间复杂度与稳定性。',
+      '分析：在最坏情况下快速排序退化为 O(n^2)。',
+      '要点：分治思想；基准选择',
+      '标签：排序, 算法',
+    ].join('\n');
+
+    const proseRes = parseTextQuestions(lectureProse);
+    expect(proseRes.fatalError).toBeUndefined();
+    expect(proseRes.drafts).toEqual([]);
+
+    const unnumberedWithAnswer = [
+      'TCP 是面向连接的可靠传输层协议。',
+      '答案：正确',
+      '分析：TCP 通过三次握手建立连接。',
+    ].join('\n');
+    const qRes = parseTextQuestions(unnumberedWithAnswer);
+    expect(qRes.drafts).toHaveLength(1);
+    expect(qRes.drafts[0]!.type).toBe('tf');
+    expect(qRes.drafts[0]!.answer).toBe(true);
+    expect(qRes.drafts[0]!.explain).toBe('TCP 通过三次握手建立连接。');
+  });
+
+  it('IMP-17: jsonImporter ignores non-string explain objects/arrays instead of coercing to [object Object]', () => {
+    const jsonText = JSON.stringify([
+      {
+        type: 'choice',
+        stem: '非字符串 explain 回退测试 1',
+        options: ['A项', 'B项'],
+        answer: 0,
+        explain: { bad: 1 },
+        explanation: 'valid fallback',
+      },
+      {
+        type: 'choice',
+        stem: '非字符串 explain 回退测试 2',
+        options: ['A项', 'B项'],
+        answer: 1,
+        explain: ['array-val'],
+        explanation: true,
+        aiAnalysis: 'ai fallback',
+      },
+    ]);
+
+    const res = parseJsonBank(jsonText, 'bad-explain.json');
+    expect(res.fatalError).toBeUndefined();
+    expect(res.drafts).toHaveLength(2);
+    expect(res.drafts[0]!.explain).toBe('valid fallback');
+    expect(res.drafts[1]!.explain).toBe('ai fallback');
+  });
+
+  it('IMP-18: appendDraftsToBank recognizes Chinese numeral generic chapter labels like 第一章/第十二章 and upgrades them', () => {
+    const existingBank: BankRecord = {
+      id: 'bank-cn-ch',
+      name: '中文章节库',
+      builtin: false,
+      createdAt: 1000,
+      updatedAt: 1000,
+      data: {
+        meta: {
+          title: '中文章节库',
+          version: '2.0.0',
+          generatedAt: '2026-11-26T00:00:00Z',
+          counts: {
+            total: 1,
+            byType: { choice: 0, multi: 0, tf: 1, short: 0, analysis: 0 },
+            byOrigin: { comprehensive_bank: 1, video_popup: 0, review_notes_synthesized: 0 },
+          },
+        },
+        chapters: [{ id: 1, short: '第一章', title: '第一章' }],
+        questions: [
+          {
+            id: 'imp-c1-tf-001',
+            type: 'tf',
+            chapter: 1,
+            stem: '旧题',
+            answer: true,
+            explain: '',
+            source: { origin: 'comprehensive_bank', file: '中文章节库', ref: '#1' },
+          },
+        ],
+      },
+    };
+
+    const parsed = parseJsonBank(
+      JSON.stringify([
+        {
+          chapter: 1,
+          chapterName: '操作系统基础',
+          type: 'tf',
+          stem: '新题',
+          answer: true,
+        },
+      ]),
+    );
+
+    const merged = appendDraftsToBank(existingBank, parsed.drafts);
+    expect(merged.data.chapters).toHaveLength(1);
+    expect(merged.data.chapters[0]).toEqual({
+      id: 1,
+      short: '操作系统基础',
+      title: '第 1 章 操作系统基础',
+    });
   });
 });

@@ -1,4 +1,5 @@
 import fs from 'node:fs';
+import type { Locator, Page } from '@playwright/test';
 import {
   expect,
   onlyDesktop,
@@ -6,10 +7,41 @@ import {
   test,
 } from './helpers/fixtures.ts';
 import { assertFullLayoutAudit } from './helpers/audit.ts';
-import { gotoRoute, statCard } from './helpers/selectors.ts';
+import { BUILTIN_AI_BANK_ID } from './helpers/fixtureBank.ts';
+import {
+  bankCard,
+  bankImportFileInput,
+  bankSwitcher,
+  btnCloseQuizImport,
+  btnConfirmImport,
+  btnConfirmImportSticky,
+  btnDeleteBank,
+  btnNext,
+  btnOpenQuizImport,
+  btnResultHome,
+  btnStar,
+  chapterChip,
+  draftEdit,
+  gotoRoute,
+  importPasteTextarea,
+  importTab,
+  listItems,
+  modeCard,
+  navLink,
+  previewDraft,
+  qStem,
+  qiTab,
+  quizBadgeTotal,
+  quizFeedback,
+  quizImportDialog,
+  quizOption,
+  resultScore,
+  statCard,
+} from './helpers/selectors.ts';
 import {
   STORAGE_KEY,
   captureJsonExport,
+  loadBankCatalog,
   makeSeededStore,
   pickQuestions,
 } from './helpers/storage.ts';
@@ -119,17 +151,72 @@ async function readDownloadBuffer(download: import('@playwright/test').Download)
   return Buffer.concat(chunks);
 }
 
-test.describe('Tier 5: Offline Multi-Format Quiz Import & Multi-Bank Isolation', () => {
-  test('T5-001 Paste TXT/Markdown import with proofreading fix, dynamic UI & IDB persistence across reload', async ({
+function confirmImportCta(page: Page): Locator {
+  return btnConfirmImportSticky(page).or(btnConfirmImport(page)).first();
+}
+
+async function closeImportModalAndOpenQuiz(page: Page): Promise<void> {
+  const dialog = quizImportDialog(page);
+  if (await dialog.isVisible().catch(() => false)) {
+    const closeBtn = btnCloseQuizImport(page);
+    if (await closeBtn.isVisible().catch(() => false)) {
+      await closeBtn.click();
+    }
+  }
+  await expect(dialog).toBeHidden();
+  if (!page.url().includes('#/quiz')) {
+    await navLink(page, 'quiz').click();
+  }
+  await expect(modeCard(page, 'all')).toBeVisible();
+}
+
+async function getSelectedBankIdFromSwitcher(page: Page): Promise<string | null> {
+  const switcher = bankSwitcher(page);
+  await expect(switcher).toBeVisible();
+  const tagName = await switcher.evaluate((el) => el.tagName.toLowerCase());
+  if (tagName === 'select') {
+    return switcher.inputValue();
+  }
+  return switcher.getAttribute('data-active-bank-id');
+}
+
+async function switchBankViaSwitcher(
+  page: Page,
+  targetBankId: string,
+  targetLabel?: RegExp,
+): Promise<void> {
+  const switcher = bankSwitcher(page);
+  await expect(switcher).toBeVisible();
+  const tagName = await switcher.evaluate((el) => el.tagName.toLowerCase());
+  if (tagName === 'select') {
+    await switcher.selectOption(targetBankId);
+    return;
+  }
+  await switcher.click();
+  const byOptionId = page.getByTestId(`bank-switch-option-${targetBankId}`);
+  if (await byOptionId.isVisible().catch(() => false)) {
+    await byOptionId.click();
+  } else if (targetLabel) {
+    await page
+      .getByRole('option', { name: targetLabel })
+      .or(page.getByRole('menuitem', { name: targetLabel }))
+      .or(page.getByRole('button', { name: targetLabel }))
+      .first()
+      .click();
+  }
+}
+
+test.describe('Tier 5: Multi-Format Quiz Import & Unified Workspace Isolation', () => {
+  test('T5-001 Paste TXT/Markdown import with proofreading fix, unified workspace & IDB persistence across reload', async ({
     page,
   }, testInfo) => {
     onlyDesktop(testInfo);
     await gotoRoute(page, '#/');
-    await page.getByTestId('btn-open-quiz-import').click();
-    await expect(page.getByTestId('quiz-import-dialog')).toBeVisible();
+    await btnOpenQuizImport(page).click();
+    await expect(quizImportDialog(page)).toBeVisible();
 
-    await page.getByTestId('import-tab-paste').click();
-    await page.getByTestId('import-paste-textarea').fill(`
+    await importTab(page, 'paste').click();
+    await importPasteTextarea(page).fill(`
 # 第一章 网络协议
 1. HTTP 协议工作在 OSI 模型的应用层。
 答案：正确
@@ -148,41 +235,42 @@ B. HTTP
     await expect(page.getByTestId('import-preview')).toBeVisible();
     await expect(page.getByTestId('preview-summary')).toContainText('共识别 3 题');
     await expect(page.getByTestId('preview-summary')).toContainText('异常 1 题');
-    await expect(page.getByTestId('btn-confirm-import')).toBeDisabled();
+    await expect(confirmImportCta(page)).toBeDisabled();
 
     // Fix Q2 inline from OOB D -> A
-    await page.getByTestId('draft-edit-1').click();
+    await draftEdit(page, 1).click();
     await page.getByTestId('draft-edit-ans-1-0').click();
-    await expect(page.getByTestId('preview-draft-1')).toHaveAttribute('data-severity', 'ok');
-    await expect(page.getByTestId('btn-confirm-import')).toBeEnabled();
+    await expect(previewDraft(page, 1)).toHaveAttribute('data-severity', 'ok');
+    await expect(confirmImportCta(page)).toBeEnabled();
 
     await page.getByTestId('import-bank-name').fill('计算机网络与系统');
-    await page.getByTestId('btn-confirm-import').click();
+    await confirmImportCta(page).click();
 
-    // Automatically switches to custom bank practice home
-    await expect(page.getByTestId('qi-practice-home')).toBeVisible();
-    await expect(page.getByTestId('qi-practice-home')).toContainText('计算机网络与系统');
-    await expect(page.getByTestId('qi-chapter-chip-1')).toBeVisible();
-    await expect(page.getByTestId('qi-chapter-chip-2')).toBeVisible();
-    // Single-origin imported bank automatically hides origin filter
-    await expect(page.getByTestId('qi-filter-origin')).toBeHidden();
+    // Automatically activates imported bank in unified main #/quiz workspace
+    await closeImportModalAndOpenQuiz(page);
+    await expect(bankSwitcher(page)).toBeVisible();
+    await expect(bankSwitcher(page)).toContainText('计算机网络与系统');
+    await expect(quizBadgeTotal(page)).toContainText('3');
+    await expect(modeCard(page, 'all')).toContainText('3');
+    await expect(chapterChip(page, 1)).toBeVisible();
+    await expect(chapterChip(page, 2)).toBeVisible();
 
     // Reload page and confirm persistence in IndexedDB
     await page.reload({ waitUntil: 'domcontentloaded' });
-    await page.getByTestId('btn-open-quiz-import').click();
-    await page.getByTestId('qi-tab-banks').click();
+    await btnOpenQuizImport(page).click();
+    await qiTab(page, 'banks').click();
     await expect(page.getByTestId('bank-list')).toContainText('计算机网络与系统');
     await expect(page.getByTestId('bank-list')).toContainText('共 3 题');
   });
 
-  test('T5-002 Custom bank progress, wrong book & favorites are isolated from built-in AI bank', async ({
+  test('T5-002 Custom bank progress, wrong book & favorites are isolated from built-in QuizHub bank', async ({
     page,
   }, testInfo) => {
     onlyDesktop(testInfo);
     await gotoRoute(page, '#/');
-    await page.getByTestId('btn-open-quiz-import').click();
-    await page.getByTestId('import-tab-paste').click();
-    await page.getByTestId('import-paste-textarea').fill(`
+    await btnOpenQuizImport(page).click();
+    await importTab(page, 'paste').click();
+    await importPasteTextarea(page).fill(`
 # 第一章 隔离测试
 1. 隔离测试第一题？
 A. 正确选项
@@ -191,35 +279,46 @@ B. 错误选项
 `);
     await page.getByTestId('btn-parse-paste').click();
     await page.getByTestId('import-bank-name').fill('隔离测试题库');
-    await page.getByTestId('btn-confirm-import').click();
+    await confirmImportCta(page).click();
 
-    await expect(page.getByTestId('qi-practice-home')).toBeVisible();
-    await page.getByTestId('qi-mode-all').click();
-    await expect(page.getByTestId('qi-q-stem')).toContainText('隔离测试第一题');
+    await closeImportModalAndOpenQuiz(page);
+    await expect(bankSwitcher(page)).toContainText('隔离测试题库');
+    const customBankId = await getSelectedBankIdFromSwitcher(page);
+
+    await modeCard(page, 'all').click();
+    await expect(qStem(page)).toContainText('隔离测试第一题');
 
     // Star & answer wrong
-    await page.getByTestId('qi-btn-star').click();
-    await page.getByTestId('qi-option-1').click();
-    await expect(page.getByTestId('qi-quiz-feedback')).toContainText('回答错误');
-    await page.getByTestId('qi-btn-next').click();
-    await expect(page.getByTestId('qi-result-score')).toContainText('0%');
+    await btnStar(page).click();
+    await quizOption(page, 1).click();
+    await expect(quizFeedback(page)).toContainText('回答错误');
+    await btnNext(page).click();
+    await expect(resultScore(page)).toContainText('0%');
 
-    // Return to custom bank home and verify stats
-    await page.getByRole('button', { name: '返回刷题首页' }).click();
-    await expect(page.getByTestId('qi-stat-done')).toContainText('1');
-    await expect(page.getByTestId('qi-stat-wrong')).toContainText('1');
-    await expect(page.getByTestId('qi-stat-fav')).toContainText('1');
+    // Return to unified workspace quiz home and verify custom bank stats
+    await btnResultHome(page).click();
+    await expect(statCard(page, 'done')).toContainText('1');
+    await expect(statCard(page, 'wrong')).toContainText('1');
+    await expect(statCard(page, 'fav')).toContainText('1');
 
     // Verify wrong book in custom bank
-    await page.getByTestId('qi-open-wrong').click();
-    await expect(page.getByTestId('qi-list-item')).toHaveCount(1);
+    await navLink(page, 'wrong').click();
+    await expect(listItems(page)).toHaveCount(1);
 
-    // Close modal and check V1 built-in Quiz Home is completely untouched
-    await page.getByTestId('btn-close-quiz-import').click();
-    await gotoRoute(page, '#/quiz');
+    // Switch to built-in onboarding bank via bankSwitcher and confirm isolated stats
+    await navLink(page, 'quiz').click();
+    await switchBankViaSwitcher(page, BUILTIN_AI_BANK_ID, /QuizHub 使用引导示例题库/);
     await expect(statCard(page, 'done')).toContainText('0');
     await expect(statCard(page, 'wrong')).toContainText('0');
     await expect(statCard(page, 'fav')).toContainText('0');
+
+    // Switch back to custom bank and verify progress is preserved
+    if (customBankId) {
+      await switchBankViaSwitcher(page, customBankId, /隔离测试题库/);
+      await expect(statCard(page, 'done')).toContainText('1');
+      await expect(statCard(page, 'wrong')).toContainText('1');
+      await expect(statCard(page, 'fav')).toContainText('1');
+    }
   });
 
   test('T5-003 Lazy Excel (.xlsx) & Word (.docx) import, template downloads, and .quizhub.json share roundtrip', async ({
@@ -227,7 +326,7 @@ B. 错误选项
   }, testInfo) => {
     onlyDesktop(testInfo);
     await gotoRoute(page, '#/');
-    await page.getByTestId('btn-open-quiz-import').click();
+    await btnOpenQuizImport(page).click();
 
     // 1. Download TXT & XLSX templates
     const [txtDownload] = await Promise.all([
@@ -244,18 +343,22 @@ B. 错误选项
     const xlsxBuf = await readDownloadBuffer(xlsxDownload);
 
     // 2. Upload downloaded Excel template (exercises lazy importer-xlsx chunk)
-    await page.getByTestId('bank-import-file-input').setInputFiles({
+    await bankImportFileInput(page).setInputFiles({
       name: '后端架构模板.xlsx',
       mimeType: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
       buffer: xlsxBuf,
     });
     await expect(page.getByTestId('import-preview')).toBeVisible();
     await expect(page.getByTestId('preview-summary')).toContainText('可入库 5 题');
-    await page.getByTestId('btn-confirm-import').click();
-    await expect(page.getByTestId('qi-practice-home')).toContainText('后端架构模板');
+    await confirmImportCta(page).click();
+
+    await closeImportModalAndOpenQuiz(page);
+    await expect(bankSwitcher(page)).toContainText('后端架构模板');
+    await expect(quizBadgeTotal(page)).toContainText('5');
 
     // 3. Export .quizhub.json share package, delete bank, then re-import share package
-    await page.getByTestId('qi-tab-banks').click();
+    await btnOpenQuizImport(page).click();
+    await qiTab(page, 'banks').click();
     const customCard = page.locator('[data-testid^="bank-card-bank-"]').first();
     const cardTestId = await customCard.getAttribute('data-testid');
     const bankId = cardTestId!.replace('bank-card-', '');
@@ -266,16 +369,16 @@ B. 错误选项
     expect(exported.filename).toContain('.quizhub.json');
 
     page.once('dialog', (d) => d.accept());
-    await page.getByTestId(`btn-delete-bank-${bankId}`).click();
-    await expect(page.getByTestId(`bank-card-${bankId}`)).toHaveCount(0);
+    await btnDeleteBank(page, bankId).click();
+    await expect(bankCard(page, bankId)).toHaveCount(0);
 
     // 4. Import .docx file (exercises lazy importer-docx mammoth chunk)
-    await page.getByTestId('qi-tab-import').click();
+    await qiTab(page, 'import').click();
     const docxBuf = buildMinimalDocxBuffer(`
       <w:p><w:r><w:t>1. Word 文档导入测试题：TCP 三次握手用于建立可靠连接。</w:t></w:r></w:p>
       <w:p><w:r><w:t>答案：对</w:t></w:r></w:p>
     `);
-    await page.getByTestId('bank-import-file-input').setInputFiles({
+    await bankImportFileInput(page).setInputFiles({
       name: 'Word导入测试.docx',
       mimeType: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
       buffer: docxBuf,
@@ -285,27 +388,34 @@ B. 错误选项
     await page.getByTestId('btn-cancel-import').click();
 
     // 5. Re-import exported .quizhub.json share package losslessly
-    await page.getByTestId('bank-import-file-input').setInputFiles({
+    await bankImportFileInput(page).setInputFiles({
       name: exported.filename,
       mimeType: 'application/json',
       buffer: Buffer.from(exported.raw, 'utf-8'),
     });
     await expect(page.getByTestId('import-bank-name')).toHaveValue('后端架构模板');
     await expect(page.getByTestId('preview-summary')).toContainText('可入库 5 题');
-    await page.getByTestId('btn-confirm-import').click();
-    await expect(page.getByTestId('qi-practice-home')).toContainText('后端架构模板');
+    await confirmImportCta(page).click();
+
+    await closeImportModalAndOpenQuiz(page);
+    await expect(bankSwitcher(page)).toContainText('后端架构模板');
+    await expect(modeCard(page, 'all')).toContainText('5');
   });
 
   test('T5-004 Create custom bank manually, rename bank, clear progress & V1 localStorage auto-migration', async ({
     page,
   }, testInfo) => {
     onlyDesktop(testInfo);
-    const qs = pickQuestions({ type: 'choice', limit: 2 });
-    const v1Seed = makeSeededStore({
-      correctIds: [qs[0]!.id],
-      wrongIds: [qs[1]!.id],
-      favIds: [qs[0]!.id],
-    });
+    const onboardingBank = loadBankCatalog();
+    const qs = pickQuestions({ type: 'choice', limit: 2 }, onboardingBank);
+    const v1Seed = makeSeededStore(
+      {
+        correctIds: [qs[0]!.id],
+        wrongIds: [qs[1]!.id],
+        favIds: [qs[0]!.id],
+      },
+      onboardingBank,
+    );
 
     await gotoRoute(page, '#/');
     await page.evaluate(
@@ -314,15 +424,16 @@ B. 错误选项
     );
     await page.reload({ waitUntil: 'domcontentloaded' });
 
-    await page.getByTestId('btn-open-quiz-import').click();
-    await page.getByTestId('qi-tab-banks').click();
+    await btnOpenQuizImport(page).click();
+    await qiTab(page, 'banks').click();
 
-    // Built-in card reflects lossless V1 migration
-    const builtinCard = page.getByTestId('bank-card-builtin-ai-intro');
+    // Built-in card reflects QuizHub onboarding title & lossless V1 migration
+    const builtinCard = bankCard(page, BUILTIN_AI_BANK_ID);
+    await expect(builtinCard).toContainText('QuizHub 使用引导示例题库');
     await expect(builtinCard).toContainText('已练 2');
     await expect(builtinCard).toContainText('错题 1');
     await expect(builtinCard).toContainText('收藏 1');
-    await expect(page.getByTestId('btn-delete-bank-builtin-ai-intro')).toHaveCount(0);
+    await expect(btnDeleteBank(page, BUILTIN_AI_BANK_ID)).toHaveCount(0);
 
     // Create manual custom bank & rename it
     await page.getByTestId('btn-new-bank').click();
@@ -335,7 +446,7 @@ B. 错误选项
     await page.getByTestId(`btn-rename-bank-${createdId}`).click();
     await page.getByTestId('rename-bank-input').fill('手动测试库（已重命名）');
     await page.getByTestId('btn-rename-save').click();
-    await expect(page.getByTestId(`bank-card-${createdId}`)).toContainText('手动测试库（已重命名）');
+    await expect(bankCard(page, createdId)).toContainText('手动测试库（已重命名）');
 
     // V1 localStorage untouched
     const v1After = await page.evaluate((k) => window.localStorage.getItem(k), STORAGE_KEY);
@@ -349,23 +460,23 @@ B. 错误选项
     await gotoRoute(page, '#/');
     await assertFullLayoutAudit(page);
 
-    await page.getByTestId('btn-open-quiz-import').click();
-    await expect(page.getByTestId('quiz-import-dialog')).toBeVisible();
+    await btnOpenQuizImport(page).click();
+    await expect(quizImportDialog(page)).toBeVisible();
     await assertFullLayoutAudit(page);
 
-    await page.getByTestId('import-tab-paste').click();
-    await page.getByTestId('import-paste-textarea').fill(`
+    await importTab(page, 'paste').click();
+    await importPasteTextarea(page).fill(`
 1. 移动端布局测试单选？
 A. 第一项
 B. 第二项
 答案：C
 `);
     await page.getByTestId('btn-parse-paste').click();
-    await page.getByTestId('draft-edit-0').click();
+    await draftEdit(page, 0).click();
     await assertFullLayoutAudit(page);
 
     await page.getByTestId('btn-exclude-errors').click();
-    await page.getByTestId('qi-tab-banks').click();
+    await qiTab(page, 'banks').click();
     await assertFullLayoutAudit(page);
   });
 });

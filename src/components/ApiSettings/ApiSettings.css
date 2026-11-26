@@ -763,6 +763,13 @@
   gap: 8px;
 }
 
+.ai-tutor-standalone {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  min-width: 0;
+}
+
 @media (max-width: 480px) {
   .api-modal-backdrop {
     padding: 10px;
