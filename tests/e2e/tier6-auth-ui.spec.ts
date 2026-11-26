@@ -72,14 +72,15 @@ test.describe('Tier 6: Auth UI with the Supabase client (Email + OTP)', () => {
     await page.getByTestId('auth-submit-btn').click();
     await expect(page.getByTestId('auth-error')).toContainText('该邮箱尚未完成验证码激活');
     await page.getByTestId('auth-go-verify-btn').click();
-    await expect(page.getByTestId('auth-notice')).toContainText('激活验证码已发送');
+    await expect(page.getByTestId('auth-notice')).toContainText('验证码已发送至 learner@example.com');
+    await expect(page.getByTestId('auth-send-otp-btn')).toBeDisabled();
 
     healthTrap.expectHttpError('http://127.0.0.1:49391/auth/v1/verify', 400);
     await page.getByTestId('auth-otp-input').fill('000000');
     await page.getByTestId('auth-submit-btn').click();
     await expect(page.getByTestId('auth-error')).toContainText('验证码无效或已过期');
 
-    await page.getByTestId('auth-otp-input').fill('654321');
+    await page.getByTestId('auth-otp-input').fill('123456');
     await page.getByTestId('auth-submit-btn').click();
     await expect(page.getByTestId('auth-modal')).toBeHidden();
     await expect(page.getByTestId('auth-sync-status')).toHaveText('账号已登录');
@@ -141,6 +142,75 @@ test.describe('Tier 6: Auth UI with the Supabase client (Email + OTP)', () => {
     await page.getByTestId('auth-submit-btn').click();
     await expect(page.getByTestId('auth-modal')).toBeHidden();
     await expect(page.getByTestId('user-menu-trigger')).toContainText('验证码用户');
+  });
+
+  test('enforces 60s resend cooldown across modal reopen, resends after 60s, and shows 5-minute expiry', async ({ page }) => {
+    await page.clock.install({ time: Date.now() });
+    await installAuthGateway(page);
+    await gotoRoute(page, 'hub');
+
+    await page.getByTestId('auth-open-btn').click();
+    await page.getByTestId('auth-tab-register').click();
+    await page.getByTestId('auth-account-input').fill('resend@example.com');
+    await page.getByTestId('auth-nickname-input').fill('倒计时测试');
+    await page.getByTestId('auth-password-input').fill('pass123456');
+    await page.getByTestId('auth-submit-btn').click();
+
+    await expect(page.getByTestId('auth-otp-expiry')).toContainText('5 分钟内有效');
+    const sendBtn = page.getByTestId('auth-send-otp-btn');
+    await expect(sendBtn).toBeDisabled();
+    await expect(sendBtn).toContainText('后重发');
+
+    // Reopen modal in OTP login for the same email: 60s cooldown persists and cannot be bypassed
+    await page.getByTestId('auth-modal-close').click();
+    await page.getByTestId('auth-open-btn').click();
+    await page.getByTestId('auth-login-method-otp').click();
+    await page.getByTestId('auth-account-input').fill('resend@example.com');
+    await expect(sendBtn).toBeDisabled();
+    await expect(page.getByTestId('auth-otp-expiry')).toContainText('5 分钟内有效');
+
+    // Fast-forward 61s: resend button becomes active as "重发验证码"
+    await page.clock.fastForward(61_000);
+    await expect(sendBtn).toBeEnabled();
+    await expect(sendBtn).toHaveText('重发验证码');
+
+    // Return to register step and test clicking "重发验证码" + 654321 activation
+    await page.getByTestId('auth-tab-register').click();
+    await page.getByTestId('auth-account-input').fill('resend@example.com');
+    await page.getByTestId('auth-nickname-input').fill('倒计时测试');
+    await page.getByTestId('auth-password-input').fill('pass123456');
+    await page.getByTestId('auth-submit-btn').click();
+
+    await page.clock.fastForward(61_000);
+    await expect(sendBtn).toBeEnabled();
+    await expect(sendBtn).toHaveText('重发验证码');
+    await sendBtn.click();
+    await expect(page.getByTestId('auth-notice')).toContainText('验证码已重新发送至 resend@example.com');
+    await expect(sendBtn).toBeDisabled();
+    await assertFullLayoutAudit(page);
+
+    await page.getByTestId('auth-otp-input').fill('654321');
+    await page.getByTestId('auth-submit-btn').click();
+    await expect(page.getByTestId('auth-modal')).toBeHidden();
+
+    // Logout, request login OTP, fast-forward past 5 minutes -> displays expired warning + enabled "重发验证码"
+    await page.getByTestId('user-menu-trigger').click();
+    await page.getByTestId('auth-logout-btn').click();
+    await page.getByTestId('auth-open-btn').click();
+    await page.getByTestId('auth-login-method-otp').click();
+    await page.getByTestId('auth-account-input').fill('resend@example.com');
+    await sendBtn.click();
+    await expect(page.getByTestId('auth-otp-expiry')).toContainText('5 分钟内有效');
+
+    await page.clock.fastForward(301_000);
+    await expect(page.getByTestId('auth-otp-expiry')).toContainText('验证码已过期');
+    await expect(sendBtn).toBeEnabled();
+    await expect(sendBtn).toHaveText('重发验证码');
+
+    await sendBtn.click();
+    await expect(page.getByTestId('auth-notice')).toContainText('验证码已重新发送至 resend@example.com');
+    await expect(page.getByTestId('auth-otp-expiry')).toContainText('5 分钟内有效');
+    await expect(sendBtn).toBeDisabled();
   });
 
   test('preserves guest intent through existing-account login and reports upload failure until retry succeeds', async ({ page, healthTrap }) => {

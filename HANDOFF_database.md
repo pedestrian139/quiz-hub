@@ -36,7 +36,7 @@ VITE_SUPABASE_AUTH_REDIRECT_URL=https://your-frontend.example/quiz-hub/
 
 在目标 Supabase 项目应用迁移后，启用 Email Provider 与邮箱确认（Confirm email）：
 1. 在 Supabase Dashboard -> **Authentication → Emails (Templates)** 中，确保 **Confirm signup** 与 **Magic Link** 邮件模板正文均包含 **`{{ .Token }}`**（例如：`<h2>您的验证码</h2><p>验证码：<strong>{{ .Token }}</strong></p>`），以便前端用户在弹窗内直接输入 6–8 位数字验证码完成注册激活或免密登录。
-2. 确认启用 `Email OTP`，将 `public.quizhub_before_user_created` 配置为 Before User Created Hook（禁止未授权保留域写入），并通过项目 SMTP 发送真实邮件。`db/supabase/config.toml` 包含对应的本地 Auth（含 `otp_length = 6`、`otp_expiry = 3600`）与 Functions 配置。
+2. 确认启用 `Email OTP`，将 `public.quizhub_before_user_created` 配置为 Before User Created Hook（禁止未授权保留域写入），并通过项目 SMTP 发送真实邮件。`db/supabase/config.toml` 包含对应的本地 Auth（含 `otp_length = 6`、`otp_expiry = 300` 即 5 分钟有效期）与 Functions 配置。
 
 前端已仅依赖 `db/supabase/functions/user-data`（无需部署或调用 `phone-auth`）。可从 `db` 运行 Supabase CLI 部署 `user-data`，并设置函数环境变量 `QUIZHUB_ALLOWED_ORIGINS` 为允许的前端 origin 列表（逗号分隔）以及 `QUIZHUB_API_KEY_ENCRYPTION_KEY_V1` 为安全生成的 32 字节 Base64 密钥。项目 URL 和 Supabase 网关密钥由函数运行环境注入。Service Key 与加密密钥仅由服务端读取。轮换加密密钥时需保留旧版本，直到已有密文完成迁移。
 

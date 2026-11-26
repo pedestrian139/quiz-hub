@@ -8,7 +8,8 @@ minimum_password_length = 8
 enable_signup = true
 enable_confirmations = true
 otp_length = 6
-otp_expiry = 3600
+otp_expiry = 300
+max_frequency = "60s"
 # A database guard requires a password-authorized first email binding for this one-mailbox flow.
 double_confirm_changes = false
 
