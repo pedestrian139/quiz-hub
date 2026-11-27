@@ -3,6 +3,7 @@ import { LEGACY_GUEST_SCOPE, practiceStorageKey } from '../core/practiceScope';
 import type { PracticeScope } from '../core/practiceScope';
 import type {
   BankData,
+  CachedAiExplanation,
   ChapterMeta,
   MasteryLevel,
   Question,
@@ -12,7 +13,9 @@ import type {
 import { computeV1BankCounts } from './bankCatalog';
 import {
   BUILTIN_AI_BANK_ID,
+  BUILTIN_GUIDE_BANK_ID,
   QUIZHUB_SHARE_SCHEMA,
+  isBuiltinBankId,
   type BankRecord,
   type ImportSourceFormat,
   type QuizHubSharePackage,
@@ -99,6 +102,27 @@ function isValidMastery(value: unknown): value is MasteryLevel {
   return value === 0 || value === 1 || value === 2;
 }
 
+function parseCachedAiExplanation(value: unknown): CachedAiExplanation | null {
+  if (!isPlainObject(value) || hasDangerousOwnKey(value)) return null;
+  if (typeof value.content !== 'string' || value.content.trim().length === 0) return null;
+  if (typeof value.updatedAt !== 'number' || !Number.isFinite(value.updatedAt) || value.updatedAt < 0) {
+    return null;
+  }
+  const model = typeof value.model === 'string' ? value.model.trim() : '';
+  return {
+    content: value.content,
+    updatedAt: value.updatedAt,
+    ...(model.length > 0 ? { model } : {}),
+  };
+}
+
+function normalizeLegacyQuestion(q: Question): Question {
+  return {
+    ...q,
+    explain: typeof q.explain === 'string' ? q.explain : '',
+  };
+}
+
 export function sanitizeUserStore(parsed: unknown): UserStore {
   if (!isPlainObject(parsed)) {
     return createEmptyStore();
@@ -135,6 +159,20 @@ export function sanitizeUserStore(parsed: unknown): UserStore {
     }
   }
 
+  if (isPlainObject(parsed.aiExplanations)) {
+    const aiExplanations: Record<string, CachedAiExplanation> = {};
+    for (const key of Object.getOwnPropertyNames(parsed.aiExplanations)) {
+      if (DANGEROUS_KEYS.has(key)) continue;
+      const valid = parseCachedAiExplanation(parsed.aiExplanations[key]);
+      if (valid) {
+        aiExplanations[key] = valid;
+      }
+    }
+    if (Object.keys(aiExplanations).length > 0) {
+      store.aiExplanations = aiExplanations;
+    }
+  }
+
   return store;
 }
 
@@ -150,7 +188,8 @@ export function isStoreNonEmpty(store: UserStore): boolean {
   return (
     Object.keys(store.records).length > 0 ||
     Object.keys(store.fav).length > 0 ||
-    Object.keys(store.mastery).length > 0
+    Object.keys(store.mastery).length > 0 ||
+    (store.aiExplanations !== undefined && Object.keys(store.aiExplanations).length > 0)
   );
 }
 
@@ -162,10 +201,24 @@ export function mergeUserStores(older: UserStore, newer: UserStore): UserStore {
       mergedRecords[id] = rec;
     }
   }
+  const mergedAi: Record<string, CachedAiExplanation> = {};
+  for (const source of [older.aiExplanations, newer.aiExplanations]) {
+    if (!isPlainObject(source)) continue;
+    for (const key of Object.getOwnPropertyNames(source)) {
+      if (DANGEROUS_KEYS.has(key)) continue;
+      const valid = parseCachedAiExplanation(source[key]);
+      if (!valid) continue;
+      const prev = mergedAi[key];
+      if (!prev || valid.updatedAt >= prev.updatedAt) {
+        mergedAi[key] = valid;
+      }
+    }
+  }
   return {
     records: mergedRecords,
     fav: { ...older.fav, ...newer.fav },
     mastery: { ...older.mastery, ...newer.mastery },
+    ...(Object.keys(mergedAi).length > 0 ? { aiExplanations: mergedAi } : {}),
   };
 }
 
@@ -177,6 +230,7 @@ function createBankDb(scope: PracticeScope) {
   let openPromise: Promise<IDBDatabase | null> | null = null;
   let cachedDb: IDBDatabase | null = null;
   const progressWriteQueues = new Map<string, Promise<boolean>>();
+  let defaultBankId = BUILTIN_GUIDE_BANK_ID;
 
   function resetFallbackMemoryDb(): void {
     memBanks.clear();
@@ -331,54 +385,66 @@ function createBankDb(scope: PracticeScope) {
     }
 
     return list
-      .filter((b) => b && b.id !== BUILTIN_AI_BANK_ID && !b.builtin)
-      .map((b) => ({
-        ...b,
-        builtin: false,
-        data: {
-          ...b.data,
-          meta: {
-            ...b.data.meta,
-            counts: computeV1BankCounts(b.data.questions),
+      .filter((b) => b && !isBuiltinBankId(b.id) && !b.builtin)
+      .map((b) => {
+        const safeQuestions = Array.isArray(b.data?.questions)
+          ? b.data.questions.map(normalizeLegacyQuestion)
+          : [];
+        return {
+          ...b,
+          builtin: false,
+          data: {
+            ...b.data,
+            questions: safeQuestions,
+            meta: {
+              ...b.data.meta,
+              counts: computeV1BankCounts(safeQuestions),
+            },
           },
-        },
-      }))
+        };
+      })
       .sort((a, b) => b.updatedAt - a.updatedAt || b.createdAt - a.createdAt);
   }
 
-  async function saveCustomBank(bank: BankRecord): Promise<BankRecord> {
-    if (bank.id === BUILTIN_AI_BANK_ID || bank.builtin) {
+  async function saveCustomBank(bank: BankRecord, options?: { requireStorage?: boolean }): Promise<BankRecord> {
+    if (isBuiltinBankId(bank.id) || bank.builtin) {
       throw new Error('Cannot overwrite built-in example bank');
     }
-    const counts = computeV1BankCounts(bank.data.questions);
+    const safeQuestions = Array.isArray(bank.data?.questions)
+      ? bank.data.questions.map(normalizeLegacyQuestion)
+      : [];
+    const counts = computeV1BankCounts(safeQuestions);
     const cleanName = bank.name.trim() || '未命名题库';
+    const cloned = cloneBankRecord(bank);
     const normalized: BankRecord = {
-      ...cloneBankRecord(bank),
+      ...cloned,
       name: cleanName,
       description: bank.description?.trim() || undefined,
       builtin: false,
       updatedAt: bank.updatedAt || Date.now(),
       data: {
-        ...bank.data,
+        ...cloned.data,
+        questions: safeQuestions,
         meta: {
-          ...bank.data.meta,
+          ...cloned.data.meta,
           title: cleanName,
           counts,
         },
       },
     };
 
-    memBanks.set(normalized.id, cloneBankRecord(normalized));
     const db = await openQuizHubDb();
+    if (!db && options?.requireStorage) throw new Error('浏览器题库存储暂不可用。');
     if (db) {
       try {
         const tx = db.transaction(STORE_BANKS, 'readwrite');
         tx.objectStore(STORE_BANKS).put(normalized);
         await txDone(tx);
-      } catch {
-        // Fallback already persisted in memBanks
+      } catch (error) {
+        if (options?.requireStorage) throw error;
       }
     }
+    memBanks.set(normalized.id, cloneBankRecord(normalized));
     return normalized;
   }
 
@@ -386,12 +452,12 @@ function createBankDb(scope: PracticeScope) {
     const now = Date.now();
     const safeName = input.name.trim() || '未命名题库';
     const id =
-      input.id && input.id !== BUILTIN_AI_BANK_ID
+      input.id && !isBuiltinBankId(input.id)
         ? input.id
         : `bank-${now.toString(36)}-${Math.random().toString(36).slice(2, 7)}`;
 
     const chapters = [...input.chapters].sort((a, b) => a.id - b.id);
-    const questions = input.questions.map((q) => ({ ...q }));
+    const questions = input.questions.map((q) => normalizeLegacyQuestion(q));
     const data: BankData = {
       meta: {
         title: safeName,
@@ -424,7 +490,7 @@ function createBankDb(scope: PracticeScope) {
     newName: string,
     newDescription?: string,
   ): Promise<BankRecord | null> {
-    if (bankId === BUILTIN_AI_BANK_ID) {
+    if (isBuiltinBankId(bankId)) {
       return null;
     }
     const trimmed = newName.trim();
@@ -457,7 +523,7 @@ function createBankDb(scope: PracticeScope) {
   }
 
   async function deleteCustomBank(bankId: string): Promise<boolean> {
-    if (bankId === BUILTIN_AI_BANK_ID) {
+    if (isBuiltinBankId(bankId)) {
       return false;
     }
 
@@ -478,7 +544,7 @@ function createBankDb(scope: PracticeScope) {
 
     const active = await getActiveBankId();
     if (active === bankId) {
-      await setActiveBankId(BUILTIN_AI_BANK_ID);
+      await setActiveBankId(defaultBankId);
     }
     return true;
   }
@@ -528,7 +594,7 @@ function createBankDb(scope: PracticeScope) {
     }
   }
 
-  async function writeBankProgressRaw(bankId: string, store: UserStore): Promise<boolean> {
+  async function writeBankProgressRaw(bankId: string, store: UserStore, requireStorage = false): Promise<boolean> {
     const clean = cloneStore(store);
     memProgress.set(bankId, clean);
     if (bankId === BUILTIN_AI_BANK_ID) {
@@ -537,7 +603,7 @@ function createBankDb(scope: PracticeScope) {
 
     const db = await openQuizHubDb();
     if (!db) {
-      return true;
+      return !requireStorage;
     }
 
     try {
@@ -562,9 +628,9 @@ function createBankDb(scope: PracticeScope) {
     }
   }
 
-  function saveBankProgress(bankId: string, store: UserStore): Promise<boolean> {
+  function saveBankProgress(bankId: string, store: UserStore, requireStorage = false): Promise<boolean> {
     const prev = progressWriteQueues.get(bankId) ?? Promise.resolve(true);
-    const next = prev.catch(() => true).then(() => writeBankProgressRaw(bankId, store));
+    const next = prev.catch(() => true).then(() => writeBankProgressRaw(bankId, store, requireStorage));
     progressWriteQueues.set(bankId, next);
     return next;
   }
@@ -577,14 +643,18 @@ function createBankDb(scope: PracticeScope) {
 
   async function getActiveBankId(): Promise<string> {
     const raw = await getMeta(META_ACTIVE_BANK_ID);
-    return typeof raw === 'string' && raw.trim().length > 0 ? raw : BUILTIN_AI_BANK_ID;
+    return typeof raw === 'string' && raw.trim().length > 0 ? raw : defaultBankId;
   }
 
   async function setActiveBankId(bankId: string): Promise<void> {
     await setMeta(META_ACTIVE_BANK_ID, bankId);
   }
 
-  async function initBankDb(builtinBank: BankRecord): Promise<InitBankDbResult> {
+  async function initBankDb(
+    builtinBank: BankRecord,
+    extraProgressIds: readonly string[] = [],
+  ): Promise<InitBankDbResult> {
+    defaultBankId = builtinBank.id;
     await openQuizHubDb();
 
     let migratedFromV1 = false;
@@ -605,18 +675,20 @@ function createBankDb(scope: PracticeScope) {
 
     const customBanks = await listCustomBanks();
     const banks: BankRecord[] = [builtinBank, ...customBanks];
-    const validBankIds = new Set(banks.map((b) => b.id));
+    const validBankIds = new Set([...banks.map((b) => b.id), ...extraProgressIds]);
 
     const storedProgress = await readAllProgressMap();
     const progressByBank: Record<string, UserStore> = {};
-    for (const bank of banks) {
-      progressByBank[bank.id] = storedProgress[bank.id]
-        ? cloneStore(storedProgress[bank.id]!)
+    for (const bankId of validBankIds) {
+      progressByBank[bankId] = storedProgress[bankId]
+        ? cloneStore(storedProgress[bankId]!)
         : createEmptyStore();
     }
 
-    const rawActiveId = await getActiveBankId();
-    const activeBankId = validBankIds.has(rawActiveId) ? rawActiveId : BUILTIN_AI_BANK_ID;
+    const rawActiveId = await getMeta(META_ACTIVE_BANK_ID);
+    const activeBankId = typeof rawActiveId === 'string' && validBankIds.has(rawActiveId)
+      ? rawActiveId
+      : builtinBank.id;
     if (activeBankId !== rawActiveId) {
       await setActiveBankId(activeBankId);
     }

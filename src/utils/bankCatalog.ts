@@ -1,4 +1,5 @@
 import { BANK } from '../data/catalog';
+import legacyBank from '../data/legacy-ai-intro-bank.json';
 import type {
   BankData,
   ChapterMeta,
@@ -6,7 +7,7 @@ import type {
   QuestionOrigin,
   QuestionType,
 } from '../types/quiz';
-import { BUILTIN_AI_BANK_ID, type BankRecord } from './quizImportTypes';
+import { BUILTIN_AI_BANK_ID, BUILTIN_GUIDE_BANK_ID, type BankRecord } from './quizImportTypes';
 
 export function computeV1BankCounts(questions: Question[]): BankData['meta']['counts'] {
   const byType: Record<QuestionType, number> = {
@@ -43,8 +44,18 @@ export function computeV1BankCounts(questions: Question[]): BankData['meta']['co
 
 export const BUILTIN_AI_BANK: BankRecord = {
   id: BUILTIN_AI_BANK_ID,
-  name: '人工智能导论',
-  description: '内置示例题库 · 覆盖 9 章全题型 335 题（含综合题库、视频课弹题与复习讲义提炼）',
+  name: legacyBank.meta.title,
+  description: '旧版内置题库 · 恢复原有练习进度',
+  builtin: true,
+  createdAt: 0,
+  updatedAt: 0,
+  data: legacyBank as BankData,
+};
+
+export const BUILTIN_GUIDE_BANK: BankRecord = {
+  id: BUILTIN_GUIDE_BANK_ID,
+  name: 'QuizHub 使用引导示例题库',
+  description: 'QuizHub 内置使用引导示例题库 · 展示单选、多选、公式渲染与 AI 深度解析功能',
   builtin: true,
   createdAt: 0,
   updatedAt: 0,

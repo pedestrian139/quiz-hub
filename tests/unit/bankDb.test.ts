@@ -2,7 +2,7 @@ import 'fake-indexeddb/auto';
 import { IDBFactory } from 'fake-indexeddb';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { STORAGE_KEY, createEmptyStore, saveStore } from '../../src/core/storage';
-import { BUILTIN_AI_BANK } from '../../src/utils/bankCatalog';
+import { BUILTIN_AI_BANK, BUILTIN_GUIDE_BANK } from '../../src/utils/bankCatalog';
 import {
   closeQuizHubDb,
   createCustomBank,
@@ -11,9 +11,12 @@ import {
   getActiveBankId,
   getBankProgress,
   initBankDb,
+  isStoreNonEmpty,
+  mergeUserStores,
   renameCustomBank,
   resetBankProgress,
   resetFallbackMemoryDb,
+  sanitizeUserStore,
   saveBankProgress,
   saveCustomBank,
   setActiveBankId,
@@ -192,14 +195,14 @@ describe('bankDb (IndexedDB multi-bank storage & V1 migration)', () => {
   });
 
   it('BD-05: exports valid .quizhub.json share package and degrades gracefully when indexedDB is blocked', async () => {
-    const shareJson = exportBankSharePackage(BUILTIN_AI_BANK);
+    const shareJson = exportBankSharePackage(BUILTIN_GUIDE_BANK);
     const parsed = JSON.parse(shareJson) as {
       schema: string;
       bank: { name: string; data: { questions: unknown[] } };
     };
     expect(parsed.schema).toBe(QUIZHUB_SHARE_SCHEMA);
-    expect(parsed.bank.name).toBe('人工智能导论');
-    expect(parsed.bank.data.questions).toHaveLength(335);
+    expect(parsed.bank.name).toBe('QuizHub 使用引导示例题库');
+    expect(parsed.bank.data.questions).toHaveLength(3);
 
     // Simulate SecurityError / blocked indexedDB
     closeQuizHubDb();
@@ -220,5 +223,51 @@ describe('bankDb (IndexedDB multi-bank storage & V1 migration)', () => {
     expect(memCreated.name).toBe('内存降级题库');
     const saved = await saveBankProgress(memCreated.id, createEmptyStore());
     expect(saved).toBe(true);
+  });
+
+  it('BD-06: normalizes Phase 1 legacy questions missing explain and preserves aiExplanations across sanitize/merge', async () => {
+    const legacyQuestion = {
+      id: 'legacy-q1',
+      type: 'choice' as const,
+      chapter: 1,
+      stem: '旧题库题目无 explain 字段',
+      options: ['A', 'B'],
+      answer: 0,
+      source: { origin: 'comprehensive_bank' as const, file: 'v1.json', ref: '#1' },
+    } as unknown as Parameters<typeof createCustomBank>[0]['questions'][number];
+
+    const created = await createCustomBank({
+      name: 'Phase 1 兼容题库',
+      chapters: [{ id: 1, short: '第一章', title: '第 1 章' }],
+      questions: [legacyQuestion],
+    });
+    expect(created.data.questions[0]!.explain).toBe('');
+
+    const sanitizedEmpty = sanitizeUserStore({ records: {}, fav: {}, mastery: {}, aiExplanations: {} });
+    expect(sanitizedEmpty).toEqual(createEmptyStore());
+    expect('aiExplanations' in sanitizedEmpty).toBe(false);
+
+    const storeWithAi = sanitizeUserStore({
+      records: {},
+      fav: {},
+      mastery: {},
+      aiExplanations: {
+        q1: { content: '### 【核心考点】\n测试', updatedAt: 200, model: 'deepseek-chat' },
+      },
+    });
+    expect(isStoreNonEmpty(storeWithAi)).toBe(true);
+
+    const older = sanitizeUserStore({
+      records: {},
+      fav: {},
+      mastery: {},
+      aiExplanations: {
+        q1: { content: '旧解析', updatedAt: 100 },
+        q2: { content: '仅旧端', updatedAt: 150 },
+      },
+    });
+    const merged = mergeUserStores(older, storeWithAi);
+    expect(merged.aiExplanations?.q1?.content).toBe('### 【核心考点】\n测试');
+    expect(merged.aiExplanations?.q2?.content).toBe('仅旧端');
   });
 });

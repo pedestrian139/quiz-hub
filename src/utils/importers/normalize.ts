@@ -1,5 +1,6 @@
 import type { ChapterMeta, Question, QuestionType } from '../../types/quiz';
-import type { DraftQuestion, ImportIssue, ImportSourceFormat } from '../quizImportTypes';
+import { computeV1BankCounts } from '../bankCatalog';
+import type { BankRecord, DraftQuestion, ImportIssue, ImportSourceFormat } from '../quizImportTypes';
 
 const TRUE_TOKENS = new Set([
   '对',
@@ -396,8 +397,8 @@ export function parseAnswer(
 export function validateDraftQuestion(draft: DraftQuestion): DraftQuestion {
   const issues: ImportIssue[] = [];
   const stem = cleanText(draft.stem);
-  const options = draft.options.map((o) => cleanText(o));
-  const nonEmptyOptions = options.filter((o) => o.length > 0);
+  const cleanedOptions = draft.options.map((o) => cleanText(o));
+  const nonEmptyOptions = cleanedOptions.filter((o) => o.length > 0);
 
   if (!stem) {
     issues.push({ severity: 'error', field: 'stem', message: '题干不能为空' });
@@ -416,7 +417,7 @@ export function validateDraftQuestion(draft: DraftQuestion): DraftQuestion {
         field: 'options',
         message: `${draft.type === 'multi' ? '多选题' : '单选题'}至少需要 2 个有效选项`,
       });
-    } else if (options.some((o) => o.length === 0)) {
+    } else if (cleanedOptions.some((o) => o.length === 0)) {
       issues.push({
         severity: 'warning',
         field: 'options',
@@ -429,7 +430,7 @@ export function validateDraftQuestion(draft: DraftQuestion): DraftQuestion {
         typeof draft.answer !== 'number' ||
         !Number.isInteger(draft.answer) ||
         draft.answer < 0 ||
-        draft.answer >= nonEmptyOptions.length
+        draft.answer >= cleanedOptions.length
       ) {
         const parsed = parseAnswer('choice', draft.rawAnswer, nonEmptyOptions);
         if (parsed.issues.length > 0) {
@@ -441,13 +442,19 @@ export function validateDraftQuestion(draft: DraftQuestion): DraftQuestion {
             message: '请选择或修正有效的正确答案选项',
           });
         }
+      } else if (cleanedOptions[draft.answer]!.length === 0) {
+        issues.push({
+          severity: 'error',
+          field: 'answer',
+          message: '所选答案指向空选项，请填写选项内容或重新选择答案',
+        });
       }
     } else {
       if (
         !Array.isArray(draft.answer) ||
         draft.answer.length === 0 ||
         draft.answer.some(
-          (idx) => !Number.isInteger(idx) || idx < 0 || idx >= nonEmptyOptions.length,
+          (idx) => !Number.isInteger(idx) || idx < 0 || idx >= cleanedOptions.length,
         )
       ) {
         const parsed = parseAnswer('multi', draft.rawAnswer, nonEmptyOptions);
@@ -460,7 +467,13 @@ export function validateDraftQuestion(draft: DraftQuestion): DraftQuestion {
             message: '请勾选至少 1 个有效的正确选项',
           });
         }
-      } else if (draft.answer.length === 1) {
+      } else if (draft.answer.some((idx) => cleanedOptions[idx]!.length === 0)) {
+        issues.push({
+          severity: 'error',
+          field: 'answer',
+          message: '所选答案包含空选项，请填写选项内容或取消勾选空选项',
+        });
+      } else if (new Set(draft.answer).size === 1) {
         issues.push({
           severity: 'warning',
           field: 'answer',
@@ -495,9 +508,6 @@ export function validateDraftQuestion(draft: DraftQuestion): DraftQuestion {
 
   return {
     ...draft,
-    stem,
-    options,
-    explain: cleanText(draft.explain),
     issues,
   };
 }
@@ -689,27 +699,48 @@ export function finalizeDraftsToBank(
       }
     }
 
-    const cleanedOptions =
-      d.type === 'choice' || d.type === 'multi'
-        ? d.options.map((o) => cleanText(o)).filter(Boolean)
-        : undefined;
+    let cleanedOptions: string[] | undefined;
+    const indexRemap = new Map<number, number>();
+    if (d.type === 'choice' || d.type === 'multi') {
+      cleanedOptions = [];
+      d.options.forEach((rawOpt, oldIdx) => {
+        const cleaned = cleanText(rawOpt);
+        if (cleaned) {
+          indexRemap.set(oldIdx, cleanedOptions!.length);
+          cleanedOptions!.push(cleaned);
+        }
+      });
+    }
 
     let normalizedAnswer: number | number[] | boolean | string = d.answer;
-    if (d.type === 'multi' && Array.isArray(d.answer)) {
-      normalizedAnswer = Array.from(new Set(d.answer)).sort((a, b) => a - b);
+    if (d.type === 'choice' && typeof d.answer === 'number') {
+      const mapped = indexRemap.get(d.answer);
+      normalizedAnswer = mapped !== undefined ? mapped : d.answer;
+    } else if (d.type === 'multi' && Array.isArray(d.answer)) {
+      const mapped = d.answer
+        .map((oldIdx) => indexRemap.get(oldIdx))
+        .filter((newIdx): newIdx is number => newIdx !== undefined);
+      normalizedAnswer = Array.from(new Set(mapped)).sort((a, b) => a - b);
+    } else if ((d.type === 'short' || d.type === 'analysis') && typeof d.answer === 'string') {
+      normalizedAnswer = cleanText(d.answer);
     }
 
     const seq = String(idx + 1).padStart(3, '0');
     const formatNote = d.sourceNote || formatSourceFormatLabel(d.sourceFormat);
+    const cleanedExplanation = cleanText(d.explanation);
+    const cleanedAiAnalysis = cleanText(d.aiAnalysis);
 
     const q: Question = {
       id: `imp-c${chId}-${d.type}-${seq}`,
       type: d.type,
       chapter: chId,
-      stem: d.stem,
+      stem: cleanText(d.stem),
       ...(cleanedOptions ? { options: cleanedOptions } : {}),
       answer: normalizedAnswer,
-      explain: d.explain,
+      explain: cleanText(d.explain),
+      ...(cleanedExplanation ? { explanation: cleanedExplanation } : {}),
+      ...(cleanedAiAnalysis ? { aiAnalysis: cleanedAiAnalysis } : {}),
+      ...(d.aiInferredAnswer === true ? { aiInferredAnswer: true } : {}),
       ...(d.keyPoints.length > 0 ? { keyPoints: [...d.keyPoints] } : {}),
       ...(d.tags.length > 0 ? { tags: [...d.tags] } : {}),
       source: {
@@ -739,5 +770,207 @@ export function finalizeDraftsToBank(
     ...(detectedFormat ? { sourceFormat: detectedFormat } : {}),
     chapters,
     questions,
+  };
+}
+
+function normalizeChapterKey(label: string): string {
+  return cleanText(label).replace(/\s+/g, '').toLowerCase();
+}
+
+function isGenericChapterLabel(label: string, chapterId: number): boolean {
+  const norm = normalizeChapterKey(label);
+  return (
+    !norm ||
+    norm === '默认章节' ||
+    norm === `第${chapterId}章` ||
+    /^第[零一二三四五六七八九十百两\d]+章$/.test(norm)
+  );
+}
+
+function stripLeadingChapterPrefix(title: string): string {
+  return cleanText(title)
+    .replace(/^第\s*[0-9一二三四五六七八九十两]+\s*[章讲单元节]\s*[·:：.\s-]*/i, '')
+    .trim();
+}
+
+export function appendDraftsToBank(
+  existingBank: BankRecord,
+  drafts: DraftQuestion[],
+  meta?: { sourceFormat?: ImportSourceFormat | 'manual' },
+): BankRecord {
+  const validDrafts = drafts
+    .map(validateDraftQuestion)
+    .filter((d) => d.included && !d.issues.some((i) => i.severity === 'error'));
+
+  const chapterMetaMap = new Map<number, ChapterMeta>();
+  const chapterIdByLabel = new Map<string, number>();
+
+  const registerLabel = (label: string, id: number) => {
+    const key = normalizeChapterKey(label);
+    if (key && !isGenericChapterLabel(label, id) && !chapterIdByLabel.has(key)) {
+      chapterIdByLabel.set(key, id);
+    }
+  };
+
+  for (const ch of existingBank.data.chapters) {
+    chapterMetaMap.set(ch.id, { ...ch });
+    registerLabel(ch.short, ch.id);
+    registerLabel(ch.title, ch.id);
+    const strippedTitle = stripLeadingChapterPrefix(ch.title);
+    if (strippedTitle) {
+      registerLabel(strippedTitle, ch.id);
+    }
+  }
+
+  let maxChapterId = Math.max(
+    0,
+    ...chapterMetaMap.keys(),
+    ...existingBank.data.questions.map((q) => (Number.isInteger(q.chapter) ? q.chapter : 0)),
+  );
+
+  const usedQuestionIds = new Set(existingBank.data.questions.map((q) => q.id));
+  let nextSeq = existingBank.data.questions.length + 1;
+
+  const allocQuestionId = (chId: number, type: QuestionType): string => {
+    let candidate = `imp-c${chId}-${type}-${String(nextSeq).padStart(3, '0')}`;
+    while (usedQuestionIds.has(candidate)) {
+      nextSeq += 1;
+      candidate = `imp-c${chId}-${type}-${String(nextSeq).padStart(3, '0')}`;
+    }
+    usedQuestionIds.add(candidate);
+    nextSeq += 1;
+    return candidate;
+  };
+
+  const appendedQuestions: Question[] = validDrafts.map((d, idx) => {
+    const chLabel = cleanText(d.chapterName);
+    const labelKey = normalizeChapterKey(chLabel);
+    const genericDraftLabel = d.chapter > 0 ? isGenericChapterLabel(chLabel, d.chapter) : !chLabel;
+
+    let chId: number;
+    const matchedByLabel =
+      labelKey && !genericDraftLabel ? chapterIdByLabel.get(labelKey) : undefined;
+
+    if (matchedByLabel !== undefined) {
+      chId = matchedByLabel;
+    } else if (d.chapter > 0) {
+      const existingCh = chapterMetaMap.get(d.chapter);
+      if (!existingCh) {
+        chId = d.chapter;
+        maxChapterId = Math.max(maxChapterId, chId);
+        const shortName = chLabel || `第 ${chId} 章`;
+        chapterMetaMap.set(chId, {
+          id: chId,
+          short: shortName,
+          title: shortName.startsWith('第') ? shortName : `第 ${chId} 章 ${shortName}`,
+        });
+        registerLabel(shortName, chId);
+      } else if (
+        genericDraftLabel ||
+        normalizeChapterKey(existingCh.short) === labelKey ||
+        normalizeChapterKey(existingCh.title) === labelKey
+      ) {
+        chId = d.chapter;
+      } else if (
+        isGenericChapterLabel(existingCh.short, d.chapter) &&
+        isGenericChapterLabel(existingCh.title, d.chapter)
+      ) {
+        chId = d.chapter;
+        chapterMetaMap.set(chId, {
+          id: chId,
+          short: chLabel,
+          title: chLabel.startsWith('第') ? chLabel : `第 ${chId} 章 ${chLabel}`,
+        });
+        registerLabel(chLabel, chId);
+      } else {
+        maxChapterId += 1;
+        chId = maxChapterId;
+        chapterMetaMap.set(chId, {
+          id: chId,
+          short: chLabel,
+          title: chLabel.startsWith('第') ? chLabel : `第 ${chId} 章 ${chLabel}`,
+        });
+        registerLabel(chLabel, chId);
+      }
+    } else {
+      maxChapterId += 1;
+      chId = maxChapterId;
+      const shortName = chLabel || '默认章节';
+      chapterMetaMap.set(chId, {
+        id: chId,
+        short: shortName,
+        title: shortName.startsWith('第') ? shortName : `第 ${chId} 章 ${shortName}`,
+      });
+      registerLabel(shortName, chId);
+    }
+
+    let cleanedOptions: string[] | undefined;
+    const indexRemap = new Map<number, number>();
+    if (d.type === 'choice' || d.type === 'multi') {
+      cleanedOptions = [];
+      d.options.forEach((rawOpt, oldIdx) => {
+        const cleaned = cleanText(rawOpt);
+        if (cleaned) {
+          indexRemap.set(oldIdx, cleanedOptions!.length);
+          cleanedOptions!.push(cleaned);
+        }
+      });
+    }
+
+    let normalizedAnswer: number | number[] | boolean | string = d.answer;
+    if (d.type === 'choice' && typeof d.answer === 'number') {
+      const mapped = indexRemap.get(d.answer);
+      normalizedAnswer = mapped !== undefined ? mapped : d.answer;
+    } else if (d.type === 'multi' && Array.isArray(d.answer)) {
+      const mapped = d.answer
+        .map((oldIdx) => indexRemap.get(oldIdx))
+        .filter((newIdx): newIdx is number => newIdx !== undefined);
+      normalizedAnswer = Array.from(new Set(mapped)).sort((a, b) => a - b);
+    } else if ((d.type === 'short' || d.type === 'analysis') && typeof d.answer === 'string') {
+      normalizedAnswer = cleanText(d.answer);
+    }
+
+    const formatNote = d.sourceNote || formatSourceFormatLabel(meta?.sourceFormat ?? d.sourceFormat);
+    const cleanedExplanation = cleanText(d.explanation);
+    const cleanedAiAnalysis = cleanText(d.aiAnalysis);
+
+    return {
+      id: allocQuestionId(chId, d.type),
+      type: d.type,
+      chapter: chId,
+      stem: cleanText(d.stem),
+      ...(cleanedOptions ? { options: cleanedOptions } : {}),
+      answer: normalizedAnswer,
+      explain: cleanText(d.explain),
+      ...(cleanedExplanation ? { explanation: cleanedExplanation } : {}),
+      ...(cleanedAiAnalysis ? { aiAnalysis: cleanedAiAnalysis } : {}),
+      ...(d.aiInferredAnswer === true ? { aiInferredAnswer: true } : {}),
+      ...(d.keyPoints.length > 0 ? { keyPoints: [...d.keyPoints] } : {}),
+      ...(d.tags.length > 0 ? { tags: [...d.tags] } : {}),
+      source: {
+        origin: d.preserveOrigin ?? 'comprehensive_bank',
+        file: existingBank.name,
+        ref: d.sourceRef || `#${existingBank.data.questions.length + idx + 1}`,
+        ...(formatNote ? { note: formatNote } : {}),
+      },
+    };
+  });
+
+  const mergedQuestions = [...existingBank.data.questions, ...appendedQuestions];
+  const mergedChapters = Array.from(chapterMetaMap.values()).sort((a, b) => a.id - b.id);
+  const counts = computeV1BankCounts(mergedQuestions);
+
+  return {
+    ...existingBank,
+    updatedAt: Math.max(Date.now(), (existingBank.updatedAt || 0) + 1),
+    data: {
+      ...existingBank.data,
+      meta: {
+        ...existingBank.data.meta,
+        counts,
+      },
+      chapters: mergedChapters,
+      questions: mergedQuestions,
+    },
   };
 }

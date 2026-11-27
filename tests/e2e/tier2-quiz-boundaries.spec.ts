@@ -1,3 +1,4 @@
+import type { Page } from '@playwright/test';
 import {
   expect,
   onlyDesktop,
@@ -8,6 +9,13 @@ import {
   assertFullLayoutAudit,
   assertNoHorizontalOverflow,
 } from './helpers/audit.ts';
+import {
+  FIXTURE_BANK,
+  FIXTURE_BANK_ID,
+  QUIZ_DB_NAME,
+  QUIZ_DB_VERSION,
+  seedFixtureBank,
+} from './helpers/fixtureBank.ts';
 import {
   answerCurrentQuestion,
   btnNext,
@@ -20,6 +28,7 @@ import {
   hubCardQuiz,
   modeCard,
   navLink,
+  notesChapter,
   qChapterTag,
   qStem,
   quizExit,
@@ -40,13 +49,72 @@ import {
   getCorrectChoiceFor,
   getPartialWrongChoiceFor,
   loadBankCatalog,
+  loadNotesCatalog,
+  makeEmptyStore,
   makeSeededStore,
   pickQuestion,
   pickQuestions,
-  readPersistedStore,
-  seedStaleIdsStoreAndReload,
-  seedStoreAndReload,
+  type BankData,
+  type UserStore,
 } from './helpers/storage.ts';
+
+async function readIdbProgress(page: Page, bankId = FIXTURE_BANK_ID): Promise<UserStore | null> {
+  return page.evaluate(
+    async ({ dbName, dbVersion, targetBankId }) => {
+      return new Promise<UserStore | null>((resolve, reject) => {
+        const req = window.indexedDB.open(dbName, dbVersion);
+        req.onerror = () => reject(req.error ?? new Error('Failed to open quizhub-v2 IDB'));
+        req.onsuccess = () => {
+          const db = req.result;
+          if (!db.objectStoreNames.contains('progress')) {
+            db.close();
+            resolve(null);
+            return;
+          }
+          const tx = db.transaction('progress', 'readonly');
+          const getReq = tx.objectStore('progress').get(targetBankId);
+          getReq.onsuccess = () => {
+            const entry = getReq.result as { store?: UserStore } | undefined;
+            db.close();
+            resolve(entry?.store ?? null);
+          };
+          getReq.onerror = () => {
+            db.close();
+            reject(getReq.error ?? new Error('Failed to read progress store'));
+          };
+        };
+      });
+    },
+    { dbName: QUIZ_DB_NAME, dbVersion: QUIZ_DB_VERSION, targetBankId: bankId },
+  );
+}
+
+function makeStaleIdsStore(
+  opts: {
+    validCorrectIds?: string[];
+    validWrongIds?: string[];
+    validFavIds?: string[];
+    staleCount?: number;
+  },
+  bank: BankData = FIXTURE_BANK,
+): UserStore {
+  const store = makeSeededStore(
+    {
+      correctIds: opts.validCorrectIds,
+      wrongIds: opts.validWrongIds,
+      favIds: opts.validFavIds,
+    },
+    bank,
+  );
+  const staleCount = opts.staleCount ?? 2;
+  for (let i = 1; i <= staleCount; i++) {
+    const staleId = `__stale_removed_q${i}`;
+    store.records[staleId] = { ok: 0, choice: 0, ts: 1_700_000_000_000 + i };
+    store.fav[staleId] = true;
+    store.mastery[staleId] = 1;
+  }
+  return store;
+}
 
 test.describe('Tier 2: Portal, Home, Modes & Objective Quiz Boundaries (T2-001..T2-056)', () => {
   test('T2-001 [UF01] Hub loads cleanly with trailing slash and query params', async ({
@@ -110,23 +178,27 @@ test.describe('Tier 2: Portal, Home, Modes & Objective Quiz Boundaries (T2-001..
     page,
   }, testInfo) => {
     onlyDesktop(testInfo);
-    await gotoRoute(page, '#/quiz');
+    const notes = loadNotesCatalog();
+    const firstChId = notes.chapters[0]?.id ?? 1;
+    await seedFixtureBank(page, FIXTURE_BANK, makeEmptyStore(), { targetHashRoute: '#/quiz' });
     await selectQuizFilters(page, { count: 10 });
     await modeCard(page, 'all').click();
     await expect(quizTimer(page)).toBeVisible();
     await navLink(page, 'notes').click();
     await expect(page).toHaveURL(/#\/notes/);
-    await expect(page.getByTestId('notes-chapter-1')).toBeVisible();
+    await expect(notesChapter(page, firstChId)).toBeVisible();
   });
 
   test('T2-007 [UF02] Reloading deep-link #/notes preserves Handbook view', async ({
     page,
   }, testInfo) => {
     onlyDesktop(testInfo);
+    const notes = loadNotesCatalog();
+    const firstChId = notes.chapters[0]?.id ?? 1;
     await gotoRoute(page, '#/notes');
     await page.reload({ waitUntil: 'domcontentloaded' });
     await expect(page).toHaveURL(/#\/notes/);
-    await expect(page.getByTestId('notes-chapter-1')).toBeVisible();
+    await expect(notesChapter(page, firstChId)).toBeVisible();
   });
 
   test('T2-008 [UF02] Reloading deep-link #/wrong with 0 wrong items renders empty state', async ({
@@ -143,11 +215,13 @@ test.describe('Tier 2: Portal, Home, Modes & Objective Quiz Boundaries (T2-001..
     page,
   }, testInfo) => {
     onlyDesktop(testInfo);
+    const bank = loadBankCatalog();
+    const targetCh = bank.chapters[bank.chapters.length - 1]?.id ?? 1;
     await gotoRoute(page, '#/quiz');
-    await selectOnlyChapters(page, [2]);
+    await selectOnlyChapters(page, [targetCh]);
     await navLink(page, 'quiz').click();
     await expect(page).toHaveURL(/#\/quiz/);
-    await expect(chapterChip(page, 2)).toHaveAttribute('aria-pressed', 'true');
+    await expect(chapterChip(page, targetCh)).toHaveAttribute('aria-pressed', 'true');
   });
 
   test('T2-010 [UF02] Mobile 390x844 global nav stays clickable after scrolling Handbook', async ({
@@ -161,21 +235,21 @@ test.describe('Tier 2: Portal, Home, Modes & Objective Quiz Boundaries (T2-001..
     await expect(page).toHaveURL(/#\/quiz/);
   });
 
-  test('T2-011 [UF03] Stale/deleted IDs in localStorage are excluded from Home stats', async ({
+  test('T2-011 [UF03] Stale/deleted IDs in store are excluded from Home stats', async ({
     page,
   }, testInfo) => {
     onlyDesktop(testInfo);
-    const qs = pickQuestions({ type: 'choice', limit: 5 });
-    await seedStaleIdsStoreAndReload(
-      page,
+    const qs = pickQuestions({ type: 'choice', limit: 5 }, FIXTURE_BANK);
+    const store = makeStaleIdsStore(
       {
         validCorrectIds: [qs[0]!.id, qs[1]!.id, qs[2]!.id, qs[3]!.id],
         validWrongIds: [qs[4]!.id],
         validFavIds: [qs[0]!.id],
         staleCount: 3,
       },
-      '#/quiz',
+      FIXTURE_BANK,
     );
+    await seedFixtureBank(page, FIXTURE_BANK, store, { targetHashRoute: '#/quiz' });
     await expect(statCard(page, 'done')).toContainText('5');
     await expect(statCard(page, 'acc')).toContainText('80%');
     await expect(statCard(page, 'wrong')).toContainText('1');
@@ -196,9 +270,9 @@ test.describe('Tier 2: Portal, Home, Modes & Objective Quiz Boundaries (T2-001..
     page,
   }, testInfo) => {
     onlyDesktop(testInfo);
-    const qs = pickQuestions({ type: 'tf', limit: 10 });
-    const store = makeSeededStore({ wrongIds: qs.map((q) => q.id) });
-    await seedStoreAndReload(page, store, '#/quiz');
+    const qs = pickQuestions({ type: 'tf', limit: 10 }, FIXTURE_BANK);
+    const store = makeSeededStore({ wrongIds: qs.map((q) => q.id) }, FIXTURE_BANK);
+    await seedFixtureBank(page, FIXTURE_BANK, store, { targetHashRoute: '#/quiz' });
     await expect(statCard(page, 'done')).toContainText('10');
     await expect(statCard(page, 'acc')).toContainText('0%');
     await expect(statCard(page, 'wrong')).toContainText('10');
@@ -208,9 +282,9 @@ test.describe('Tier 2: Portal, Home, Modes & Objective Quiz Boundaries (T2-001..
     page,
   }, testInfo) => {
     onlyDesktop(testInfo);
-    const qs = pickQuestions({ type: 'tf', limit: 10 });
-    const store = makeSeededStore({ correctIds: qs.map((q) => q.id) });
-    await seedStoreAndReload(page, store, '#/quiz');
+    const qs = pickQuestions({ type: 'tf', limit: 10 }, FIXTURE_BANK);
+    const store = makeSeededStore({ correctIds: qs.map((q) => q.id) }, FIXTURE_BANK);
+    await seedFixtureBank(page, FIXTURE_BANK, store, { targetHashRoute: '#/quiz' });
     await expect(statCard(page, 'done')).toContainText('10');
     await expect(statCard(page, 'acc')).toContainText('100%');
     await expect(statCard(page, 'wrong')).toContainText('0');
@@ -220,10 +294,10 @@ test.describe('Tier 2: Portal, Home, Modes & Objective Quiz Boundaries (T2-001..
     page,
   }, testInfo) => {
     onlyDesktop(testInfo);
-    const q = pickQuestion({ type: 'tf' });
-    const stemMap = buildQuestionStemMap();
-    const store = makeSeededStore({ wrongIds: [q.id] });
-    await seedStoreAndReload(page, store, '#/wrong');
+    const q = pickQuestion({ type: 'tf' }, FIXTURE_BANK);
+    const stemMap = buildQuestionStemMap(FIXTURE_BANK);
+    const store = makeSeededStore({ wrongIds: [q.id] }, FIXTURE_BANK);
+    await seedFixtureBank(page, FIXTURE_BANK, store, { targetHashRoute: '#/wrong' });
     await page.getByTestId('list-redo-all').click();
     await answerCurrentQuestion(page, stemMap, 'correct');
     await quizExit(page).click();
@@ -236,8 +310,6 @@ test.describe('Tier 2: Portal, Home, Modes & Objective Quiz Boundaries (T2-001..
     page,
   }, testInfo) => {
     onlyDesktop(testInfo);
-    const bank = loadBankCatalog();
-    // Find a (origin, type) pair with 0 questions
     const origins = [
       'comprehensive_bank',
       'video_popup',
@@ -249,7 +321,7 @@ test.describe('Tier 2: Portal, Home, Modes & Objective Quiz Boundaries (T2-001..
     for (const origin of origins) {
       for (const type of types) {
         if (
-          bank.questions.filter((q) => q.source.origin === origin && q.type === type)
+          FIXTURE_BANK.questions.filter((q) => q.source.origin === origin && q.type === type)
             .length === 0
         ) {
           emptyPair = { origin, type };
@@ -259,7 +331,7 @@ test.describe('Tier 2: Portal, Home, Modes & Objective Quiz Boundaries (T2-001..
       if (emptyPair) break;
     }
 
-    await gotoRoute(page, '#/quiz');
+    await seedFixtureBank(page, FIXTURE_BANK, makeEmptyStore(), { targetHashRoute: '#/quiz' });
     if (emptyPair) {
       await filterOrigin(page).selectOption(emptyPair.origin);
       page.once('dialog', (d) => d.accept());
@@ -267,15 +339,14 @@ test.describe('Tier 2: Portal, Home, Modes & Objective Quiz Boundaries (T2-001..
       await expect(modeCard(page, 'all')).toBeVisible();
       await expect(quizProgressText(page)).toBeHidden();
     } else {
-      // Fallback: find a chapter+type pair with 0 questions
       let foundCh = 1;
       let foundType: (typeof types)[number] = 'analysis';
-      for (let ch = 1; ch <= 9; ch++) {
+      for (const ch of FIXTURE_BANK.chapters) {
         for (const t of types) {
           if (
-            bank.questions.filter((q) => q.chapter === ch && q.type === t).length === 0
+            FIXTURE_BANK.questions.filter((q) => q.chapter === ch.id && q.type === t).length === 0
           ) {
-            foundCh = ch;
+            foundCh = ch.id;
             foundType = t;
             break;
           }
@@ -292,12 +363,15 @@ test.describe('Tier 2: Portal, Home, Modes & Objective Quiz Boundaries (T2-001..
     page,
   }, testInfo) => {
     onlyDesktop(testInfo);
-    const choices = pickQuestions({ type: 'choice', limit: 4 });
-    const store = makeSeededStore({
-      correctIds: [choices[0]!.id, choices[1]!.id, choices[2]!.id],
-      wrongIds: [choices[3]!.id],
-    });
-    await seedStoreAndReload(page, store, '#/quiz');
+    const choices = pickQuestions({ type: 'choice', limit: 4 }, FIXTURE_BANK);
+    const store = makeSeededStore(
+      {
+        correctIds: [choices[0]!.id, choices[1]!.id, choices[2]!.id],
+        wrongIds: [choices[3]!.id],
+      },
+      FIXTURE_BANK,
+    );
+    await seedFixtureBank(page, FIXTURE_BANK, store, { targetHashRoute: '#/quiz' });
     await expect(modeCard(page, 'choice')).toContainText('75%');
     await expect(modeCard(page, 'multi')).not.toContainText('正确率');
   });
@@ -306,13 +380,13 @@ test.describe('Tier 2: Portal, Home, Modes & Objective Quiz Boundaries (T2-001..
     page,
   }, testInfo) => {
     onlyDesktop(testInfo);
-    const ch1Analysis = pickQuestions({ chapter: 1, type: 'analysis' });
+    const ch1Analysis = pickQuestions({ chapter: 1, type: 'analysis' }, FIXTURE_BANK);
     const targetType = ch1Analysis.length > 0 ? 'analysis' : 'short';
-    const pool = pickQuestions({ chapter: 1, type: targetType });
+    const pool = pickQuestions({ chapter: 1, type: targetType }, FIXTURE_BANK);
     expect(pool.length).toBeGreaterThan(0);
     expect(pool.length).toBeLessThan(30);
 
-    await gotoRoute(page, '#/quiz');
+    await seedFixtureBank(page, FIXTURE_BANK, makeEmptyStore(), { targetHashRoute: '#/quiz' });
     await selectQuizFilters(page, { chapters: [1], count: 30 });
     await modeCard(page, targetType).click();
     await expect(quizProgressText(page)).toContainText(`1 / ${pool.length}`);
@@ -323,7 +397,7 @@ test.describe('Tier 2: Portal, Home, Modes & Objective Quiz Boundaries (T2-001..
     page,
   }, testInfo) => {
     onlyMobile(testInfo);
-    await gotoRoute(page, '#/quiz');
+    await seedFixtureBank(page, FIXTURE_BANK, makeEmptyStore(), { targetHashRoute: '#/quiz' });
     await assertFullLayoutAudit(page);
     const b1 = await modeCard(page, 'all').boundingBox();
     const b2 = await modeCard(page, 'choice').boundingBox();
@@ -336,12 +410,12 @@ test.describe('Tier 2: Portal, Home, Modes & Objective Quiz Boundaries (T2-001..
     page,
   }, testInfo) => {
     onlyDesktop(testInfo);
-    const choiceQ = pickQuestion({ type: 'choice' });
-    await seedStaleIdsStoreAndReload(
-      page,
+    const choiceQ = pickQuestion({ type: 'choice' }, FIXTURE_BANK);
+    const store = makeStaleIdsStore(
       { validCorrectIds: [choiceQ.id], staleCount: 4 },
-      '#/quiz',
+      FIXTURE_BANK,
     );
+    await seedFixtureBank(page, FIXTURE_BANK, store, { targetHashRoute: '#/quiz' });
     await expect(modeCard(page, 'choice')).toContainText('100%');
   });
 
@@ -349,7 +423,7 @@ test.describe('Tier 2: Portal, Home, Modes & Objective Quiz Boundaries (T2-001..
     page,
   }, testInfo) => {
     onlyDesktop(testInfo);
-    await gotoRoute(page, '#/quiz');
+    await seedFixtureBank(page, FIXTURE_BANK, makeEmptyStore(), { targetHashRoute: '#/quiz' });
     await selectOnlyChapters(page, [9]);
     await expect(chapterChip(page, 9)).toHaveAttribute('aria-pressed', 'true');
     await chapterChip(page, 9).click();
@@ -360,8 +434,8 @@ test.describe('Tier 2: Portal, Home, Modes & Objective Quiz Boundaries (T2-001..
     page,
   }, testInfo) => {
     onlyDesktop(testInfo);
-    const ch9Count = pickQuestions({ chapter: 9 }).length;
-    await gotoRoute(page, '#/quiz');
+    const ch9Count = pickQuestions({ chapter: 9 }, FIXTURE_BANK).length;
+    await seedFixtureBank(page, FIXTURE_BANK, makeEmptyStore(), { targetHashRoute: '#/quiz' });
     await selectOnlyChapters(page, [9]);
     for (let i = 0; i < 3; i++) {
       await chapterChip(page, 9).click();
@@ -374,12 +448,12 @@ test.describe('Tier 2: Portal, Home, Modes & Objective Quiz Boundaries (T2-001..
     page,
   }, testInfo) => {
     onlyDesktop(testInfo);
-    await gotoRoute(page, '#/quiz');
+    await seedFixtureBank(page, FIXTURE_BANK, makeEmptyStore(), { targetHashRoute: '#/quiz' });
     await selectOnlyChapters(page, [1]);
     await chapterChip(page, 'all').click();
     await chapterChip(page, 'all').click();
-    for (let ch = 1; ch <= 9; ch++) {
-      await expect(chapterChip(page, ch)).toHaveAttribute('aria-pressed', 'true');
+    for (const ch of FIXTURE_BANK.chapters) {
+      await expect(chapterChip(page, ch.id)).toHaveAttribute('aria-pressed', 'true');
     }
   });
 
@@ -387,7 +461,7 @@ test.describe('Tier 2: Portal, Home, Modes & Objective Quiz Boundaries (T2-001..
     page,
   }, testInfo) => {
     onlyDesktop(testInfo);
-    await gotoRoute(page, '#/quiz');
+    await seedFixtureBank(page, FIXTURE_BANK, makeEmptyStore(), { targetHashRoute: '#/quiz' });
     await chapterChip(page, 1).click();
     await chapterChip(page, 2).click();
     await expect(chapterChip(page, 'all')).toHaveAttribute('aria-pressed', 'false');
@@ -400,10 +474,10 @@ test.describe('Tier 2: Portal, Home, Modes & Objective Quiz Boundaries (T2-001..
     page,
   }, testInfo) => {
     onlyMobile(testInfo);
-    await gotoRoute(page, '#/quiz');
+    await seedFixtureBank(page, FIXTURE_BANK, makeEmptyStore(), { targetHashRoute: '#/quiz' });
     await assertFullLayoutAudit(page);
-    for (let ch = 1; ch <= 9; ch++) {
-      await expect(chapterChip(page, ch)).toBeVisible();
+    for (const ch of FIXTURE_BANK.chapters) {
+      await expect(chapterChip(page, ch.id)).toBeVisible();
     }
   });
 
@@ -411,9 +485,12 @@ test.describe('Tier 2: Portal, Home, Modes & Objective Quiz Boundaries (T2-001..
     page,
   }, testInfo) => {
     onlyDesktop(testInfo);
-    await gotoRoute(page, '#/quiz');
+    await seedFixtureBank(page, FIXTURE_BANK, makeEmptyStore(), { targetHashRoute: '#/quiz' });
     await filterOrigin(page).selectOption('comprehensive_bank');
-    const compShorts = pickQuestions({ origin: 'comprehensive_bank', type: 'short' });
+    const compShorts = pickQuestions(
+      { origin: 'comprehensive_bank', type: 'short' },
+      FIXTURE_BANK,
+    );
     if (compShorts.length === 0) {
       page.once('dialog', (d) => d.accept());
       await modeCard(page, 'short').click();
@@ -431,22 +508,22 @@ test.describe('Tier 2: Portal, Home, Modes & Objective Quiz Boundaries (T2-001..
     page,
   }, testInfo) => {
     onlyDesktop(testInfo);
-    const bank = loadBankCatalog();
-    // Find a (chapter, type, origin) or (chapter, type) with pool size === 1, else retry 1 wrong item
     let singleFound = false;
-    for (let ch = 1; ch <= 9 && !singleFound; ch++) {
+    for (const ch of FIXTURE_BANK.chapters) {
       for (const origin of [
         'comprehensive_bank',
         'video_popup',
         'review_notes_synthesized',
       ] as const) {
         for (const t of ['choice', 'multi', 'tf', 'short', 'analysis'] as const) {
-          const matches = bank.questions.filter(
-            (q) => q.chapter === ch && q.source.origin === origin && q.type === t,
+          const matches = FIXTURE_BANK.questions.filter(
+            (q) => q.chapter === ch.id && q.source.origin === origin && q.type === t,
           );
           if (matches.length === 1) {
-            await gotoRoute(page, '#/quiz');
-            await selectQuizFilters(page, { chapters: [ch], origin, count: 10 });
+            await seedFixtureBank(page, FIXTURE_BANK, makeEmptyStore(), {
+              targetHashRoute: '#/quiz',
+            });
+            await selectQuizFilters(page, { chapters: [ch.id], origin, count: 10 });
             await modeCard(page, t).click();
             singleFound = true;
             break;
@@ -454,10 +531,16 @@ test.describe('Tier 2: Portal, Home, Modes & Objective Quiz Boundaries (T2-001..
         }
         if (singleFound) break;
       }
+      if (singleFound) break;
     }
     if (!singleFound) {
-      const q = pickQuestion({ type: 'choice' });
-      await seedStoreAndReload(page, makeSeededStore({ wrongIds: [q.id] }), '#/wrong');
+      const q = pickQuestion({ type: 'choice' }, FIXTURE_BANK);
+      await seedFixtureBank(
+        page,
+        FIXTURE_BANK,
+        makeSeededStore({ wrongIds: [q.id] }, FIXTURE_BANK),
+        { targetHashRoute: '#/wrong' },
+      );
       await page.getByTestId('list-redo-all').click();
     }
     await expect(quizProgressText(page)).toContainText('1 / 1');
@@ -468,7 +551,7 @@ test.describe('Tier 2: Portal, Home, Modes & Objective Quiz Boundaries (T2-001..
     page,
   }, testInfo) => {
     onlyDesktop(testInfo);
-    await gotoRoute(page, '#/quiz');
+    await seedFixtureBank(page, FIXTURE_BANK, makeEmptyStore(), { targetHashRoute: '#/quiz' });
     await selectQuizFilters(page, { chapters: [2, 4], order: 'seq', count: 10 });
     await modeCard(page, 'all').click();
     const firstRun: string[] = [];
@@ -491,7 +574,7 @@ test.describe('Tier 2: Portal, Home, Modes & Objective Quiz Boundaries (T2-001..
     page,
   }, testInfo) => {
     onlyDesktop(testInfo);
-    await gotoRoute(page, '#/quiz');
+    await seedFixtureBank(page, FIXTURE_BANK, makeEmptyStore(), { targetHashRoute: '#/quiz' });
     await selectQuizFilters(page, { chapters: 'all', order: 'random', count: 20 });
     await modeCard(page, 'all').click();
     const run1: string[] = [];
@@ -516,22 +599,26 @@ test.describe('Tier 2: Portal, Home, Modes & Objective Quiz Boundaries (T2-001..
     page,
   }, testInfo) => {
     onlyDesktop(testInfo);
-    const bank = loadBankCatalog();
-    await gotoRoute(page, '#/quiz');
+    await seedFixtureBank(page, FIXTURE_BANK, makeEmptyStore(), { targetHashRoute: '#/quiz' });
     await filterOrigin(page).selectOption('video_popup');
     await expect(modeCard(page, 'all')).toContainText(
-      `${bank.meta.counts.byOrigin.video_popup}`,
+      `${FIXTURE_BANK.meta.counts.byOrigin.video_popup}`,
     );
     await filterOrigin(page).selectOption('all');
-    await expect(modeCard(page, 'all')).toContainText(`${bank.meta.counts.total}`);
+    await expect(modeCard(page, 'all')).toContainText(`${FIXTURE_BANK.meta.counts.total}`);
   });
 
   test('T2-031 [UF07] 1-question session displays 1 / 1 and 100% progress bar', async ({
     page,
   }, testInfo) => {
     onlyDesktop(testInfo);
-    const q = pickQuestion({ type: 'choice' });
-    await seedStoreAndReload(page, makeSeededStore({ wrongIds: [q.id] }), '#/wrong');
+    const q = pickQuestion({ type: 'choice' }, FIXTURE_BANK);
+    await seedFixtureBank(
+      page,
+      FIXTURE_BANK,
+      makeSeededStore({ wrongIds: [q.id] }, FIXTURE_BANK),
+      { targetHashRoute: '#/wrong' },
+    );
     await page.getByTestId('list-redo-all').click();
     await expect(quizProgressText(page)).toContainText('1 / 1');
     await expect(quizProgressBar(page)).toHaveAttribute('aria-valuenow', '1');
@@ -542,7 +629,7 @@ test.describe('Tier 2: Portal, Home, Modes & Objective Quiz Boundaries (T2-001..
     page,
   }, testInfo) => {
     onlyDesktop(testInfo);
-    await gotoRoute(page, '#/quiz');
+    await seedFixtureBank(page, FIXTURE_BANK, makeEmptyStore(), { targetHashRoute: '#/quiz' });
     await selectQuizFilters(page, { count: 10 });
     await modeCard(page, 'all').click();
     await page.waitForTimeout(2100);
@@ -557,8 +644,13 @@ test.describe('Tier 2: Portal, Home, Modes & Objective Quiz Boundaries (T2-001..
     page,
   }, testInfo) => {
     onlyDesktop(testInfo);
-    const q = pickQuestion({ type: 'choice' });
-    await seedStoreAndReload(page, makeSeededStore({ favIds: [q.id] }), '#/fav');
+    const q = pickQuestion({ type: 'choice' }, FIXTURE_BANK);
+    await seedFixtureBank(
+      page,
+      FIXTURE_BANK,
+      makeSeededStore({ favIds: [q.id] }, FIXTURE_BANK),
+      { targetHashRoute: '#/fav' },
+    );
     await page.getByTestId('list-redo-all').click();
     await expect(quizModeTitle(page)).toContainText('收藏重练');
     await expect(quizModeTitle(page)).not.toContainText('错题重练');
@@ -568,8 +660,13 @@ test.describe('Tier 2: Portal, Home, Modes & Objective Quiz Boundaries (T2-001..
     page,
   }, testInfo) => {
     onlyDesktop(testInfo);
-    const q = pickQuestion({ type: 'choice' });
-    await seedStoreAndReload(page, makeSeededStore({ wrongIds: [q.id] }), '#/wrong');
+    const q = pickQuestion({ type: 'choice' }, FIXTURE_BANK);
+    await seedFixtureBank(
+      page,
+      FIXTURE_BANK,
+      makeSeededStore({ wrongIds: [q.id] }, FIXTURE_BANK),
+      { targetHashRoute: '#/wrong' },
+    );
     await page.getByTestId('list-redo-all').click();
     await expect(quizModeTitle(page)).toContainText('错题重练');
   });
@@ -578,8 +675,13 @@ test.describe('Tier 2: Portal, Home, Modes & Objective Quiz Boundaries (T2-001..
     page,
   }, testInfo) => {
     onlyMobile(testInfo);
-    const q = pickQuestion({ type: 'choice' });
-    await seedStoreAndReload(page, makeSeededStore({ favIds: [q.id] }), '#/fav');
+    const q = pickQuestion({ type: 'choice' }, FIXTURE_BANK);
+    await seedFixtureBank(
+      page,
+      FIXTURE_BANK,
+      makeSeededStore({ favIds: [q.id] }, FIXTURE_BANK),
+      { targetHashRoute: '#/fav' },
+    );
     await page.getByTestId('list-redo-all').click();
     await assertFullLayoutAudit(page);
     await expect(quizExit(page)).toBeVisible();
@@ -590,24 +692,29 @@ test.describe('Tier 2: Portal, Home, Modes & Objective Quiz Boundaries (T2-001..
     page,
   }, testInfo) => {
     onlyDesktop(testInfo);
-    await gotoRoute(page, '#/quiz');
+    await seedFixtureBank(page, FIXTURE_BANK, makeEmptyStore(), { targetHashRoute: '#/quiz' });
     await selectQuizFilters(page, { count: 10 });
     await modeCard(page, 'all').click();
     for (let i = 0; i < 4; i++) {
       await btnStar(page).click();
     }
     await expect(btnStar(page)).toHaveAttribute('aria-pressed', 'false');
-    const store = await readPersistedStore(page);
-    expect(Object.values(store?.fav ?? {}).filter(Boolean)).toHaveLength(0);
+    await expect
+      .poll(async () => Object.values((await readIdbProgress(page))?.fav ?? {}).filter(Boolean).length)
+      .toBe(0);
   });
 
   test('T2-037 [UF08] Long question stem renders cleanly without horizontal overflow', async ({
     page,
   }, testInfo) => {
     onlyDesktop(testInfo);
-    const bank = loadBankCatalog();
-    const longQ = [...bank.questions].sort((a, b) => b.stem.length - a.stem.length)[0]!;
-    await seedStoreAndReload(page, makeSeededStore({ favIds: [longQ.id] }), '#/fav');
+    const longQ = [...FIXTURE_BANK.questions].sort((a, b) => b.stem.length - a.stem.length)[0]!;
+    await seedFixtureBank(
+      page,
+      FIXTURE_BANK,
+      makeSeededStore({ favIds: [longQ.id] }, FIXTURE_BANK),
+      { targetHashRoute: '#/fav' },
+    );
     await page.getByTestId('list-redo-all').click();
     await expect(qStem(page)).toContainText(longQ.stem.slice(0, 20));
     await assertNoHorizontalOverflow(page);
@@ -617,11 +724,15 @@ test.describe('Tier 2: Portal, Home, Modes & Objective Quiz Boundaries (T2-001..
     page,
   }, testInfo) => {
     onlyDesktop(testInfo);
-    const bank = loadBankCatalog();
     const target =
-      bank.questions.find((q) => !q.sectionId || !q.tags || q.tags.length === 0) ??
-      bank.questions[0]!;
-    await seedStoreAndReload(page, makeSeededStore({ favIds: [target.id] }), '#/fav');
+      FIXTURE_BANK.questions.find((q) => !q.sectionId || !q.tags || q.tags.length === 0) ??
+      FIXTURE_BANK.questions[0]!;
+    await seedFixtureBank(
+      page,
+      FIXTURE_BANK,
+      makeSeededStore({ favIds: [target.id] }, FIXTURE_BANK),
+      { targetHashRoute: '#/fav' },
+    );
     await page.getByTestId('list-redo-all').click();
     await expect(page.locator('body')).not.toContainText('undefined');
     await expect(qChapterTag(page)).toBeVisible();
@@ -631,7 +742,7 @@ test.describe('Tier 2: Portal, Home, Modes & Objective Quiz Boundaries (T2-001..
     page,
   }, testInfo) => {
     onlyDesktop(testInfo);
-    await gotoRoute(page, '#/quiz');
+    await seedFixtureBank(page, FIXTURE_BANK, makeEmptyStore(), { targetHashRoute: '#/quiz' });
     await selectQuizFilters(page, { count: 10 });
     await modeCard(page, 'all').click();
     await btnStar(page).click();
@@ -643,7 +754,7 @@ test.describe('Tier 2: Portal, Home, Modes & Objective Quiz Boundaries (T2-001..
     page,
   }, testInfo) => {
     onlyMobile(testInfo);
-    await gotoRoute(page, '#/quiz');
+    await seedFixtureBank(page, FIXTURE_BANK, makeEmptyStore(), { targetHashRoute: '#/quiz' });
     await selectQuizFilters(page, { count: 10 });
     await modeCard(page, 'all').click();
     await assertFullLayoutAudit(page);
@@ -656,8 +767,8 @@ test.describe('Tier 2: Portal, Home, Modes & Objective Quiz Boundaries (T2-001..
     page,
   }, testInfo) => {
     onlyDesktop(testInfo);
-    const stemMap = buildQuestionStemMap();
-    await gotoRoute(page, '#/quiz');
+    const stemMap = buildQuestionStemMap(FIXTURE_BANK);
+    await seedFixtureBank(page, FIXTURE_BANK, makeEmptyStore(), { targetHashRoute: '#/quiz' });
     await selectQuizFilters(page, { count: 10 });
     await modeCard(page, 'choice').click();
 
@@ -669,31 +780,33 @@ test.describe('Tier 2: Portal, Home, Modes & Objective Quiz Boundaries (T2-001..
     await expect(quizOption(page, wrongIdx)).toBeDisabled();
     await quizOption(page, wrongIdx).click({ force: true });
     await expect(quizFeedback(page)).toContainText('回答正确');
-    const store = await readPersistedStore(page);
-    expect(store?.records[q.id]?.ok).toBe(1);
+    await expect
+      .poll(async () => (await readIdbProgress(page))?.records[q.id]?.ok)
+      .toBe(1);
   });
 
   test('T2-042 [UF09] Pressing 1-4 or A-D after choice grading does not alter record', async ({
     page,
   }, testInfo) => {
     onlyDesktop(testInfo);
-    const stemMap = buildQuestionStemMap();
-    await gotoRoute(page, '#/quiz');
+    const stemMap = buildQuestionStemMap(FIXTURE_BANK);
+    await seedFixtureBank(page, FIXTURE_BANK, makeEmptyStore(), { targetHashRoute: '#/quiz' });
     await selectQuizFilters(page, { count: 10 });
     await modeCard(page, 'choice').click();
     const q = await answerCurrentQuestion(page, stemMap, 'correct');
     for (const key of ['1', '2', '3', '4', 'a', 'b', 'c', 'd']) {
       await page.keyboard.press(key);
     }
-    const store = await readPersistedStore(page);
-    expect(store?.records[q.id]?.ok).toBe(1);
+    await expect
+      .poll(async () => (await readIdbProgress(page))?.records[q.id]?.ok)
+      .toBe(1);
   });
 
   test('T2-043 [UF09] Both lowercase a-d and uppercase A-D select choice options', async ({
     page,
   }, testInfo) => {
     onlyDesktop(testInfo);
-    await gotoRoute(page, '#/quiz');
+    await seedFixtureBank(page, FIXTURE_BANK, makeEmptyStore(), { targetHashRoute: '#/quiz' });
     await selectQuizFilters(page, { count: 10 });
     await modeCard(page, 'choice').click();
     await page.keyboard.press('b');
@@ -707,7 +820,7 @@ test.describe('Tier 2: Portal, Home, Modes & Objective Quiz Boundaries (T2-001..
     page,
   }, testInfo) => {
     onlyDesktop(testInfo);
-    await gotoRoute(page, '#/quiz');
+    await seedFixtureBank(page, FIXTURE_BANK, makeEmptyStore(), { targetHashRoute: '#/quiz' });
     await selectQuizFilters(page, { count: 10 });
     await modeCard(page, 'choice').click();
     await page.keyboard.press('5');
@@ -721,7 +834,7 @@ test.describe('Tier 2: Portal, Home, Modes & Objective Quiz Boundaries (T2-001..
     page,
   }, testInfo) => {
     onlyMobile(testInfo);
-    await gotoRoute(page, '#/quiz');
+    await seedFixtureBank(page, FIXTURE_BANK, makeEmptyStore(), { targetHashRoute: '#/quiz' });
     await selectQuizFilters(page, { count: 10 });
     await modeCard(page, 'choice').click();
     await assertFullLayoutAudit(page);
@@ -738,7 +851,7 @@ test.describe('Tier 2: Portal, Home, Modes & Objective Quiz Boundaries (T2-001..
     page,
   }, testInfo) => {
     onlyDesktop(testInfo);
-    await gotoRoute(page, '#/quiz');
+    await seedFixtureBank(page, FIXTURE_BANK, makeEmptyStore(), { targetHashRoute: '#/quiz' });
     await selectQuizFilters(page, { count: 10 });
     await modeCard(page, 'multi').click();
 
@@ -747,7 +860,8 @@ test.describe('Tier 2: Portal, Home, Modes & Objective Quiz Boundaries (T2-001..
       await submit.click();
     }
     await expect(quizFeedback(page)).toBeHidden();
-    const store = await readPersistedStore(page);
+    await page.waitForTimeout(150);
+    const store = await readIdbProgress(page);
     expect(Object.keys(store?.records ?? {})).toHaveLength(0);
   });
 
@@ -755,9 +869,14 @@ test.describe('Tier 2: Portal, Home, Modes & Objective Quiz Boundaries (T2-001..
     page,
   }, testInfo) => {
     onlyDesktop(testInfo);
-    const stemMap = buildQuestionStemMap();
-    const multiQ = pickQuestion({ type: 'multi' });
-    await seedStoreAndReload(page, makeSeededStore({ favIds: [multiQ.id] }), '#/fav');
+    const stemMap = buildQuestionStemMap(FIXTURE_BANK);
+    const multiQ = pickQuestion({ type: 'multi' }, FIXTURE_BANK);
+    await seedFixtureBank(
+      page,
+      FIXTURE_BANK,
+      makeSeededStore({ favIds: [multiQ.id] }, FIXTURE_BANK),
+      { targetHashRoute: '#/fav' },
+    );
     await page.getByTestId('list-redo-all').click();
     const q = findQuestionByStem(await qStem(page).innerText(), stemMap);
     const partial = getPartialWrongChoiceFor(q);
@@ -772,16 +891,20 @@ test.describe('Tier 2: Portal, Home, Modes & Objective Quiz Boundaries (T2-001..
     page,
   }, testInfo) => {
     onlyDesktop(testInfo);
-    const bank = loadBankCatalog();
     const multiQ =
-      bank.questions.find(
+      FIXTURE_BANK.questions.find(
         (q) =>
           q.type === 'multi' &&
           Array.isArray(q.answer) &&
           q.options &&
           q.answer.length < q.options.length,
-      ) ?? pickQuestion({ type: 'multi' });
-    await seedStoreAndReload(page, makeSeededStore({ favIds: [multiQ.id] }), '#/fav');
+      ) ?? pickQuestion({ type: 'multi' }, FIXTURE_BANK);
+    await seedFixtureBank(
+      page,
+      FIXTURE_BANK,
+      makeSeededStore({ favIds: [multiQ.id] }, FIXTURE_BANK),
+      { targetHashRoute: '#/fav' },
+    );
     await page.getByTestId('list-redo-all').click();
 
     const ans = multiQ.answer as number[];
@@ -801,22 +924,23 @@ test.describe('Tier 2: Portal, Home, Modes & Objective Quiz Boundaries (T2-001..
     page,
   }, testInfo) => {
     onlyDesktop(testInfo);
-    const stemMap = buildQuestionStemMap();
-    await gotoRoute(page, '#/quiz');
+    const stemMap = buildQuestionStemMap(FIXTURE_BANK);
+    await seedFixtureBank(page, FIXTURE_BANK, makeEmptyStore(), { targetHashRoute: '#/quiz' });
     await selectQuizFilters(page, { count: 10 });
     await modeCard(page, 'multi').click();
     const q = await answerCurrentQuestion(page, stemMap, 'wrong');
     await expect(quizFeedback(page)).toContainText('回答错误');
-    const store = await readPersistedStore(page);
-    expect(store?.records[q.id]?.ok).toBe(0);
+    await expect
+      .poll(async () => (await readIdbProgress(page))?.records[q.id]?.ok)
+      .toBe(0);
   });
 
   test('T2-050 [UF10] Multi-select options and submit button lock after submission', async ({
     page,
   }, testInfo) => {
     onlyDesktop(testInfo);
-    const stemMap = buildQuestionStemMap();
-    await gotoRoute(page, '#/quiz');
+    const stemMap = buildQuestionStemMap(FIXTURE_BANK);
+    await seedFixtureBank(page, FIXTURE_BANK, makeEmptyStore(), { targetHashRoute: '#/quiz' });
     await selectQuizFilters(page, { count: 10 });
     await modeCard(page, 'multi').click();
     await answerCurrentQuestion(page, stemMap, 'correct');
@@ -828,8 +952,8 @@ test.describe('Tier 2: Portal, Home, Modes & Objective Quiz Boundaries (T2-001..
     page,
   }, testInfo) => {
     onlyDesktop(testInfo);
-    const stemMap = buildQuestionStemMap();
-    await gotoRoute(page, '#/quiz');
+    const stemMap = buildQuestionStemMap(FIXTURE_BANK);
+    await seedFixtureBank(page, FIXTURE_BANK, makeEmptyStore(), { targetHashRoute: '#/quiz' });
     await selectQuizFilters(page, { count: 10 });
     await modeCard(page, 'multi').click();
     const q = findQuestionByStem(await qStem(page).innerText(), stemMap);
@@ -845,8 +969,8 @@ test.describe('Tier 2: Portal, Home, Modes & Objective Quiz Boundaries (T2-001..
     page,
   }, testInfo) => {
     onlyDesktop(testInfo);
-    const stemMap = buildQuestionStemMap();
-    await gotoRoute(page, '#/quiz');
+    const stemMap = buildQuestionStemMap(FIXTURE_BANK);
+    await seedFixtureBank(page, FIXTURE_BANK, makeEmptyStore(), { targetHashRoute: '#/quiz' });
     await selectQuizFilters(page, { count: 10 });
     await modeCard(page, 'tf').click();
     const q = await answerCurrentQuestion(page, stemMap, 'correct');
@@ -854,15 +978,16 @@ test.describe('Tier 2: Portal, Home, Modes & Objective Quiz Boundaries (T2-001..
     await page.keyboard.press('F');
     await expect(tfBtn(page, true)).toBeDisabled();
     await expect(tfBtn(page, false)).toBeDisabled();
-    const store = await readPersistedStore(page);
-    expect(store?.records[q.id]?.ok).toBe(1);
+    await expect
+      .poll(async () => (await readIdbProgress(page))?.records[q.id]?.ok)
+      .toBe(1);
   });
 
   test('T2-053 [UF11] Lowercase t and f keys trigger 正确 / 错误 on tf questions', async ({
     page,
   }, testInfo) => {
     onlyDesktop(testInfo);
-    await gotoRoute(page, '#/quiz');
+    await seedFixtureBank(page, FIXTURE_BANK, makeEmptyStore(), { targetHashRoute: '#/quiz' });
     await selectQuizFilters(page, { count: 10 });
     await modeCard(page, 'tf').click();
     await page.keyboard.press('t');
@@ -876,7 +1001,7 @@ test.describe('Tier 2: Portal, Home, Modes & Objective Quiz Boundaries (T2-001..
     page,
   }, testInfo) => {
     onlyDesktop(testInfo);
-    await gotoRoute(page, '#/quiz');
+    await seedFixtureBank(page, FIXTURE_BANK, makeEmptyStore(), { targetHashRoute: '#/quiz' });
     await selectQuizFilters(page, { count: 10 });
     await modeCard(page, 'tf').click();
     await page.keyboard.press('3');
@@ -890,10 +1015,16 @@ test.describe('Tier 2: Portal, Home, Modes & Objective Quiz Boundaries (T2-001..
     page,
   }, testInfo) => {
     onlyDesktop(testInfo);
-    const bank = loadBankCatalog();
-    const falseTf = bank.questions.find((q) => q.type === 'tf' && q.answer === false);
+    const falseTf = FIXTURE_BANK.questions.find(
+      (q) => q.type === 'tf' && q.answer === false,
+    );
     expect(falseTf).toBeDefined();
-    await seedStoreAndReload(page, makeSeededStore({ favIds: [falseTf!.id] }), '#/fav');
+    await seedFixtureBank(
+      page,
+      FIXTURE_BANK,
+      makeSeededStore({ favIds: [falseTf!.id] }, FIXTURE_BANK),
+      { targetHashRoute: '#/fav' },
+    );
     await page.getByTestId('list-redo-all').click();
     await tfBtn(page, false).click();
     await expect(quizFeedback(page)).toContainText('回答正确');
@@ -903,7 +1034,7 @@ test.describe('Tier 2: Portal, Home, Modes & Objective Quiz Boundaries (T2-001..
     page,
   }, testInfo) => {
     onlyMobile(testInfo);
-    await gotoRoute(page, '#/quiz');
+    await seedFixtureBank(page, FIXTURE_BANK, makeEmptyStore(), { targetHashRoute: '#/quiz' });
     await selectQuizFilters(page, { count: 10 });
     await modeCard(page, 'tf').click();
     await assertFullLayoutAudit(page);

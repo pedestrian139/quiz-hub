@@ -333,4 +333,55 @@ describe('storage', () => {
       expect(MOCK_STORE).toEqual(callerStoreSnapshot);
     }
   });
+
+  it('ST-12: preserves aiExplanations across save/load/export/import while omitting empty and blocking pollution', () => {
+    const storeWithAi: UserStore = {
+      records: { q1: { ok: 1, choice: 0, ts: 1000 } },
+      fav: { q1: true },
+      mastery: {},
+      aiExplanations: {
+        q1: { content: '### 【核心考点】\n考点内容', updatedAt: 1732340050000, model: 'deepseek-chat' },
+      },
+    };
+
+    expect(saveStore(storeWithAi)).toBe(true);
+    expect(loadStore()).toEqual(storeWithAi);
+
+    const exported = exportStoreJson(storeWithAi);
+    const imported = importStoreJson(exported);
+    expect(imported.ok).toBe(true);
+    if (imported.ok) {
+      expect(imported.store).toEqual(storeWithAi);
+    }
+
+    // Empty aiExplanations is omitted for legacy parity
+    const emptyAiExport = exportStoreJson({ ...EMPTY_STORE, aiExplanations: {} });
+    expect(JSON.parse(emptyAiExport)).toEqual(EMPTY_STORE);
+
+    // Phase 1 backup without aiExplanations still imports cleanly
+    const v1Res = importStoreJson('{"records":{},"fav":{},"mastery":{}}');
+    expect(v1Res.ok).toBe(true);
+    if (v1Res.ok) {
+      expect('aiExplanations' in v1Res.store).toBe(false);
+    }
+
+    // Prototype pollution and malformed aiExplanations are rejected in importStoreJson & sanitized in loadStore
+    const pollutedImport = importStoreJson(
+      '{"records":{},"fav":{},"mastery":{},"aiExplanations":{"__proto__":{"content":"bad","updatedAt":1}}}',
+    );
+    expect(pollutedImport.ok).toBe(false);
+
+    const invalidEntryImport = importStoreJson(
+      '{"records":{},"fav":{},"mastery":{},"aiExplanations":{"q1":{"content":"","updatedAt":1}}}',
+    );
+    expect(invalidEntryImport.ok).toBe(false);
+
+    globalThis.localStorage.setItem(
+      STORAGE_KEY,
+      '{"records":{},"fav":{},"mastery":{},"aiExplanations":{"__proto__":{"content":"bad","updatedAt":1},"q2":{"content":"有效","updatedAt":10}}}',
+    );
+    const loaded = loadStore();
+    expect(Object.prototype.hasOwnProperty.call(loaded.aiExplanations ?? {}, '__proto__')).toBe(false);
+    expect(loaded.aiExplanations?.q2?.content).toBe('有效');
+  });
 });

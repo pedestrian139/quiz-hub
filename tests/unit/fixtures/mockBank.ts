@@ -32,7 +32,7 @@ export const MOCK_QUESTIONS: Question[] = [
     tags: ['人工智能元年', '符号主义'],
     source: {
       origin: 'comprehensive_bank',
-      file: '人工智能导论 综合题库最终版.pdf',
+      file: 'QuizHub 示例综合题库.pdf',
       ref: 'Ch1 单选题 #1',
     },
   },
@@ -46,7 +46,7 @@ export const MOCK_QUESTIONS: Question[] = [
     explain: '符号主义（逻辑主义）基于物理符号系统假设，强调知识表示与逻辑推理。',
     source: {
       origin: 'comprehensive_bank',
-      file: '人工智能导论 综合题库最终版.pdf',
+      file: 'QuizHub 示例综合题库.pdf',
       ref: 'Ch1 判断题 #1',
       duplicatesMerged: ['vid-p03'],
       note: '合并视频弹题同义表述',
@@ -63,7 +63,7 @@ export const MOCK_QUESTIONS: Question[] = [
     tags: ['图灵测试'],
     source: {
       origin: 'video_popup',
-      file: '人工智能导论视频课弹出来的题.pdf',
+      file: 'QuizHub 精选弹题示例.pdf',
       ref: 'p.14',
     },
   },
@@ -84,7 +84,7 @@ export const MOCK_QUESTIONS: Question[] = [
     tags: ['知识图谱'],
     source: {
       origin: 'comprehensive_bank',
-      file: '人工智能导论 综合题库最终版.pdf',
+      file: 'QuizHub 示例综合题库.pdf',
       ref: 'Ch3 多选题 #2',
     },
   },
@@ -100,7 +100,7 @@ export const MOCK_QUESTIONS: Question[] = [
     tags: ['机器学习', '监督学习'],
     source: {
       origin: 'video_popup',
-      file: '人工智能导论视频课弹出来的题.pdf',
+      file: 'QuizHub 精选弹题示例.pdf',
       ref: 'p.31',
     },
   },
@@ -120,7 +120,7 @@ export const MOCK_QUESTIONS: Question[] = [
     explain: '正则化、Dropout 与早停均能限制模型复杂度或无效记忆噪声，从而缓解过拟合。',
     source: {
       origin: 'comprehensive_bank',
-      file: '人工智能导论 综合题库最终版.pdf',
+      file: 'QuizHub 示例综合题库.pdf',
       ref: 'Ch4 多选题 #5',
       duplicatesMerged: ['syn-c4-s3-09'],
     },
@@ -137,7 +137,7 @@ export const MOCK_QUESTIONS: Question[] = [
     tags: ['卷积神经网络', 'CV'],
     source: {
       origin: 'review_notes_synthesized',
-      file: '人工智能导论复习资料.pdf',
+      file: 'QuizHub 知识点提炼示例.pdf',
       ref: 'ch5.s2',
     },
   },
@@ -152,7 +152,7 @@ export const MOCK_QUESTIONS: Question[] = [
     tags: ['语音识别', 'MFCC'],
     source: {
       origin: 'review_notes_synthesized',
-      file: '人工智能导论复习资料.pdf',
+      file: 'QuizHub 知识点提炼示例.pdf',
       ref: 'ch6.s1',
     },
   },
@@ -168,7 +168,7 @@ export const MOCK_QUESTIONS: Question[] = [
     tags: ['NLP', 'Attention', 'Transformer'],
     source: {
       origin: 'video_popup',
-      file: '人工智能导论视频课弹出来的题.pdf',
+      file: 'QuizHub 精选弹题示例.pdf',
       ref: 'p.58',
     },
   },
@@ -185,7 +185,7 @@ export const MOCK_QUESTIONS: Question[] = [
     tags: ['大模型', 'NLP', 'Transformer'],
     source: {
       origin: 'review_notes_synthesized',
-      file: '人工智能导论复习资料.pdf',
+      file: 'QuizHub 知识点提炼示例.pdf',
       ref: 'ch7.s4',
     },
   },
@@ -201,7 +201,7 @@ export const MOCK_QUESTIONS: Question[] = [
     tags: ['类脑计算'],
     source: {
       origin: 'review_notes_synthesized',
-      file: '人工智能导论复习资料.pdf',
+      file: 'QuizHub 知识点提炼示例.pdf',
       ref: 'ch8.s1',
     },
   },
@@ -217,7 +217,7 @@ export const MOCK_QUESTIONS: Question[] = [
     tags: ['机器人'],
     source: {
       origin: 'comprehensive_bank',
-      file: '人工智能导论 综合题库最终版.pdf',
+      file: 'QuizHub 示例综合题库.pdf',
       ref: 'Ch9 单选题 #3',
     },
   },
@@ -225,7 +225,7 @@ export const MOCK_QUESTIONS: Question[] = [
 
 export const MOCK_BANK: BankData = {
   meta: {
-    title: '人工智能导论测试题库（Mock）',
+    title: 'QuizHub 测试题库（Mock）',
     version: '1.0.0-mock',
     generatedAt: '2026-11-23T08:00:00Z',
     counts: {
@@ -327,7 +327,7 @@ export const MOCK_NOTE_CHAPTER: NoteChapter = {
 
 export const MOCK_NOTES_DATA: NotesData = {
   meta: {
-    title: '人工智能导论知识点手册（Mock）',
+    title: 'QuizHub 使用指南与知识点手册（Mock）',
     version: '1.0.0-mock',
     generatedAt: '2026-11-23T08:00:00Z',
   },

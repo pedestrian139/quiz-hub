@@ -63,7 +63,7 @@ export function hubBadgeTotal(page: Page): Locator {
 export function hubBadgeChapters(page: Page): Locator {
   return page
     .getByTestId('hub-badge-chapters')
-    .or(page.getByText(/9\s*章/))
+    .or(page.getByText(/\d+\s*章/))
     .first();
 }
 
@@ -388,6 +388,202 @@ export function notesTableWraps(page: Page): Locator {
   return page.getByTestId('notes-table-wrap');
 }
 
+// Phase 2 Smart Import & Bank Library Workbench
+export function btnOpenQuizImport(page: Page): Locator {
+  return page.getByTestId('btn-open-quiz-import');
+}
+
+export function quizImportDialog(page: Page): Locator {
+  return page.getByTestId('quiz-import-dialog');
+}
+
+export function btnCloseQuizImport(page: Page): Locator {
+  return page.getByTestId('btn-close-quiz-import');
+}
+
+export function qiTab(page: Page, tab: 'import' | 'banks' | 'practice' | string): Locator {
+  return page.getByTestId(`qi-tab-${tab}`);
+}
+
+export function importTab(page: Page, tab: 'file' | 'paste'): Locator {
+  return page.getByTestId(`import-tab-${tab}`);
+}
+
+export function importPasteTextarea(page: Page): Locator {
+  return page.getByTestId('import-paste-textarea');
+}
+
+export function bankImportFileInput(page: Page): Locator {
+  return page.getByTestId('bank-import-file-input');
+}
+
+export function btnConfirmImport(page: Page): Locator {
+  return page.getByTestId('btn-confirm-import');
+}
+
+export function btnConfirmImportSticky(page: Page): Locator {
+  return page.getByTestId('btn-confirm-import-sticky');
+}
+
+export function bankCard(page: Page, id: string): Locator {
+  return page.getByTestId(`bank-card-${id}`);
+}
+
+export function btnDeleteBank(page: Page, id: string): Locator {
+  return page.getByTestId(`btn-delete-bank-${id}`);
+}
+
+export function previewDraft(page: Page, idx: number): Locator {
+  return page.getByTestId(`preview-draft-${idx}`);
+}
+
+export function draftEdit(page: Page, idx: number): Locator {
+  return page.getByTestId(`draft-edit-${idx}`);
+}
+
+export function draftToggle(page: Page, idx: number): Locator {
+  return page.getByTestId(`draft-toggle-${idx}`);
+}
+
+export function draftAiInferred(page: Page, idx: number): Locator {
+  return page.getByTestId(`draft-ai-inferred-${idx}`);
+}
+
+export function draftDelete(page: Page, idx: number): Locator {
+  return page.getByTestId(`draft-delete-${idx}`);
+}
+
+export function aiWashBtn(page: Page): Locator {
+  return page.getByTestId('ai-wash-btn');
+}
+
+export function aiWashProgress(page: Page): Locator {
+  return page.getByTestId('ai-wash-progress');
+}
+
+export function aiWashCancel(page: Page): Locator {
+  return page.getByTestId('ai-wash-cancel');
+}
+
+export function aiWashRetryChunk(page: Page, idx: number): Locator {
+  return page.getByTestId(`ai-wash-retry-chunk-${idx}`);
+}
+
+export function washPrefExplain(page: Page): Locator {
+  return page.getByTestId('wash-pref-explain');
+}
+
+export function washPrefTags(page: Page): Locator {
+  return page.getByTestId('wash-pref-tags');
+}
+
+export function washTargetBankMode(page: Page): Locator {
+  return page.getByTestId('wash-target-bank-mode');
+}
+
+export function washTargetBankName(page: Page): Locator {
+  return page.getByTestId('wash-target-bank-name');
+}
+
+export function washTargetExistingBank(page: Page): Locator {
+  return page.getByTestId('wash-target-existing-bank');
+}
+
+export function washTypeCheckbox(
+  page: Page,
+  type: 'choice' | 'multi' | 'tf' | 'short',
+): Locator {
+  return page.getByTestId(`wash-type-${type}`);
+}
+
+export function washTypeObjectiveBtn(page: Page): Locator {
+  return page.getByTestId('wash-type-objective-btn');
+}
+
+export function washTypeGuardHint(page: Page): Locator {
+  return page.getByTestId('wash-type-guard-hint');
+}
+
+export function jsonInterceptBanner(page: Page): Locator {
+  return page.getByTestId('json-intercept-banner');
+}
+
+export function jsonInterceptDirectBtn(page: Page): Locator {
+  return page.getByTestId('json-intercept-direct-btn');
+}
+
+export function jsonInterceptAiBtn(page: Page): Locator {
+  return page.getByTestId('json-intercept-ai-btn');
+}
+
+export function btnExportBank(page: Page, id: string): Locator {
+  return page.getByTestId(`btn-export-bank-${id}`);
+}
+
+export function importBankName(page: Page): Locator {
+  return page.getByTestId('import-bank-name');
+}
+
+// Phase 2 Quiz Workspace & AI Tutor
+export function bankSwitcher(page: Page): Locator {
+  return page.getByTestId('bank-switcher');
+}
+
+export function workspaceMobileBar(page: Page): Locator {
+  return page.getByTestId('workspace-mobile-bar');
+}
+
+export function sheetFilter(
+  page: Page,
+  filter: 'all' | 'unanswered' | 'wrong' | 'fav',
+): Locator {
+  return page.getByTestId(`sheet-filter-${filter}`);
+}
+
+export function aiAutoExplainToggle(page: Page): Locator {
+  return page.getByTestId('ai-auto-explain-toggle');
+}
+
+export function aiExplainDrawer(page: Page): Locator {
+  return page.getByTestId('ai-explain-drawer');
+}
+
+export function aiTutorPanel(page: Page): Locator {
+  return page.getByTestId('ai-tutor-panel');
+}
+
+export function aiBtnExplain(page: Page): Locator {
+  return page.getByTestId('ai-btn-explain');
+}
+
+export function aiBtnChat(page: Page): Locator {
+  return page.getByTestId('ai-btn-chat');
+}
+
+export function aiOpenSettingsInline(page: Page): Locator {
+  return page.getByTestId('ai-open-settings-inline');
+}
+
+export function aiExplainCard(page: Page): Locator {
+  return page.getByTestId('ai-explain-card');
+}
+
+export function aiChatCard(page: Page): Locator {
+  return page.getByTestId('ai-chat-card');
+}
+
+export function aiFollowupPill(page: Page, idx: number): Locator {
+  return page.getByTestId(`ai-followup-pill-${idx}`);
+}
+
+export function aiChatInput(page: Page): Locator {
+  return page.getByTestId('ai-chat-input');
+}
+
+export function aiChatSend(page: Page): Locator {
+  return page.getByTestId('ai-chat-send');
+}
+
 // Compound interaction helpers
 export async function ensureAnswerSheetOpen(page: Page): Promise<void> {
   const sheet = answerSheet(page);
@@ -409,9 +605,17 @@ export async function selectOnlyChapters(page: Page, keepChapters: number[]): Pr
       await chip.click();
     }
   }
-  for (let ch = 1; ch <= 9; ch++) {
+  const allChips = page.locator(
+    '[data-testid^="chapter-chip-"]:not([data-testid="chapter-chip-all"])',
+  );
+  const count = await allChips.count();
+  for (let i = 0; i < count; i++) {
+    const chip = allChips.nth(i);
+    const testId = await chip.getAttribute('data-testid');
+    const match = testId?.match(/^chapter-chip-(\d+)$/);
+    if (!match) continue;
+    const ch = Number.parseInt(match[1]!, 10);
     if (keepSet.has(ch)) continue;
-    const chip = chapterChip(page, ch);
     if ((await chip.getAttribute('aria-pressed')) === 'true') {
       await chip.click();
     }

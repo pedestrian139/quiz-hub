@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type {
+  ChapterMeta,
   NoteChapter,
   NoteSection,
   NoteTable,
@@ -25,18 +26,13 @@ import {
   recordSubjectiveMastery,
   toggleFavorite,
 } from './core/quizEngine';
-import {
-  ALL_CHAPTER_IDS,
-  CHAPTER_BY_ID,
-  NOTES,
-  QUESTIONS,
-  TYPE_NAME,
-} from './data/catalog';
+import { NOTES, SECTION_COUNT, TYPE_NAME } from './data/catalog';
+import { useBankLibraryContext } from './utils/BankLibraryContext';
 import { TopNav } from './components/TopNav';
 import { QuizImportPortal } from './components/QuizImport';
 import { UserMenu } from './components/Auth';
 import { Icon } from './components/Icons';
-import { usePersistentStore } from './hooks/usePersistentStore';
+import { RichContent } from './components/RichContent';
 import { useHashRoute, type Route } from './router/useHashRoute';
 import { HubPage } from './pages/HubPage';
 import { QuizHome } from './pages/QuizHome';
@@ -75,7 +71,7 @@ function getTierFeedback(
     return {
       badge: '卓越掌握',
       headline: '核心考点扎实稳固，发挥非常出色！',
-      advice: '建议继续挑战综合分析题或跨章节全集刷题，保持考场手感。',
+      advice: '建议继续挑战综合分析题或跨章节全集刷题，保持做题手感。',
       tone: 'ok',
     };
   }
@@ -91,20 +87,21 @@ function getTierFeedback(
     return {
       badge: '基础初成',
       headline: '已掌握基本框架，部分细节仍需巩固。',
-      advice: '建议对照《知识点手册》高频易混表梳理薄弱小节，再点击“只练错题”强化记忆。',
+      advice: '建议结合 AI 深度解析梳理薄弱考点，再点击“只练错题”强化记忆。',
       tone: 'warn',
     };
   }
   return {
     badge: '亟待强化',
     headline: '查漏补缺正当时，定位薄弱点就是最大收获！',
-    advice: '建议先阅读对应章节讲义与答题模板，再逐题重做错题直至完全掌握。',
+    advice: '建议先逐题查看解析与 AI 助教追问，再重做错题直至完全掌握。',
     tone: 'bad',
   };
 }
 
 interface ResultViewProps {
   spec: ResultSpec;
+  chapterById: ReadonlyMap<number, ChapterMeta>;
   onRetryWrong: (wrongIds: string[]) => void;
   onReviewSingle: (questionId: string) => void;
   onRetryMore: () => void;
@@ -113,6 +110,7 @@ interface ResultViewProps {
 
 function ResultView({
   spec,
+  chapterById,
   onRetryWrong,
   onReviewSingle,
   onRetryMore,
@@ -219,7 +217,7 @@ function ResultView({
 
           <div className="result-review-list">
             {wrongQuestions.map((q, i) => {
-              const ch = CHAPTER_BY_ID.get(q.chapter);
+              const ch = chapterById.get(q.chapter);
               return (
                 <button
                   key={q.id}
@@ -242,8 +240,12 @@ function ResultView({
                       单题重练 <Icon name="arrowRight" size={14} />
                     </span>
                   </div>
-                  <div className="review-item-btn__stem">{q.stem}</div>
-                  <div className="review-item-btn__ans">参考答案：{formatAnswerText(q)}</div>
+                  <div className="review-item-btn__stem">
+                    <RichContent inline content={q.stem} />
+                  </div>
+                  <div className="review-item-btn__ans">
+                    参考答案：<RichContent inline content={formatAnswerText(q)} />
+                  </div>
                 </button>
               );
             })}
@@ -258,6 +260,9 @@ function ResultView({
 
 interface QuestionListViewProps {
   kind: 'wrong' | 'fav';
+  bankName: string;
+  questions: Question[];
+  chapterById: ReadonlyMap<number, ChapterMeta>;
   store: UserStore;
   onRedoAll: (questionIds: string[]) => void;
   onClearWrong: () => void;
@@ -273,6 +278,9 @@ const MASTERY_LABELS: Record<0 | 1 | 2, string> = {
 
 function QuestionListView({
   kind,
+  bankName,
+  questions,
+  chapterById,
   store,
   onRedoAll,
   onClearWrong,
@@ -284,9 +292,9 @@ function QuestionListView({
   const items = useMemo(
     () =>
       kind === 'wrong'
-        ? getWrongQuestions(QUESTIONS, store)
-        : getFavoriteQuestions(QUESTIONS, store),
-    [kind, store],
+        ? getWrongQuestions(questions, store)
+        : getFavoriteQuestions(questions, store),
+    [kind, questions, store],
   );
 
   const toggleExpand = (id: string) => {
@@ -294,7 +302,7 @@ function QuestionListView({
   };
 
   const handleClear = () => {
-    if (safeConfirm('确定要清空错题本中的所有错题记录吗？（收藏夹不受影响）')) {
+    if (safeConfirm('确定要清空当前题库错题本中的所有错题记录吗？（收藏夹不受影响）')) {
       onClearWrong();
     }
   };
@@ -310,7 +318,9 @@ function QuestionListView({
               <Icon name={isWrongBook ? 'bookX' : 'star'} size={13} />
               {isWrongBook ? '错题攻克清单' : '重点题目收藏'}
             </span>
-            <span className="pill pill--subtle">按章节升序排列 · 共 {items.length} 题</span>
+            <span className="pill pill--subtle">
+              {bankName} · 按章节升序排列 · 共 {items.length} 题
+            </span>
           </div>
           <h1 className="hero-title">{isWrongBook ? '错题本' : '收藏夹'}</h1>
           <p className="hero-subtitle">
@@ -364,10 +374,15 @@ function QuestionListView({
       ) : (
         <div className="list-stack">
           {items.map((q, idx) => {
-            const ch = CHAPTER_BY_ID.get(q.chapter);
+            const ch = chapterById.get(q.chapter);
             const isFav = store.fav[q.id] === true;
             const expanded = Boolean(expandedIds[q.id]);
             const masteryLvl = store.mastery[q.id];
+            const explainText =
+              (q.explain ?? '').trim() ||
+              (q.explanation ?? '').trim() ||
+              (q.aiAnalysis ?? '').trim() ||
+              (store.aiExplanations?.[q.id]?.content ?? '').trim();
 
             return (
               <article key={q.id} data-testid="list-item" className="list-item-card">
@@ -380,7 +395,9 @@ function QuestionListView({
                     <span className={`pill pill--type pill--type-${q.type}`}>
                       {TYPE_NAME[q.type]}
                     </span>
-                    <span className="pill pill--subtle">{getOriginLabel(q.source.origin)}</span>
+                    <span className="pill pill--subtle">
+                      {getOriginLabel(q.source?.origin ?? 'comprehensive_bank')}
+                    </span>
                     {!isObjectiveQuestion(q.type) && masteryLvl !== undefined && (
                       <span className="pill pill--warn">{MASTERY_LABELS[masteryLvl]}</span>
                     )}
@@ -397,13 +414,15 @@ function QuestionListView({
                   </button>
                 </div>
 
-                <div className="list-item-card__stem">{q.stem}</div>
+                <div className="list-item-card__stem">
+                  <RichContent content={q.stem} />
+                </div>
 
                 {(q.type === 'choice' || q.type === 'multi') && q.options && (
                   <ul className="list-item-card__options">
                     {q.options.map((opt, oIdx) => (
                       <li key={oIdx}>
-                        {getOptionLabel(oIdx)}. {opt}
+                        {getOptionLabel(oIdx)}. <RichContent inline content={opt} />
                       </li>
                     ))}
                   </ul>
@@ -425,22 +444,24 @@ function QuestionListView({
                   <div data-testid="list-item-answer" className="list-item-answer">
                     <div>
                       <strong>参考答案：</strong>
-                      {formatAnswerText(q)}
+                      <RichContent inline content={formatAnswerText(q)} />
                     </div>
                     {Array.isArray(q.keyPoints) && q.keyPoints.length > 0 && (
                       <div>
                         <strong>核心采分要点：</strong>
                         <ul className="ref-answer-card__kp">
                           {q.keyPoints.map((kp, kpIdx) => (
-                            <li key={kpIdx}>{kp}</li>
+                            <li key={kpIdx}>
+                              <RichContent inline content={kp} />
+                            </li>
                           ))}
                         </ul>
                       </div>
                     )}
-                    {q.explain && (
+                    {explainText && (
                       <div>
                         <strong>解析：</strong>
-                        {q.explain}
+                        <RichContent content={explainText} />
                       </div>
                     )}
                   </div>
@@ -604,9 +625,11 @@ function NotesView({ onPracticeChapter }: NotesViewProps) {
         <div className="hero-eyebrow">
           <span className="pill pill--brand">
             <Icon name="book" size={13} />
-            课程知识体系精编
+            QuizHub 知识体系精编
           </span>
-          <span className="pill pill--neutral">9 章 · 64 节 · 4 大速查附录</span>
+          <span className="pill pill--neutral">
+            {NOTES.chapters.length} 章 · {SECTION_COUNT} 节 · {NOTES.appendices.length} 项速查指南
+          </span>
           <span className="pill pill--subtle">
             <Icon name="fileText" size={13} />
             支持浏览器直接打印导出 PDF
@@ -614,7 +637,7 @@ function NotesView({ onPracticeChapter }: NotesViewProps) {
         </div>
         <h1 className="hero-title">{NOTES.meta.title}</h1>
         <p className="hero-subtitle">
-          依据课程复习讲义结构化整理，已完成术语符号校订，并提供各章一键定向刷题、对比表格与主观题作答模板。
+          QuizHub（acequiz.xyz）官方使用指南与功能速查，涵盖沉浸式工作台快捷键、AI 智能洗题分段校对流程与多轮追问技巧。
         </p>
 
         <div className="notes-toolbar">
@@ -622,7 +645,7 @@ function NotesView({ onPracticeChapter }: NotesViewProps) {
             type="search"
             data-testid="notes-search"
             aria-label="搜索知识点"
-            placeholder="搜索知识点、人物、模型、公式或术语（如：图灵、启发式、注意力、传感器）..."
+            placeholder="搜索使用指南、快捷键、AI 洗题、公式排版或云同步..."
             className="notes-search-input"
             value={query}
             onChange={(e) => setQuery(e.target.value)}
@@ -677,7 +700,7 @@ function NotesView({ onPracticeChapter }: NotesViewProps) {
           {showOverview && (
             <section id="notes-overview" className="notes-overview-card">
               <div className="hero-eyebrow">
-                <span className="pill pill--brand">复习总纲</span>
+                <span className="pill pill--brand">平台总览</span>
               </div>
               <h2 className="notes-chapter__title" style={{ marginBottom: '12px' }}>
                 {NOTES.overview.title}
@@ -690,7 +713,7 @@ function NotesView({ onPracticeChapter }: NotesViewProps) {
               <div className="notes-callout" style={{ marginTop: '14px' }}>
                 <strong className="notes-callout__lead">
                   <Icon name="target" size={15} />
-                  考前高频抢分提示：
+                  高效使用建议：
                 </strong>
                 <ul className="notes-kp-list" style={{ marginTop: '6px' }}>
                   {NOTES.overview.examTips.map((tip, i) => (
@@ -706,7 +729,9 @@ function NotesView({ onPracticeChapter }: NotesViewProps) {
               <h2 style={{ margin: 0, fontSize: '18px', color: 'var(--ink)' }}>
                 未找到与“{query}”匹配的知识点
               </h2>
-              <p style={{ margin: 0 }}>请尝试缩短关键词（例如搜索“图灵”“贝叶斯”“卷积”或“传感器”）。</p>
+              <p style={{ margin: 0 }}>
+                请尝试缩短关键词（例如搜索“洗题”“快捷键”“KaTeX”或“云同步”）。
+              </p>
               <button type="button" className="btn btn--ghost" onClick={() => setQuery('')}>
                 恢复显示全部章节
               </button>
@@ -773,7 +798,7 @@ function NotesView({ onPracticeChapter }: NotesViewProps) {
                       <blockquote className="notes-callout">
                         <strong className="notes-callout__lead">
                           <Icon name="sparkles" size={15} />
-                          考点辨析：
+                          使用提示：
                         </strong>
                         {sec.callout}
                       </blockquote>
@@ -822,9 +847,13 @@ function NotesView({ onPracticeChapter }: NotesViewProps) {
 /* ---------------- Root Application ---------------- */
 
 export default function App() {
-  const storeApi = usePersistentStore();
+  const library = useBankLibraryContext();
+  const viewModel = library.activeViewModel;
+  const activeStoreApi = library.storeApiFor(library.activeBankId);
+  const { questions, chapterById, allChapterIds } = viewModel;
+
   const [filters, setFilters] = useState<FilterState>(() => ({
-    chapters: [...ALL_CHAPTER_IDS],
+    chapters: [...allChapterIds],
     origin: 'all',
     count: 20,
     order: 'random',
@@ -836,6 +865,41 @@ export default function App() {
   const sessionSeqRef = useRef(1);
   const toastTimerRef = useRef<number | null>(null);
   const preserveQuizViewRef = useRef(false);
+  const prevBankIdRef = useRef<string>(library.activeBankId);
+  const migrationToastShownRef = useRef(false);
+
+  const questionsById = useMemo(
+    () => new Map<string, Question>(questions.map((item) => [item.id, item])),
+    [questions],
+  );
+
+  // Sync filters & reset active session when active bank changes
+  useEffect(() => {
+    if (prevBankIdRef.current !== library.activeBankId) {
+      prevBankIdRef.current = library.activeBankId;
+      setFilters((prev) => ({
+        ...prev,
+        chapters: [...allChapterIds],
+        origin: 'all',
+        search: '',
+      }));
+      setQuizView({ type: 'home' });
+      return;
+    }
+
+    setFilters((prev) => {
+      const validSet = new Set(allChapterIds);
+      const validSelected = prev.chapters.filter((id) => validSet.has(id));
+      if (validSelected.length > 0 && validSelected.length === prev.chapters.length) {
+        return prev;
+      }
+      const nextChapters = validSelected.length > 0 ? validSelected : [...allChapterIds];
+      return {
+        ...prev,
+        chapters: nextChapters,
+      };
+    });
+  }, [allChapterIds, library.activeBankId]);
 
   const handleRouteChanged = useCallback((next: Route) => {
     if (preserveQuizViewRef.current && next === 'quiz') {
@@ -873,9 +937,16 @@ export default function App() {
     }, 3600);
   }, []);
 
+  useEffect(() => {
+    if (library.migratedFromV1 && !migrationToastShownRef.current) {
+      migrationToastShownRef.current = true;
+      notify('已自动无损迁移 V1 本地刷题进度至多题库存储（quizhub-v2）', 'success');
+    }
+  }, [library.migratedFromV1, notify]);
+
   const homeStats = useMemo(
-    () => computeHomeStats(QUESTIONS, storeApi.store),
-    [storeApi.store],
+    () => computeHomeStats(questions, activeStoreApi.store),
+    [activeStoreApi.store, questions],
   );
 
   const quizActions = useMemo<QuizActions>(
@@ -883,7 +954,7 @@ export default function App() {
       answerObjective(q, choice) {
         let savedRecord: UserRecord = { ok: 0, ts: Date.now() };
         let correctFlag = false;
-        storeApi.update((prev) => {
+        activeStoreApi.update((prev) => {
           const res = recordObjectiveAnswer(prev, q, choice);
           savedRecord = res.record;
           correctFlag = res.isCorrect;
@@ -893,12 +964,12 @@ export default function App() {
       },
       rateSubjective(questionId, level) {
         const ts = Date.now();
-        storeApi.update((prev) => recordSubjectiveMastery(prev, questionId, level, ts));
+        activeStoreApi.update((prev) => recordSubjectiveMastery(prev, questionId, level, ts));
         return { ok: level === 2 ? 1 : 0, ts };
       },
       toggleFav(questionId) {
         let nowFav = false;
-        storeApi.update((prev) => {
+        activeStoreApi.update((prev) => {
           const next = toggleFavorite(prev, questionId);
           nowFav = next.fav[questionId] === true;
           return next;
@@ -906,12 +977,12 @@ export default function App() {
         return nowFav;
       },
     }),
-    [storeApi],
+    [activeStoreApi],
   );
 
   const startSessionWithConfig = useCallback(
     (config: SessionConfig) => {
-      const queue = buildQueue(QUESTIONS, config.opts);
+      const queue = buildQueue(questions, config.opts);
       if (queue.length === 0) {
         const msg = '当前筛选条件下暂无匹配题目，请调整章节或来源设置。';
         notify(msg, 'info');
@@ -923,7 +994,11 @@ export default function App() {
         type: 'session',
         spec: {
           id: nextId,
-          config,
+          config: {
+            ...config,
+            bankId: library.activeBankId,
+            bankName: library.activeBank.name,
+          },
           queue,
         },
       });
@@ -933,7 +1008,7 @@ export default function App() {
       }
       window.scrollTo(0, 0);
     },
-    [navigate, notify, route],
+    [library.activeBank.name, library.activeBankId, navigate, notify, questions, route],
   );
 
   const handleStartMode = useCallback(
@@ -969,9 +1044,12 @@ export default function App() {
   const handlePracticeChapter = useCallback(
     (chapterId: number) => {
       preserveQuizViewRef.current = false;
+      const validChapter = allChapterIds.includes(chapterId)
+        ? [chapterId]
+        : [...allChapterIds];
       setFilters((prev) => ({
         ...prev,
-        chapters: [chapterId],
+        chapters: validChapter,
         origin: 'all',
         search: '',
       }));
@@ -979,18 +1057,27 @@ export default function App() {
       navigate('quiz');
       window.scrollTo(0, 0);
     },
-    [navigate],
+    [allChapterIds, navigate],
+  );
+
+  const handleSwitchBank = useCallback(
+    (bankId: string) => {
+      void library.switchBank(bankId);
+    },
+    [library],
   );
 
   return (
     <div className="app-shell">
-      <TopNav
-        route={route}
-        wrongCount={homeStats.wrongCount}
-        favCount={homeStats.favCount}
-        onNavClick={handleNavClick}
-      />
-      <UserMenu />
+      <div className="site-masthead">
+        <TopNav
+          route={route}
+          wrongCount={homeStats.wrongCount}
+          favCount={homeStats.favCount}
+          onNavClick={handleNavClick}
+        />
+        <UserMenu />
+      </div>
       <QuizImportPortal />
 
       {toast && (
@@ -1003,35 +1090,53 @@ export default function App() {
         </div>
       )}
 
-      <main className="app-main">
-        {route === 'hub' && (
+      <main className="app-main" aria-busy={!library.ready}>
+        {!library.ready && <p className="page-wrap" role="status">正在读取题库…</p>}
+        {library.ready && route === 'hub' && (
           <HubPage
+            viewModel={viewModel}
+            banks={library.switchableBanks}
+            activeBankId={library.activeBankId}
             stats={homeStats}
-            store={storeApi.store}
+            store={activeStoreApi.store}
             onPracticeChapter={handlePracticeChapter}
+            onSwitchBank={handleSwitchBank}
+            onOpenImport={library.openImportModal}
           />
         )}
 
-        {route === 'quiz' && quizView.type === 'home' && (
+        {library.ready && route === 'quiz' && quizView.type === 'home' && (
           <QuizHome
-            store={storeApi.store}
+            viewModel={viewModel}
+            banks={library.switchableBanks}
+            activeBankId={library.activeBankId}
+            store={activeStoreApi.store}
             stats={homeStats}
             filters={filters}
             onChangeFilters={setFilters}
+            onSwitchBank={handleSwitchBank}
+            onOpenImport={library.openImportModal}
             onStartMode={handleStartMode}
             onNavigate={navigate}
-            onImportStore={(next) => storeApi.commit(next)}
-            onResetStore={() => storeApi.wipe()}
+            onImportStore={(next) => activeStoreApi.commit(next)}
+            onResetStore={() => activeStoreApi.wipe()}
             notify={notify}
           />
         )}
 
-        {route === 'quiz' && quizView.type === 'session' && (
+        {library.ready && route === 'quiz' && quizView.type === 'session' && (
           <QuizSession
             key={quizView.spec.id}
             spec={quizView.spec}
-            store={storeApi.store}
+            bankId={library.activeBankId}
+            bankName={library.activeBank.name}
+            chapterById={chapterById}
+            questionsById={questionsById}
+            store={activeStoreApi.store}
             actions={quizActions}
+            onSaveAiAnalysis={(qId, content, model) =>
+              library.saveQuestionAiAnalysis(library.activeBankId, qId, content, model)
+            }
             onExit={() => {
               setQuizView({ type: 'home' });
               try {
@@ -1059,9 +1164,10 @@ export default function App() {
           />
         )}
 
-        {route === 'quiz' && quizView.type === 'result' && (
+        {library.ready && route === 'quiz' && quizView.type === 'result' && (
           <ResultView
             spec={quizView.spec}
+            chapterById={chapterById}
             onRetryWrong={(wrongIds) => {
               if (wrongIds.length === 0) return;
               startSessionWithConfig({
@@ -1069,7 +1175,7 @@ export default function App() {
                 title: '错题重练',
                 opts: {
                   mode: 'all',
-                  chapters: ALL_CHAPTER_IDS,
+                  chapters: allChapterIds,
                   onlyIds: wrongIds,
                   count: 0,
                   order: 'seq',
@@ -1082,7 +1188,7 @@ export default function App() {
                 title: '错题重练',
                 opts: {
                   mode: 'all',
-                  chapters: ALL_CHAPTER_IDS,
+                  chapters: allChapterIds,
                   onlyIds: [qId],
                   count: 0,
                   order: 'seq',
@@ -1103,17 +1209,20 @@ export default function App() {
           />
         )}
 
-        {(route === 'wrong' || route === 'fav') && (
+        {library.ready && (route === 'wrong' || route === 'fav') && (
           <QuestionListView
             kind={route}
-            store={storeApi.store}
+            bankName={library.activeBank.name}
+            questions={questions}
+            chapterById={chapterById}
+            store={activeStoreApi.store}
             onRedoAll={(ids) => {
               startSessionWithConfig({
                 kind: route === 'wrong' ? 'wrong' : 'fav',
                 title: route === 'wrong' ? '错题重练' : '收藏重练',
                 opts: {
                   mode: 'all',
-                  chapters: ALL_CHAPTER_IDS,
+                  chapters: allChapterIds,
                   onlyIds: ids,
                   count: 0,
                   order: 'seq',
@@ -1121,8 +1230,8 @@ export default function App() {
               });
             }}
             onClearWrong={() => {
-              storeApi.update(clearWrongRecords);
-              notify('已清空错题记录，收藏夹保持不变', 'info');
+              activeStoreApi.update(clearWrongRecords);
+              notify('已清空当前题库错题记录，收藏夹保持不变', 'info');
             }}
             onToggleFav={(id) => quizActions.toggleFav(id)}
             onGoQuizHome={() => {
@@ -1136,7 +1245,7 @@ export default function App() {
       </main>
 
       <footer className="site-footer">
-        人工智能导论 · 期末自助刷题与知识点复习门户 · 数据存储于本地浏览器（localStorage）
+        QuizHub · AI 智能刷题与题库管理平台（acequiz.xyz）· 支持本地离线与云端同步
       </footer>
     </div>
   );

@@ -1,4 +1,5 @@
 import type {
+  CachedAiExplanation,
   ImportStoreResult,
   MasteryLevel,
   UserRecord,
@@ -97,6 +98,27 @@ function isValidMastery(value: unknown): value is MasteryLevel {
   return value === 0 || value === 1 || value === 2;
 }
 
+function parseCachedAiExplanation(value: unknown, strict = false): CachedAiExplanation | null {
+  if (!isPlainObject(value) || hasDangerousOwnKey(value)) {
+    return null;
+  }
+  if (typeof value.content !== 'string' || value.content.trim().length === 0) {
+    return null;
+  }
+  if (typeof value.updatedAt !== 'number' || !Number.isFinite(value.updatedAt) || value.updatedAt < 0) {
+    return null;
+  }
+  if (value.model !== undefined && typeof value.model !== 'string') {
+    if (strict) return null;
+  }
+  const model = typeof value.model === 'string' ? value.model.trim() : '';
+  return {
+    content: value.content,
+    updatedAt: value.updatedAt,
+    ...(model.length > 0 ? { model } : {}),
+  };
+}
+
 export function loadStore(scope: PracticeScope = LEGACY_GUEST_SCOPE): UserStore {
   const storage = getSafeStorage();
   if (!storage) {
@@ -157,6 +179,20 @@ export function loadStore(scope: PracticeScope = LEGACY_GUEST_SCOPE): UserStore 
     }
   }
 
+  if (isPlainObject(parsed.aiExplanations)) {
+    const aiExplanations: Record<string, CachedAiExplanation> = {};
+    for (const key of Object.getOwnPropertyNames(parsed.aiExplanations)) {
+      if (DANGEROUS_KEYS.has(key)) continue;
+      const valid = parseCachedAiExplanation(parsed.aiExplanations[key]);
+      if (valid) {
+        aiExplanations[key] = valid;
+      }
+    }
+    if (Object.keys(aiExplanations).length > 0) {
+      store.aiExplanations = aiExplanations;
+    }
+  }
+
   return store;
 }
 
@@ -186,11 +222,23 @@ export function resetStore(scope: PracticeScope = LEGACY_GUEST_SCOPE): UserStore
 }
 
 export function exportStoreJson(store: UserStore): string {
+  const aiExplanations: Record<string, CachedAiExplanation> = {};
+  if (isPlainObject(store.aiExplanations)) {
+    for (const key of Object.getOwnPropertyNames(store.aiExplanations)) {
+      if (DANGEROUS_KEYS.has(key)) continue;
+      const valid = parseCachedAiExplanation(store.aiExplanations[key]);
+      if (valid) {
+        aiExplanations[key] = valid;
+      }
+    }
+  }
+  const hasAi = Object.keys(aiExplanations).length > 0;
   return JSON.stringify(
     {
       records: store.records,
       fav: store.fav,
       mastery: store.mastery,
+      ...(hasAi ? { aiExplanations } : {}),
     },
     null,
     2,
@@ -231,6 +279,16 @@ export function importStoreJson(raw: string): ImportStoreResult {
     return { ok: false, error: '无效的 mastery 字段' };
   }
 
+  const hasAiField =
+    Object.prototype.hasOwnProperty.call(parsed, 'aiExplanations') &&
+    parsed.aiExplanations !== undefined;
+  if (
+    hasAiField &&
+    (!isPlainObject(parsed.aiExplanations) || hasDangerousOwnKey(parsed.aiExplanations))
+  ) {
+    return { ok: false, error: '无效的 aiExplanations 字段' };
+  }
+
   const cleanStore = createEmptyStore();
 
   for (const key of Object.getOwnPropertyNames(parsed.records)) {
@@ -255,6 +313,20 @@ export function importStoreJson(raw: string): ImportStoreResult {
       return { ok: false, error: `mastery["${key}"] 必须为 0、1 或 2` };
     }
     cleanStore.mastery[key] = val;
+  }
+
+  if (hasAiField && isPlainObject(parsed.aiExplanations)) {
+    const cleanAi: Record<string, CachedAiExplanation> = {};
+    for (const key of Object.getOwnPropertyNames(parsed.aiExplanations)) {
+      const validAi = parseCachedAiExplanation(parsed.aiExplanations[key], true);
+      if (!validAi) {
+        return { ok: false, error: `aiExplanations["${key}"] 格式无效` };
+      }
+      cleanAi[key] = validAi;
+    }
+    if (Object.keys(cleanAi).length > 0) {
+      cleanStore.aiExplanations = cleanAi;
+    }
   }
 
   return { ok: true, store: cleanStore };

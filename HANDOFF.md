@@ -1,5 +1,29 @@
 # 项目开发交接文档（HANDOFF.md）
 
+## Phase 2 全量合流与最终回归验收（2026-11-27）
+
+- **合流状态**：`feat/import-polish`（PR #14）已合入 `wip/phase2-handoff`（合并提交 `f4c1505`），Phase 2 刷题工作台、旧题库历史兼容、云同步加固、AI 深度解析与导入/AI 智能洗题模块现已全量合流就绪。
+- **导入工作台与 AI 洗题收尾（PR #14）**：
+  - **4 题型勾选与强约束洗题**：`ImportWorkbench.tsx` 新增 `choice` / `multi` / `tf` / `short` 四题型勾选（默认全选）、一键「仅选客观题」与全不选防呆；`quizAiService.ts` 洗题 Prompt 动态注入纯 JSON 输出、非勾选题型跳过禁编造、原生字段对齐（含 `aiInferredAnswer`、`options` 去除 `"A. "/"B、"` 前缀）及 LaTeX 反斜杠双转义约束，并保留洗题侧单反斜杠 LaTeX 容错 JSON 解析兜底与客户端题型二次过滤（AI 深度解析与流式追问代码零改动）。
+  - **标准 JSON 自动识货拦截**：`jsonImporter.ts` 新增 `detectStandardQuizJson`，在 AI 洗题区拖拽/粘贴合法 `.quizhub.json` 分享包、`{ meta, chapters, questions }` 或标准题目数组时静默拦截并提示「直接导入（0 Token）」或「仍用 AI 洗题」；兼容旧题型 `analysis`。
+  - **导入导出无损保真**：修复 `jsonImporter.ts` / `normalize.ts` / `quizImportTypes.ts` 字段折叠问题，确保 `explain`、`explanation` 与 `aiAnalysis` 往返导出再导入 100% 独立保留互不覆盖。
+  - **E2E 回归修复与补齐**：修复导入弹窗自动关闭竞态用例，适配拆分后的 `builtin-quizhub-guide` / `builtin-ai-intro`，新增 `tests/e2e/tier5-import-polish.spec.ts` 覆盖桌面端与移动端 6 项核心导入/洗题场景。
+- **合流后全量本地验证（`f4c1505`）**：
+  - `npm run typecheck` 与 `npx tsc -p tests/e2e/tsconfig.json --noEmit`：**PASS**
+  - `npm run build`：**PASS**（131 modules，624ms）
+  - `npm test`：**PASS**（17 个测试文件 / 167/167 用例通过）
+  - 全套桌面 + 移动端 Playwright E2E（16 个 spec）：常规全量 **327 passed, 0 failed**（Desktop `267 passed` + Mobile `60 passed`，285 项按视口/配置跳过）+ `PW_AUTH_DISABLED=1` 游客回退 **2 passed, 0 failed**（合计 **329 passed, 0 failed**）。
+- **上线前提醒**：合入生产发布分支前，请先在目标 Supabase 项目应用新增迁移 `db/supabase/migrations/202611260002_add_quizhub_guide_bank.sql`，再按清单实测跨设备引导题进度/AI 解析恢复、旧账号恢复历史进度以及导入洗题全链路。
+
+## Phase 2 刷题与云同步回归（2026-11-26）
+
+- 引导示例题使用 `builtin-quizhub-guide`。旧题库文件与 `v2.0-sync-ready` 原始数据一致，共 335 题。当前已登录账号在旧题库有对应题目的答题、收藏或掌握度记录时，题库切换器才提供旧库选项。两套题库各自保存进度。
+- 刷题工作台等待题库初始化完成后再开放操作。桌面导航和账号栏作为一组吸顶。题型沿用现有枚举，简答题的「有点模糊」和「不会」均进入错题本。
+- AI 解析生成后若本机保存失败，界面保留生成结果并提供重试保存。云同步重试期间继续作答或编辑题库时，后续写入也会带上已合并的远端变更。切换账号后按新账号重新加载题库、进度和 BYOK。
+- 关键改动在 `src/utils/useBankLibrary.ts`、`src/services/cloudSync.ts`、`src/components/ApiSettings/AiQuestionTutor.tsx` 和 `src/App.tsx`。新增迁移 `db/supabase/migrations/202611260002_add_quizhub_guide_bank.sql`，让原有进度和游客导入 RPC 支持新版引导题库，并在合并游客进度时保留 AI 解析。历史迁移、认证、加密和 Edge Function 接口沿用 Phase 1。
+- 本地验收通过主工程和 E2E 类型检查、Cloudflare Pages 生产构建、151 项单测、292 项非导入模块桌面及移动端 Playwright 回归、2 项无 Supabase 配置的游客回归，以及 PGlite 中的历史 SQL 与新增 SQL 回归。浏览器云端写入、恢复和冲突用例使用模拟网关。
+- 上线前先在目标 Supabase 项目应用新增迁移，再验证两台设备之间的引导题进度和解析恢复，以及旧账号恢复错题、收藏和掌握度。导入工作台与洗题已合流并完成全量回归验收（见上方记录）。
+
 ## Phase 1 收尾与线上域名归档（2026-11-26）
 
 - **线上域名与部署架构**：

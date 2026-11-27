@@ -33,6 +33,9 @@ export interface Question {
   // tf     -> boolean (true=正确/对, false=错误/错)
   // short | analysis -> string reference answer
   explain: string;
+  explanation?: string;
+  aiAnalysis?: string;
+  aiInferredAnswer?: boolean;
   keyPoints?: string[];        // optional bullet points for short/analysis
   tags?: string[];
   source: QuestionSource;
@@ -103,10 +106,17 @@ export interface UserRecord {
   ts: number;
 }
 
+export interface CachedAiExplanation {
+  content: string;
+  updatedAt: number;
+  model?: string;
+}
+
 export interface UserStore {
   records: Record<string, UserRecord>;
   fav: Record<string, boolean>;
   mastery: Record<string, MasteryLevel>;
+  aiExplanations?: Record<string, CachedAiExplanation>;
 }
 
 export interface QuizFilterOptions {

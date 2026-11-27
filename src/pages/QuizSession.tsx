@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import type { MasteryLevel, Question, UserRecord, UserStore } from '../types/quiz';
+import type { ChapterMeta, MasteryLevel, Question, UserRecord, UserStore } from '../types/quiz';
 import {
   formatAnswerText,
   formatElapsed,
@@ -8,18 +8,42 @@ import {
   isObjectiveQuestion,
 } from '../core/questionUtils';
 import { computeSessionResult } from '../core/quizEngine';
-import { CHAPTER_BY_ID, TYPE_NAME } from '../data/catalog';
+import { TYPE_NAME } from '../data/catalog';
 import { Icon, type IconName } from '../components/Icons';
-import { AiQuestionTutor } from '../components/ApiSettings';
+import {
+  AiExplainDrawer,
+  AiTutorInlinePanel,
+  useAiQuestionTutor,
+} from '../components/ApiSettings/AiQuestionTutor';
+import { RichContent } from '../components/RichContent';
+import { useWorkspacePrefs } from '../hooks/useWorkspacePrefs';
 import type { QuizActions, ResultSpec, SessionSpec } from './quizTypes';
 
 interface QuizSessionProps {
   spec: SessionSpec;
+  bankId?: string;
+  bankName?: string;
+  chapterById?: ReadonlyMap<number, ChapterMeta>;
+  questionsById?: ReadonlyMap<string, Question>;
   store: UserStore;
   actions: QuizActions;
+  onSaveAiAnalysis?: (questionId: string, content: string, model?: string) => Promise<void> | void;
   onExit: () => void;
   onFinish: (resultSpec: ResultSpec) => void;
 }
+
+type SheetFilter = 'all' | 'unanswered' | 'wrong' | 'fav';
+
+const FALLBACK_QUESTION: Question = {
+  id: '__empty__',
+  type: 'choice',
+  chapter: 1,
+  stem: '',
+  options: [],
+  answer: 0,
+  explain: '',
+  source: { origin: 'comprehensive_bank', file: '', ref: '' },
+};
 
 const MASTERY_OPTIONS: {
   level: MasteryLevel;
@@ -47,7 +71,17 @@ function formatUserChoiceText(q: Question, choice: number | number[] | boolean |
   return String(choice);
 }
 
-export function QuizSession({ spec, store, actions, onExit, onFinish }: QuizSessionProps) {
+export function QuizSession({
+  spec,
+  bankName = 'QuizHub 题库',
+  chapterById,
+  questionsById,
+  store,
+  actions,
+  onSaveAiAnalysis,
+  onExit,
+  onFinish,
+}: QuizSessionProps) {
   const { queue, config } = spec;
   const total = queue.length;
 
@@ -57,6 +91,9 @@ export function QuizSession({ spec, store, actions, onExit, onFinish }: QuizSess
   const [multiDrafts, setMultiDrafts] = useState<Record<string, number[]>>({});
   const [revealedIds, setRevealedIds] = useState<Record<string, boolean>>({});
   const [sheetOpen, setSheetOpen] = useState(false);
+  const [sheetFilter, setSheetFilter] = useState<SheetFilter>('all');
+
+  const { prefs, setAutoExplainOnWrong } = useWorkspacePrefs();
 
   const startedAtRef = useRef<number>(Date.now());
   const [elapsedMs, setElapsedMs] = useState(0);
@@ -71,7 +108,8 @@ export function QuizSession({ spec, store, actions, onExit, onFinish }: QuizSess
   }, [spec.id]);
 
   const safeIndex = Math.min(Math.max(0, currentIndex), Math.max(0, total - 1));
-  const q: Question | undefined = queue[safeIndex];
+  const rawQ: Question | undefined = queue[safeIndex];
+  const q: Question | undefined = rawQ ? (questionsById?.get(rawQ.id) ?? rawQ) : undefined;
 
   const currentRecord: UserRecord | undefined =
     q && Object.prototype.hasOwnProperty.call(sessionAnswers, q.id)
@@ -86,7 +124,7 @@ export function QuizSession({ spec, store, actions, onExit, onFinish }: QuizSess
   const isFav = q ? store.fav[q.id] === true : false;
   const isLast = safeIndex >= total - 1;
 
-  const answeredCount = useMemo(() => Object.keys(sessionAnswers).length, [sessionAnswers]);
+  const chMeta = q ? chapterById?.get(q.chapter) : undefined;
 
   const finishSession = useCallback(
     (latestAnswers: Record<string, UserRecord>, latestMastery: Record<string, MasteryLevel>) => {
@@ -116,15 +154,57 @@ export function QuizSession({ spec, store, actions, onExit, onFinish }: QuizSess
     }
   }, [finishSession, safeIndex, sessionAnswers, sessionMastery, total]);
 
+  const handleSelfCheck = useCallback(
+    (level: MasteryLevel) => {
+      if (!q) return;
+      const record = actions.rateSubjective(q.id, level);
+      setRevealedIds((prev) => (prev[q.id] ? prev : { ...prev, [q.id]: true }));
+      setSessionMastery((prev) => ({ ...prev, [q.id]: level }));
+      setSessionAnswers((prev) => ({ ...prev, [q.id]: record }));
+    },
+    [actions, q],
+  );
+
+  const tutor = useAiQuestionTutor({
+    question: q ?? FALLBACK_QUESTION,
+    userRecord: currentRecord,
+    isGraded,
+    isRevealed,
+    chapterTitle: chMeta?.short,
+    bankName,
+    store,
+    autoExplainOnWrong: prefs.autoExplainOnWrong,
+    onToggleAutoExplain: setAutoExplainOnWrong,
+    onSuggestedMastery: q && !isObjectiveQuestion(q.type) ? handleSelfCheck : undefined,
+    onSaveAiAnalysis,
+  });
+
+  const handleSelfCheckWithAutoExplain = useCallback(
+    (level: MasteryLevel) => {
+      if (!q) return;
+      const record = actions.rateSubjective(q.id, level);
+      setRevealedIds((prev) => (prev[q.id] ? prev : { ...prev, [q.id]: true }));
+      setSessionMastery((prev) => ({ ...prev, [q.id]: level }));
+      setSessionAnswers((prev) => ({ ...prev, [q.id]: record }));
+      if (prefs.autoExplainOnWrong && level < 2) {
+        void tutor.runExplain(false, record);
+      }
+    },
+    [actions, prefs.autoExplainOnWrong, q, tutor],
+  );
+
   const handleChoicePick = useCallback(
     (optionIdx: number) => {
       if (!q || q.type !== 'choice' || isGraded) return;
       const optCount = q.options?.length ?? 0;
       if (optionIdx < 0 || optionIdx >= optCount) return;
-      const { record } = actions.answerObjective(q, optionIdx);
+      const { record, isCorrect } = actions.answerObjective(q, optionIdx);
       setSessionAnswers((prev) => ({ ...prev, [q.id]: record }));
+      if (prefs.autoExplainOnWrong && !isCorrect) {
+        void tutor.runExplain(false, record);
+      }
     },
-    [actions, isGraded, q],
+    [actions, isGraded, prefs.autoExplainOnWrong, q, tutor],
   );
 
   const handleMultiToggle = useCallback(
@@ -148,17 +228,23 @@ export function QuizSession({ spec, store, actions, onExit, onFinish }: QuizSess
     if (!q || q.type !== 'multi' || isGraded) return;
     const picked = multiDrafts[q.id] ?? [];
     if (picked.length === 0) return;
-    const { record } = actions.answerObjective(q, picked);
+    const { record, isCorrect } = actions.answerObjective(q, picked);
     setSessionAnswers((prev) => ({ ...prev, [q.id]: record }));
-  }, [actions, isGraded, multiDrafts, q]);
+    if (prefs.autoExplainOnWrong && !isCorrect) {
+      void tutor.runExplain(false, record);
+    }
+  }, [actions, isGraded, multiDrafts, prefs.autoExplainOnWrong, q, tutor]);
 
   const handleTfPick = useCallback(
     (val: boolean) => {
       if (!q || q.type !== 'tf' || isGraded) return;
-      const { record } = actions.answerObjective(q, val);
+      const { record, isCorrect } = actions.answerObjective(q, val);
       setSessionAnswers((prev) => ({ ...prev, [q.id]: record }));
+      if (prefs.autoExplainOnWrong && !isCorrect) {
+        void tutor.runExplain(false, record);
+      }
     },
-    [actions, isGraded, q],
+    [actions, isGraded, prefs.autoExplainOnWrong, q, tutor],
   );
 
   const handleReveal = useCallback(() => {
@@ -166,30 +252,21 @@ export function QuizSession({ spec, store, actions, onExit, onFinish }: QuizSess
     setRevealedIds((prev) => (prev[q.id] ? prev : { ...prev, [q.id]: true }));
   }, [q]);
 
-  const handleSelfCheck = useCallback(
-    (level: MasteryLevel) => {
-      if (!q) return;
-      const record = actions.rateSubjective(q.id, level);
-      setRevealedIds((prev) => (prev[q.id] ? prev : { ...prev, [q.id]: true }));
-      setSessionMastery((prev) => ({ ...prev, [q.id]: level }));
-      setSessionAnswers((prev) => ({ ...prev, [q.id]: record }));
-    },
-    [actions, q],
-  );
-
   useEffect(() => {
     const onKeyDown = (e: KeyboardEvent) => {
       if (!q) return;
       if (e.defaultPrevented || e.metaKey || e.ctrlKey || e.altKey || e.isComposing) return;
+      if (document.querySelector('[role="dialog"][aria-modal="true"]')) return;
 
       const target = e.target as HTMLElement | null;
-      if (target && target.closest('input, textarea, select, [contenteditable="true"]')) {
+      const hasClosest = Boolean(target && typeof target.closest === 'function');
+      if (hasClosest && target!.closest('input, textarea, select, [contenteditable="true"]')) {
         return;
       }
 
       const onInteractive = Boolean(
-        target &&
-          target.closest(
+        hasClosest &&
+          target!.closest(
             'button, a[href], summary, [role="button"], [role="link"], [role="tab"]',
           ),
       );
@@ -260,6 +337,49 @@ export function QuizSession({ spec, store, actions, onExit, onFinish }: QuizSess
     q,
   ]);
 
+  const answeredCount = useMemo(() => Object.keys(sessionAnswers).length, [sessionAnswers]);
+
+  const sheetItems = useMemo(() => {
+    return queue.map((item, idx) => {
+      const rec = Object.prototype.hasOwnProperty.call(sessionAnswers, item.id)
+        ? sessionAnswers[item.id]
+        : undefined;
+      const status: 'correct' | 'wrong' | 'unanswered' = !rec
+        ? 'unanswered'
+        : rec.ok === 1
+          ? 'correct'
+          : 'wrong';
+      const starred = store.fav[item.id] === true;
+      return { item, idx, status, starred };
+    });
+  }, [queue, sessionAnswers, store.fav]);
+
+  const sheetCounts = useMemo(() => {
+    let unanswered = 0;
+    let wrong = 0;
+    let fav = 0;
+    for (const entry of sheetItems) {
+      if (entry.status === 'unanswered') unanswered += 1;
+      if (entry.status === 'wrong') wrong += 1;
+      if (entry.starred) fav += 1;
+    }
+    return {
+      all: sheetItems.length,
+      unanswered,
+      wrong,
+      fav,
+    };
+  }, [sheetItems]);
+
+  const filteredSheetItems = useMemo(() => {
+    if (sheetFilter === 'all') return sheetItems;
+    return sheetItems.filter((entry) => {
+      if (sheetFilter === 'unanswered') return entry.status === 'unanswered';
+      if (sheetFilter === 'wrong') return entry.status === 'wrong';
+      return entry.starred;
+    });
+  }, [sheetFilter, sheetItems]);
+
   if (!q) {
     return (
       <div className="page-wrap page-wrap--quiz">
@@ -273,10 +393,11 @@ export function QuizSession({ spec, store, actions, onExit, onFinish }: QuizSess
     );
   }
 
-  const chMeta = CHAPTER_BY_ID.get(q.chapter);
   const chapterTagText = chMeta ? `第 ${q.chapter} 章 · ${chMeta.short}` : `第 ${q.chapter} 章`;
-  const sourceTagText = `${getOriginLabel(q.source.origin)}${q.source.ref ? ` · ${q.source.ref}` : ''}`;
+  const originLabel = getOriginLabel(q.source?.origin ?? 'comprehensive_bank');
+  const sourceTagText = `${originLabel}${q.source?.ref ? ` · ${q.source.ref}` : ''}`;
   const progressPct = total > 0 ? Math.round(((safeIndex + 1) / total) * 100) : 100;
+  const baseExplainText = (q.explain ?? '').trim() || (q.explanation ?? '').trim();
 
   const selectedMulti =
     q.type === 'multi'
@@ -289,7 +410,7 @@ export function QuizSession({ spec, store, actions, onExit, onFinish }: QuizSess
     q.type === 'multi' && Array.isArray(q.answer) ? new Set<number>(q.answer) : new Set<number>();
 
   return (
-    <div className="page-wrap page-wrap--session">
+    <div className={`page-wrap page-wrap--session${tutor.drawerOpen ? ' has-drawer' : ''}`}>
       <div className="session-topbar">
         <div className="session-topbar__row">
           <button
@@ -303,6 +424,9 @@ export function QuizSession({ spec, store, actions, onExit, onFinish }: QuizSess
           </button>
 
           <div className="session-topbar__center">
+            <span className="session-bank-name" title={bankName}>
+              {bankName}
+            </span>
             <span data-testid="quiz-mode-title" className="session-mode-title">
               {config.title}
             </span>
@@ -342,351 +466,425 @@ export function QuizSession({ spec, store, actions, onExit, onFinish }: QuizSess
         </div>
       </div>
 
-      <article className="question-card">
-        <div className="question-card__head">
-          <div className="question-card__tags">
-            <span className="pill pill--index">第 {safeIndex + 1} 题</span>
-            <span data-testid="q-chapter-tag" className="pill pill--neutral">
-              {chapterTagText}
-            </span>
-            <span data-testid="q-type-tag" className={`pill pill--type pill--type-${q.type}`}>
-              {TYPE_NAME[q.type]}
-            </span>
-            <span data-testid="q-source-tag" className="pill pill--subtle">
-              {sourceTagText}
-            </span>
-          </div>
-
-          <button
-            type="button"
-            data-testid="btn-star"
-            className={`btn-star${isFav ? ' is-starred' : ''}`}
-            aria-pressed={isFav ? 'true' : 'false'}
-            onClick={() => actions.toggleFav(q.id)}
-          >
-            <Icon name={isFav ? 'starFill' : 'star'} size={15} />
-            <span>{isFav ? '已收藏' : '收藏'}</span>
-          </button>
-        </div>
-
-        <div data-testid="q-stem" className="question-stem">
-          {q.stem}
-        </div>
-
-        {q.type === 'choice' && (
-          <div className="option-list" role="group" aria-label="单选题选项">
-            {(q.options ?? []).map((optText, idx) => {
-              const isCorrectOption = isGraded && q.answer === idx;
-              const isUserWrong = isGraded && currentRecord?.choice === idx && q.answer !== idx;
-              const isUserPicked = currentRecord?.choice === idx;
-              const stateCls = isCorrectOption
-                ? ' is-correct'
-                : isUserWrong
-                  ? ' is-wrong'
-                  : isUserPicked
-                    ? ' is-selected'
-                    : '';
-              return (
-                <button
-                  key={idx}
-                  type="button"
-                  data-testid={`quiz-option-${idx}`}
-                  disabled={isGraded}
-                  className={`option-btn${stateCls}`}
-                  onClick={() => handleChoicePick(idx)}
-                >
-                  <span className="option-btn__badge" aria-hidden="true">
-                    {getOptionLabel(idx)}
+      <div className={`workspace-layout${tutor.drawerOpen ? ' has-drawer' : ''}`}>
+        <div className="workspace-main">
+          <article className="question-card">
+            <div className="question-card__head">
+              <div className="question-card__tags">
+                <span className="pill pill--index">第 {safeIndex + 1} 题</span>
+                <span data-testid="q-chapter-tag" className="pill pill--neutral">
+                  {chapterTagText}
+                </span>
+                <span data-testid="q-type-tag" className={`pill pill--type pill--type-${q.type}`}>
+                  {TYPE_NAME[q.type]}
+                </span>
+                <span data-testid="q-source-tag" className="pill pill--subtle">
+                  {sourceTagText}
+                </span>
+                {q.aiInferredAnswer === true && (
+                  <span data-testid="q-ai-inferred-badge" className="pill pill--warn">
+                    AI 推断答案
                   </span>
-                  <span className="option-btn__text">{optText}</span>
-                  {isGraded && (isCorrectOption || isUserWrong) && (
-                    <span className="option-btn__mark" aria-hidden="true">
-                      <Icon name={isCorrectOption ? 'check' : 'x'} size={16} strokeWidth={2.4} />
-                    </span>
-                  )}
-                </button>
-              );
-            })}
-          </div>
-        )}
+                )}
+              </div>
 
-        {q.type === 'multi' && (
-          <div className="multi-block">
-            <div className="option-list" role="group" aria-label="多选题选项">
-              {(q.options ?? []).map((optText, idx) => {
-                const picked = selectedMultiSet.has(idx);
-                const shouldPick = correctMultiSet.has(idx);
-                let stateCls = '';
-                let markText = '';
-                if (!isGraded) {
-                  if (picked) stateCls = ' is-selected';
-                } else if (shouldPick && picked) {
-                  stateCls = ' is-correct';
-                  markText = '✓';
-                } else if (shouldPick && !picked) {
-                  stateCls = ' is-missed';
-                  markText = '漏选';
-                } else if (!shouldPick && picked) {
-                  stateCls = ' is-wrong';
-                  markText = '✕';
-                }
-                return (
-                  <button
-                    key={idx}
-                    type="button"
-                    data-testid={`quiz-option-${idx}`}
-                    aria-pressed={picked ? 'true' : 'false'}
-                    disabled={isGraded}
-                    className={`option-btn option-btn--multi${stateCls}`}
-                    onClick={() => handleMultiToggle(idx)}
-                  >
-                    <span className="option-btn__badge" aria-hidden="true">
-                      {getOptionLabel(idx)}
-                    </span>
-                    <span className="option-btn__text">{optText}</span>
-                    {!isGraded ? (
-                      <span
-                        className={`option-btn__check${picked ? ' is-checked' : ''}`}
-                        aria-hidden="true"
-                      >
-                        {picked && <Icon name="check" size={13} strokeWidth={2.6} />}
-                      </span>
-                    ) : (
-                      markText && (
-                        <span className="option-btn__mark" aria-hidden="true">
-                          {markText}
-                        </span>
-                      )
-                    )}
-                  </button>
-                );
-              })}
-            </div>
-
-            <div className="multi-submit-row">
               <button
                 type="button"
-                data-testid="btn-submit-multi"
-                className="btn btn--primary"
-                disabled={isGraded || selectedMulti.length === 0}
-                onClick={handleSubmitMulti}
+                data-testid="btn-star"
+                className={`btn-star${isFav ? ' is-starred' : ''}`}
+                aria-pressed={isFav ? 'true' : 'false'}
+                onClick={() => actions.toggleFav(q.id)}
               >
-                <Icon name="checkSquare" size={16} />
-                确认提交
-                {!isGraded && selectedMulti.length > 0 ? `（已选 ${selectedMulti.length} 项）` : ''}
+                <Icon name={isFav ? 'starFill' : 'star'} size={15} />
+                <span>{isFav ? '已收藏' : '收藏'}</span>
               </button>
-              {!isGraded && (
-                <span className="multi-hint">可多选，选齐全部正确项后点击“确认提交”判分</span>
-              )}
             </div>
-          </div>
-        )}
 
-        {q.type === 'tf' && (
-          <div className="tf-grid" role="group" aria-label="判断题选项">
-            {([true, false] as const).map((val) => {
-              const isCorrectVal = isGraded && q.answer === val;
-              const isWrongVal = isGraded && currentRecord?.choice === val && q.answer !== val;
-              const stateCls = isCorrectVal ? ' is-correct' : isWrongVal ? ' is-wrong' : '';
-              return (
-                <button
-                  key={String(val)}
-                  type="button"
-                  data-testid={val ? 'tf-btn-true' : 'tf-btn-false'}
-                  disabled={isGraded}
-                  className={`tf-btn${stateCls}`}
-                  onClick={() => handleTfPick(val)}
-                >
-                  <span className="tf-btn__icon" aria-hidden="true">
-                    <Icon name={val ? 'check' : 'x'} size={18} strokeWidth={2.4} />
-                  </span>
-                  <span>{val ? '正确' : '错误'}</span>
-                  <kbd className="tf-btn__kbd" aria-hidden="true">
-                    {val ? 'T' : 'F'}
-                  </kbd>
-                </button>
-              );
-            })}
-          </div>
-        )}
-
-        {isObjectiveQuestion(q.type) && isGraded && currentRecord && (
-          <div
-            data-testid="quiz-feedback"
-            className={`quiz-feedback ${currentRecord.ok === 1 ? 'is-correct' : 'is-wrong'}`}
-          >
-            <div className="quiz-feedback__head">
-              <strong className="quiz-feedback__status">
-                <Icon
-                  name={currentRecord.ok === 1 ? 'circleCheck' : 'circleX'}
-                  size={17}
-                  strokeWidth={2.1}
-                />
-                {currentRecord.ok === 1 ? '回答正确' : '回答错误'}
-              </strong>
-              <span className="quiz-feedback__ans">
-                你的作答：{formatUserChoiceText(q, currentRecord.choice)} · 正确答案：
-                <strong>{formatAnswerText(q)}</strong>
-              </span>
+            <div data-testid="q-stem" className="question-stem">
+              <RichContent content={q.stem} />
             </div>
-            <div className="quiz-feedback__explain">
-              <strong>解析：</strong>
-              {q.explain || '请对照课程讲义巩固该知识点。'}
-            </div>
-            {q.source.note && <div className="quiz-feedback__note">补充说明：{q.source.note}</div>}
-          </div>
-        )}
 
-        {!isObjectiveQuestion(q.type) && (
-          <div className="subjective-block">
-            {!isRevealed ? (
-              <div className="reveal-box">
-                <p className="reveal-box__tip">
-                  建议先在脑海或草稿中梳理核心采分关键词，再展开标准参考答案对照自评。
-                </p>
-                <button
-                  type="button"
-                  data-testid="btn-reveal-answer"
-                  className="btn btn--primary"
-                  onClick={handleReveal}
-                >
-                  <Icon name="sparkles" size={16} />
-                  显示参考答案
-                </button>
+            {q.type === 'choice' && (
+              <div className="option-list" role="group" aria-label="单选题选项">
+                {(q.options ?? []).map((optText, idx) => {
+                  const isCorrectOption = isGraded && q.answer === idx;
+                  const isUserWrong =
+                    isGraded && currentRecord?.choice === idx && q.answer !== idx;
+                  const isUserPicked = currentRecord?.choice === idx;
+                  const stateCls = isCorrectOption
+                    ? ' is-correct'
+                    : isUserWrong
+                      ? ' is-wrong'
+                      : isUserPicked
+                        ? ' is-selected'
+                        : '';
+                  return (
+                    <button
+                      key={idx}
+                      type="button"
+                      data-testid={`quiz-option-${idx}`}
+                      disabled={isGraded}
+                      className={`option-btn${stateCls}`}
+                      onClick={() => handleChoicePick(idx)}
+                    >
+                      <span className="option-btn__badge" aria-hidden="true">
+                        {getOptionLabel(idx)}
+                      </span>
+                      <span className="option-btn__text">
+                        <RichContent inline content={optText} />
+                      </span>
+                      {isGraded && (isCorrectOption || isUserWrong) && (
+                        <span className="option-btn__mark" aria-hidden="true">
+                          <Icon
+                            name={isCorrectOption ? 'check' : 'x'}
+                            size={16}
+                            strokeWidth={2.4}
+                          />
+                        </span>
+                      )}
+                    </button>
+                  );
+                })}
               </div>
-            ) : (
-              <>
-                <div data-testid="q-ref-answer" className="ref-answer-card">
-                  <div className="ref-answer-card__section">
-                    <div className="ref-answer-card__label">标准参考答案</div>
-                    <div className="ref-answer-card__text">{formatAnswerText(q)}</div>
-                  </div>
-
-                  {Array.isArray(q.keyPoints) && q.keyPoints.length > 0 && (
-                    <div className="ref-answer-card__section">
-                      <div className="ref-answer-card__label">核心采分要点</div>
-                      <ul className="ref-answer-card__kp">
-                        {q.keyPoints.map((kp, i) => (
-                          <li key={i}>{kp}</li>
-                        ))}
-                      </ul>
-                    </div>
-                  )}
-
-                  {q.explain && (
-                    <div className="ref-answer-card__explain">
-                      <strong>解析与考点溯源：</strong>
-                      {q.explain}
-                    </div>
-                  )}
-                </div>
-
-                <div className="selfcheck-panel" role="group" aria-label="主观题掌握程度自评">
-                  <div className="selfcheck-panel__title">
-                    请自评掌握程度（选“有点模糊”或“不会”将自动加入错题本）：
-                  </div>
-                  <div className="selfcheck-grid">
-                    {MASTERY_OPTIONS.map((item) => {
-                      const active = currentMastery === item.level;
-                      return (
-                        <button
-                          key={item.level}
-                          type="button"
-                          data-testid={`selfcheck-${item.level}`}
-                          aria-pressed={active ? 'true' : 'false'}
-                          className={`selfcheck-btn selfcheck-btn--${item.tone}${active ? ' is-active' : ''}`}
-                          onClick={() => handleSelfCheck(item.level)}
-                        >
-                          <span className="selfcheck-btn__main">
-                            <Icon name={item.icon} size={17} />
-                            <span>{item.label}</span>
-                          </span>
-                          <span className="selfcheck-btn__hint" aria-hidden="true">
-                            {item.hint}
-                          </span>
-                        </button>
-                      );
-                    })}
-                  </div>
-                </div>
-              </>
             )}
-          </div>
-        )}
-        <AiQuestionTutor key={q.id} question={q} userRecord={currentRecord} isGraded={isGraded} isRevealed={isRevealed} chapterTitle={chMeta?.short} onSuggestedMastery={!isObjectiveQuestion(q.type) ? handleSelfCheck : undefined} />
-      </article>
 
-      <div className="session-nav-bar">
-        <button
-          type="button"
-          data-testid="btn-prev"
-          className="btn btn--ghost"
-          disabled={safeIndex === 0}
-          onClick={handlePrev}
-        >
-          <Icon name="arrowLeft" size={16} />
-          上一题
-        </button>
+            {q.type === 'multi' && (
+              <div className="multi-block">
+                <div className="option-list" role="group" aria-label="多选题选项">
+                  {(q.options ?? []).map((optText, idx) => {
+                    const picked = selectedMultiSet.has(idx);
+                    const shouldPick = correctMultiSet.has(idx);
+                    let stateCls = '';
+                    let markText = '';
+                    if (!isGraded) {
+                      if (picked) stateCls = ' is-selected';
+                    } else if (shouldPick && picked) {
+                      stateCls = ' is-correct';
+                      markText = '✓';
+                    } else if (shouldPick && !picked) {
+                      stateCls = ' is-missed';
+                      markText = '漏选';
+                    } else if (!shouldPick && picked) {
+                      stateCls = ' is-wrong';
+                      markText = '✕';
+                    }
+                    return (
+                      <button
+                        key={idx}
+                        type="button"
+                        data-testid={`quiz-option-${idx}`}
+                        aria-pressed={picked ? 'true' : 'false'}
+                        disabled={isGraded}
+                        className={`option-btn option-btn--multi${stateCls}`}
+                        onClick={() => handleMultiToggle(idx)}
+                      >
+                        <span className="option-btn__badge" aria-hidden="true">
+                          {getOptionLabel(idx)}
+                        </span>
+                        <span className="option-btn__text">
+                          <RichContent inline content={optText} />
+                        </span>
+                        {!isGraded ? (
+                          <span
+                            className={`option-btn__check${picked ? ' is-checked' : ''}`}
+                            aria-hidden="true"
+                          >
+                            {picked && <Icon name="check" size={13} strokeWidth={2.6} />}
+                          </span>
+                        ) : (
+                          markText && (
+                            <span className="option-btn__mark" aria-hidden="true">
+                              {markText}
+                            </span>
+                          )
+                        )}
+                      </button>
+                    );
+                  })}
+                </div>
 
-        <span className="shortcut-hint">
-          快捷键：<kbd>←</kbd> / <kbd>→</kbd> 切题 · <kbd>1–4</kbd> / <kbd>A–D</kbd> 选项 · <kbd>T</kbd>/<kbd>F</kbd> 判断 · <kbd>Space</kbd> 看答案
-        </span>
+                <div className="multi-submit-row">
+                  <button
+                    type="button"
+                    data-testid="btn-submit-multi"
+                    className="btn btn--primary"
+                    disabled={isGraded || selectedMulti.length === 0}
+                    onClick={handleSubmitMulti}
+                  >
+                    <Icon name="checkSquare" size={16} />
+                    确认提交
+                    {!isGraded && selectedMulti.length > 0 ? `（已选 ${selectedMulti.length} 项）` : ''}
+                  </button>
+                  {!isGraded && (
+                    <span className="multi-hint">可多选，选齐全部正确项后点击“确认提交”判分</span>
+                  )}
+                </div>
+              </div>
+            )}
 
-        <button
-          type="button"
-          data-testid="btn-next"
-          className="btn btn--primary"
-          onClick={handleNext}
-        >
-          {isLast ? '看结果' : '下一题'}
-          <Icon name="arrowRight" size={16} />
-        </button>
-      </div>
+            {q.type === 'tf' && (
+              <div className="tf-grid" role="group" aria-label="判断题选项">
+                {([true, false] as const).map((val) => {
+                  const isCorrectVal = isGraded && q.answer === val;
+                  const isWrongVal =
+                    isGraded && currentRecord?.choice === val && q.answer !== val;
+                  const stateCls = isCorrectVal ? ' is-correct' : isWrongVal ? ' is-wrong' : '';
+                  return (
+                    <button
+                      key={String(val)}
+                      type="button"
+                      data-testid={val ? 'tf-btn-true' : 'tf-btn-false'}
+                      disabled={isGraded}
+                      className={`tf-btn${stateCls}`}
+                      onClick={() => handleTfPick(val)}
+                    >
+                      <span className="tf-btn__icon" aria-hidden="true">
+                        <Icon name={val ? 'check' : 'x'} size={18} strokeWidth={2.4} />
+                      </span>
+                      <span>{val ? '正确' : '错误'}</span>
+                      <kbd className="tf-btn__kbd" aria-hidden="true">
+                        {val ? 'T' : 'F'}
+                      </kbd>
+                    </button>
+                  );
+                })}
+              </div>
+            )}
 
-      {sheetOpen && (
-        <section
-          data-testid="answer-sheet"
-          role="region"
-          aria-label="答题卡"
-          className="answer-sheet-card"
-        >
-          <div className="answer-sheet-card__head">
-            <h3 className="answer-sheet-card__title">答题卡速跳</h3>
-            <div className="answer-sheet-legend">
-              <span className="legend-item legend-item--ok">已掌握/正确</span>
-              <span className="legend-item legend-item--bad">需巩固/答错</span>
-              <span className="legend-item legend-item--none">未作答</span>
+            {isObjectiveQuestion(q.type) && isGraded && currentRecord && (
+              <div
+                data-testid="quiz-feedback"
+                className={`quiz-feedback ${currentRecord.ok === 1 ? 'is-correct' : 'is-wrong'}`}
+              >
+                <div className="quiz-feedback__head">
+                  <strong className="quiz-feedback__status">
+                    <Icon
+                      name={currentRecord.ok === 1 ? 'circleCheck' : 'circleX'}
+                      size={17}
+                      strokeWidth={2.1}
+                    />
+                    {currentRecord.ok === 1 ? '回答正确' : '回答错误'}
+                  </strong>
+                  <span className="quiz-feedback__ans">
+                    你的作答：{formatUserChoiceText(q, currentRecord.choice)} · 正确答案：
+                    <strong>
+                      <RichContent inline content={formatAnswerText(q)} />
+                    </strong>
+                  </span>
+                </div>
+                <div className="quiz-feedback__explain">
+                  <strong>解析：</strong>
+                  <RichContent
+                    content={
+                      baseExplainText ||
+                      '暂无文字解析，可点击下方「✨ AI 深度解析」获取详细思路与逐项排错。'
+                    }
+                  />
+                </div>
+                {q.source?.note && <div className="quiz-feedback__note">补充说明：{q.source.note}</div>}
+              </div>
+            )}
+
+            {!isObjectiveQuestion(q.type) && (
+              <div className="subjective-block">
+                {!isRevealed ? (
+                  <div className="reveal-box">
+                    <p className="reveal-box__tip">
+                      建议先在脑海或草稿中梳理核心采分关键词，再展开标准参考答案对照自评。
+                    </p>
+                    <button
+                      type="button"
+                      data-testid="btn-reveal-answer"
+                      className="btn btn--primary"
+                      onClick={handleReveal}
+                    >
+                      <Icon name="sparkles" size={16} />
+                      显示参考答案
+                    </button>
+                  </div>
+                ) : (
+                  <>
+                    <div data-testid="q-ref-answer" className="ref-answer-card">
+                      <div className="ref-answer-card__section">
+                        <div className="ref-answer-card__label">标准参考答案</div>
+                        <div className="ref-answer-card__text">
+                          <RichContent content={formatAnswerText(q)} />
+                        </div>
+                      </div>
+
+                      {Array.isArray(q.keyPoints) && q.keyPoints.length > 0 && (
+                        <div className="ref-answer-card__section">
+                          <div className="ref-answer-card__label">核心采分要点</div>
+                          <ul className="ref-answer-card__kp">
+                            {q.keyPoints.map((kp, i) => (
+                              <li key={i}>
+                                <RichContent inline content={kp} />
+                              </li>
+                            ))}
+                          </ul>
+                        </div>
+                      )}
+
+                      {baseExplainText && (
+                        <div className="ref-answer-card__explain">
+                          <strong>解析与考点溯源：</strong>
+                          <RichContent content={baseExplainText} />
+                        </div>
+                      )}
+                    </div>
+
+                    <div className="selfcheck-panel" role="group" aria-label="主观题掌握程度自评">
+                      <div className="selfcheck-panel__title">
+                        请自评掌握程度（选“有点模糊”或“不会”将自动加入错题本）：
+                      </div>
+                      <div className="selfcheck-grid">
+                        {MASTERY_OPTIONS.map((item) => {
+                          const active = currentMastery === item.level;
+                          return (
+                            <button
+                              key={item.level}
+                              type="button"
+                              data-testid={`selfcheck-${item.level}`}
+                              aria-pressed={active ? 'true' : 'false'}
+                              className={`selfcheck-btn selfcheck-btn--${item.tone}${active ? ' is-active' : ''}`}
+                              onClick={() => handleSelfCheckWithAutoExplain(item.level)}
+                            >
+                              <span className="selfcheck-btn__main">
+                                <Icon name={item.icon} size={17} />
+                                <span>{item.label}</span>
+                              </span>
+                              <span className="selfcheck-btn__hint" aria-hidden="true">
+                                {item.hint}
+                              </span>
+                            </button>
+                          );
+                        })}
+                      </div>
+                    </div>
+                  </>
+                )}
+              </div>
+            )}
+
+            <div className="ai-workspace-controls">
+              <label className="workspace-auto-toggle">
+                <input
+                  type="checkbox"
+                  data-testid="ai-auto-explain-toggle"
+                  checked={prefs.autoExplainOnWrong}
+                  onChange={(e) => setAutoExplainOnWrong(e.target.checked)}
+                />
+                <span>答错自动触发 AI 解析</span>
+              </label>
+
+              <button
+                type="button"
+                data-testid="ai-btn-explain"
+                className={`ai-tutor-btn ai-tutor-btn--accent${tutor.drawerOpen ? ' is-active' : ''}`}
+                onClick={() => void tutor.runExplain(false)}
+              >
+                <Icon name="sparkles" size={14} />
+                <span>✨ AI 深度解析</span>
+              </button>
             </div>
+
+            <AiTutorInlinePanel tutor={tutor} />
+          </article>
+
+          <div data-testid="workspace-mobile-bar" className="session-nav-bar workspace-mobile-bar">
+            <button
+              type="button"
+              data-testid="btn-prev"
+              className="btn btn--ghost"
+              disabled={safeIndex === 0}
+              onClick={handlePrev}
+            >
+              <Icon name="arrowLeft" size={16} />
+              上一题
+            </button>
+
+            <span className="shortcut-hint">
+              快捷键：<kbd>←</kbd> / <kbd>→</kbd> 切题 · <kbd>1–4</kbd> / <kbd>A–D</kbd> 选项 · <kbd>T</kbd>/<kbd>F</kbd> 判断 · <kbd>Space</kbd> 看答案
+            </span>
+
+            <button
+              type="button"
+              data-testid="btn-next"
+              className="btn btn--primary"
+              onClick={handleNext}
+            >
+              {isLast ? '看结果' : '下一题'}
+              <Icon name="arrowRight" size={16} />
+            </button>
           </div>
 
-          <div className="answer-sheet-grid">
-            {queue.map((item, idx) => {
-              const rec = Object.prototype.hasOwnProperty.call(sessionAnswers, item.id)
-                ? sessionAnswers[item.id]
-                : undefined;
-              const status: 'correct' | 'wrong' | 'unanswered' = !rec
-                ? 'unanswered'
-                : rec.ok === 1
-                  ? 'correct'
-                  : 'wrong';
-              const isCurrent = idx === safeIndex;
-              return (
-                <button
-                  key={item.id}
-                  type="button"
-                  data-testid={`sheet-item-${idx}`}
-                  data-status={status}
-                  aria-current={isCurrent ? 'step' : undefined}
-                  className={`sheet-btn sheet-btn--${status}${isCurrent ? ' is-current' : ''}`}
-                  onClick={() => setCurrentIndex(idx)}
-                >
-                  {idx + 1}
-                </button>
-              );
-            })}
-          </div>
-        </section>
-      )}
+          {sheetOpen && (
+            <section
+              data-testid="answer-sheet"
+              role="region"
+              aria-label="答题卡"
+              className="answer-sheet-card"
+            >
+              <div className="answer-sheet-card__head">
+                <h3 className="answer-sheet-card__title">答题卡速跳</h3>
+                <div className="answer-sheet-legend">
+                  <span className="legend-item legend-item--ok">已掌握/正确</span>
+                  <span className="legend-item legend-item--bad">需巩固/答错</span>
+                  <span className="legend-item legend-item--none">未作答</span>
+                </div>
+              </div>
+
+              <div className="sheet-filter-bar" role="group" aria-label="答题卡筛选">
+                {(
+                  [
+                    { key: 'all', label: `全部 (${sheetCounts.all})` },
+                    { key: 'unanswered', label: `未做 (${sheetCounts.unanswered})` },
+                    { key: 'wrong', label: `错题 (${sheetCounts.wrong})` },
+                    { key: 'fav', label: `收藏 (${sheetCounts.fav})` },
+                  ] as const
+                ).map((item) => (
+                  <button
+                    key={item.key}
+                    type="button"
+                    data-testid={`sheet-filter-${item.key}`}
+                    aria-pressed={sheetFilter === item.key ? 'true' : 'false'}
+                    className={`sheet-filter-btn${sheetFilter === item.key ? ' is-active' : ''}`}
+                    onClick={() => setSheetFilter(item.key)}
+                  >
+                    {item.label}
+                  </button>
+                ))}
+              </div>
+
+              {filteredSheetItems.length === 0 ? (
+                <div className="sheet-empty-hint">当前筛选条件下暂无题目</div>
+              ) : (
+                <div className="answer-sheet-grid">
+                  {filteredSheetItems.map(({ item, idx, status, starred }) => {
+                    const isCurrent = idx === safeIndex;
+                    return (
+                      <button
+                        key={item.id}
+                        type="button"
+                        data-testid={`sheet-item-${idx}`}
+                        data-status={status}
+                        data-fav={starred ? 'true' : 'false'}
+                        aria-current={isCurrent ? 'step' : undefined}
+                        className={`sheet-btn sheet-btn--${status}${starred ? ' is-fav' : ''}${isCurrent ? ' is-current' : ''}`}
+                        onClick={() => setCurrentIndex(idx)}
+                      >
+                        {idx + 1}
+                      </button>
+                    );
+                  })}
+                </div>
+              )}
+            </section>
+          )}
+        </div>
+
+        <AiExplainDrawer tutor={tutor} />
+      </div>
     </div>
   );
 }

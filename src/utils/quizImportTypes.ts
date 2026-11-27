@@ -1,6 +1,12 @@
 import type { BankData, QuestionType } from '../types/quiz';
 
 export const BUILTIN_AI_BANK_ID = 'builtin-ai-intro';
+export const BUILTIN_GUIDE_BANK_ID = 'builtin-quizhub-guide';
+
+export function isBuiltinBankId(bankId: string): boolean {
+  return bankId === BUILTIN_AI_BANK_ID || bankId === BUILTIN_GUIDE_BANK_ID;
+}
+
 export const QUIZHUB_SHARE_SCHEMA = 'quizhub-bank-v2';
 
 export type ImportSourceFormat = 'xlsx' | 'csv' | 'docx' | 'txt' | 'json';
@@ -44,11 +50,15 @@ export interface DraftQuestion {
   answer: number | number[] | boolean | string;
   rawAnswer: string;
   explain: string;
+  explanation?: string;
+  aiAnalysis?: string;
   keyPoints: string[];
   tags: string[];
   sourceRef: string;
   sourceNote?: string;
   preserveOrigin?: 'comprehensive_bank' | 'video_popup' | 'review_notes_synthesized';
+  aiInferredAnswer?: boolean;
+  washedByAi?: boolean;
   issues: ImportIssue[];
   included: boolean;
 }

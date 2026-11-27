@@ -1,3 +1,4 @@
+import type { Page } from '@playwright/test';
 import {
   expect,
   onlyDesktop,
@@ -9,6 +10,13 @@ import {
   assertHandbookTablesContained,
   assertNoHorizontalOverflow,
 } from './helpers/audit.ts';
+import {
+  FIXTURE_BANK,
+  FIXTURE_BANK_ID,
+  QUIZ_DB_NAME,
+  QUIZ_DB_VERSION,
+  seedFixtureBank,
+} from './helpers/fixtureBank.ts';
 import {
   answerCurrentQuestion,
   btnNext,
@@ -34,6 +42,7 @@ import {
   notesToc,
   qRefAnswer,
   quizExit,
+  quizFeedback,
   quizModeTitle,
   quizOption,
   quizProgressBar,
@@ -49,22 +58,80 @@ import {
 import {
   buildQuestionStemMap,
   importJsonFile,
-  loadBankCatalog,
+  loadNotesCatalog,
+  makeEmptyStore,
   makeSeededStore,
   pickQuestion,
   pickQuestions,
-  readPersistedStore,
   seedCorruptedStoreAndReload,
-  seedStaleIdsStoreAndReload,
-  seedStoreAndReload,
+  type BankData,
+  type UserStore,
 } from './helpers/storage.ts';
+
+async function readIdbProgress(page: Page, bankId = FIXTURE_BANK_ID): Promise<UserStore | null> {
+  return page.evaluate(
+    async ({ dbName, dbVersion, targetBankId }) => {
+      return new Promise<UserStore | null>((resolve, reject) => {
+        const req = window.indexedDB.open(dbName, dbVersion);
+        req.onerror = () => reject(req.error ?? new Error('Failed to open quizhub-v2 IDB'));
+        req.onsuccess = () => {
+          const db = req.result;
+          if (!db.objectStoreNames.contains('progress')) {
+            db.close();
+            resolve(null);
+            return;
+          }
+          const tx = db.transaction('progress', 'readonly');
+          const getReq = tx.objectStore('progress').get(targetBankId);
+          getReq.onsuccess = () => {
+            const entry = getReq.result as { store?: UserStore } | undefined;
+            db.close();
+            resolve(entry?.store ?? null);
+          };
+          getReq.onerror = () => {
+            db.close();
+            reject(getReq.error ?? new Error('Failed to read progress store'));
+          };
+        };
+      });
+    },
+    { dbName: QUIZ_DB_NAME, dbVersion: QUIZ_DB_VERSION, targetBankId: bankId },
+  );
+}
+
+function makeStaleIdsStore(
+  opts: {
+    validCorrectIds?: string[];
+    validWrongIds?: string[];
+    validFavIds?: string[];
+    staleCount?: number;
+  },
+  bank: BankData = FIXTURE_BANK,
+): UserStore {
+  const store = makeSeededStore(
+    {
+      correctIds: opts.validCorrectIds,
+      wrongIds: opts.validWrongIds,
+      favIds: opts.validFavIds,
+    },
+    bank,
+  );
+  const staleCount = opts.staleCount ?? 2;
+  for (let i = 1; i <= staleCount; i++) {
+    const staleId = `__stale_removed_q${i}`;
+    store.records[staleId] = { ok: 0, choice: 0, ts: 1_700_000_000_000 + i };
+    store.fav[staleId] = true;
+    store.mastery[staleId] = 1;
+  }
+  return store;
+}
 
 test.describe('Tier 2: Subjective, Nav, Sheet, Result, Storage & Responsive Boundaries (T2-057..T2-096)', () => {
   test('T2-057 [UF12] Skipping unrevealed short question does not crash or enter Wrong Book', async ({
     page,
   }, testInfo) => {
     onlyDesktop(testInfo);
-    await gotoRoute(page, '#/quiz');
+    await seedFixtureBank(page, FIXTURE_BANK, makeEmptyStore(), { targetHashRoute: '#/quiz' });
     await selectQuizFilters(page, { count: 10 });
     await modeCard(page, 'short').click();
     await btnNext(page).click();
@@ -77,7 +144,7 @@ test.describe('Tier 2: Subjective, Nav, Sheet, Result, Storage & Responsive Boun
     page,
   }, testInfo) => {
     onlyDesktop(testInfo);
-    await gotoRoute(page, '#/quiz');
+    await seedFixtureBank(page, FIXTURE_BANK, makeEmptyStore(), { targetHashRoute: '#/quiz' });
     await selectQuizFilters(page, { count: 10 });
     await modeCard(page, 'short').click();
     await btnRevealAnswer(page).click();
@@ -91,13 +158,17 @@ test.describe('Tier 2: Subjective, Nav, Sheet, Result, Storage & Responsive Boun
     page,
   }, testInfo) => {
     onlyDesktop(testInfo);
-    const bank = loadBankCatalog();
     const longAnalysis =
-      bank.questions
+      FIXTURE_BANK.questions
         .filter((q) => q.type === 'analysis' || q.type === 'short')
         .sort((a, b) => String(b.answer).length - String(a.answer).length)[0] ??
-      pickQuestion({ type: 'analysis' });
-    await seedStoreAndReload(page, makeSeededStore({ favIds: [longAnalysis.id] }), '#/fav');
+      pickQuestion({ type: 'analysis' }, FIXTURE_BANK);
+    await seedFixtureBank(
+      page,
+      FIXTURE_BANK,
+      makeSeededStore({ favIds: [longAnalysis.id] }, FIXTURE_BANK),
+      { targetHashRoute: '#/fav' },
+    );
     await page.getByTestId('list-redo-all').click();
     await btnRevealAnswer(page).click();
     await expect(qRefAnswer(page)).toBeVisible();
@@ -108,14 +179,18 @@ test.describe('Tier 2: Subjective, Nav, Sheet, Result, Storage & Responsive Boun
     page,
   }, testInfo) => {
     onlyDesktop(testInfo);
-    const bank = loadBankCatalog();
     const noKp =
-      bank.questions.find(
+      FIXTURE_BANK.questions.find(
         (q) =>
           (q.type === 'short' || q.type === 'analysis') &&
           (!q.keyPoints || q.keyPoints.length === 0),
-      ) ?? pickQuestion({ type: 'short' });
-    await seedStoreAndReload(page, makeSeededStore({ favIds: [noKp.id] }), '#/fav');
+      ) ?? pickQuestion({ type: 'short' }, FIXTURE_BANK);
+    await seedFixtureBank(
+      page,
+      FIXTURE_BANK,
+      makeSeededStore({ favIds: [noKp.id] }, FIXTURE_BANK),
+      { targetHashRoute: '#/fav' },
+    );
     await page.getByTestId('list-redo-all').click();
     await btnRevealAnswer(page).click();
     await expect(qRefAnswer(page)).toBeVisible();
@@ -126,7 +201,7 @@ test.describe('Tier 2: Subjective, Nav, Sheet, Result, Storage & Responsive Boun
     page,
   }, testInfo) => {
     onlyDesktop(testInfo);
-    await gotoRoute(page, '#/quiz');
+    await seedFixtureBank(page, FIXTURE_BANK, makeEmptyStore(), { targetHashRoute: '#/quiz' });
     await selectQuizFilters(page, { count: 10 });
     await modeCard(page, 'short').click();
     await page.keyboard.press('Space');
@@ -139,7 +214,7 @@ test.describe('Tier 2: Subjective, Nav, Sheet, Result, Storage & Responsive Boun
     page,
   }, testInfo) => {
     onlyDesktop(testInfo);
-    await gotoRoute(page, '#/quiz');
+    await seedFixtureBank(page, FIXTURE_BANK, makeEmptyStore(), { targetHashRoute: '#/quiz' });
     await selectQuizFilters(page, { count: 10 });
     await modeCard(page, 'all').click();
     await expect(btnPrev(page)).toBeDisabled();
@@ -151,7 +226,7 @@ test.describe('Tier 2: Subjective, Nav, Sheet, Result, Storage & Responsive Boun
     page,
   }, testInfo) => {
     onlyDesktop(testInfo);
-    await gotoRoute(page, '#/quiz');
+    await seedFixtureBank(page, FIXTURE_BANK, makeEmptyStore(), { targetHashRoute: '#/quiz' });
     await selectQuizFilters(page, { count: 10 });
     await modeCard(page, 'short').click();
 
@@ -171,7 +246,7 @@ test.describe('Tier 2: Subjective, Nav, Sheet, Result, Storage & Responsive Boun
     page,
   }, testInfo) => {
     onlyDesktop(testInfo);
-    await gotoRoute(page, '#/quiz');
+    await seedFixtureBank(page, FIXTURE_BANK, makeEmptyStore(), { targetHashRoute: '#/quiz' });
     await selectQuizFilters(page, { count: 10 });
     await modeCard(page, 'short').click();
     await btnStar(page).focus();
@@ -195,13 +270,14 @@ test.describe('Tier 2: Subjective, Nav, Sheet, Result, Storage & Responsive Boun
     page,
   }, testInfo) => {
     onlyDesktop(testInfo);
-    await gotoRoute(page, '#/quiz');
+    await seedFixtureBank(page, FIXTURE_BANK, makeEmptyStore(), { targetHashRoute: '#/quiz' });
     await selectQuizFilters(page, { count: 10 });
     await modeCard(page, 'multi').click();
     await quizOption(page, 0).click();
     await btnNext(page).click();
     await btnPrev(page).click();
-    const store = await readPersistedStore(page);
+    await page.waitForTimeout(150);
+    const store = await readIdbProgress(page);
     expect(Object.keys(store?.records ?? {})).toHaveLength(0);
   });
 
@@ -209,7 +285,7 @@ test.describe('Tier 2: Subjective, Nav, Sheet, Result, Storage & Responsive Boun
     page,
   }, testInfo) => {
     onlyDesktop(testInfo);
-    await gotoRoute(page, '#/quiz');
+    await seedFixtureBank(page, FIXTURE_BANK, makeEmptyStore(), { targetHashRoute: '#/quiz' });
     await selectQuizFilters(page, { count: 30 });
     await modeCard(page, 'all').click();
     await ensureAnswerSheetOpen(page);
@@ -228,8 +304,8 @@ test.describe('Tier 2: Subjective, Nav, Sheet, Result, Storage & Responsive Boun
     page,
   }, testInfo) => {
     onlyDesktop(testInfo);
-    const stemMap = buildQuestionStemMap();
-    await gotoRoute(page, '#/quiz');
+    const stemMap = buildQuestionStemMap(FIXTURE_BANK);
+    await seedFixtureBank(page, FIXTURE_BANK, makeEmptyStore(), { targetHashRoute: '#/quiz' });
     await selectQuizFilters(page, { count: 10 });
     await modeCard(page, 'tf').click();
     await answerCurrentQuestion(page, stemMap, 'correct');
@@ -247,8 +323,13 @@ test.describe('Tier 2: Subjective, Nav, Sheet, Result, Storage & Responsive Boun
     page,
   }, testInfo) => {
     onlyDesktop(testInfo);
-    const q = pickQuestion({ type: 'choice' });
-    await seedStoreAndReload(page, makeSeededStore({ favIds: [q.id] }), '#/fav');
+    const q = pickQuestion({ type: 'choice' }, FIXTURE_BANK);
+    await seedFixtureBank(
+      page,
+      FIXTURE_BANK,
+      makeSeededStore({ favIds: [q.id] }, FIXTURE_BANK),
+      { targetHashRoute: '#/fav' },
+    );
     await page.getByTestId('list-redo-all').click();
     await ensureAnswerSheetOpen(page);
     await expect(sheetItem(page, 0)).toHaveAttribute('aria-current', 'step');
@@ -260,7 +341,7 @@ test.describe('Tier 2: Subjective, Nav, Sheet, Result, Storage & Responsive Boun
     page,
   }, testInfo) => {
     onlyDesktop(testInfo);
-    await gotoRoute(page, '#/quiz');
+    await seedFixtureBank(page, FIXTURE_BANK, makeEmptyStore(), { targetHashRoute: '#/quiz' });
     await selectQuizFilters(page, { count: 10 });
     await modeCard(page, 'short').click();
     await btnRevealAnswer(page).click();
@@ -273,7 +354,7 @@ test.describe('Tier 2: Subjective, Nav, Sheet, Result, Storage & Responsive Boun
     page,
   }, testInfo) => {
     onlyMobile(testInfo);
-    await gotoRoute(page, '#/quiz');
+    await seedFixtureBank(page, FIXTURE_BANK, makeEmptyStore(), { targetHashRoute: '#/quiz' });
     await selectQuizFilters(page, { count: 30 });
     await modeCard(page, 'all').click();
     await ensureAnswerSheetOpen(page);
@@ -286,7 +367,7 @@ test.describe('Tier 2: Subjective, Nav, Sheet, Result, Storage & Responsive Boun
     page,
   }, testInfo) => {
     onlyDesktop(testInfo);
-    await gotoRoute(page, '#/quiz');
+    await seedFixtureBank(page, FIXTURE_BANK, makeEmptyStore(), { targetHashRoute: '#/quiz' });
     await selectQuizFilters(page, { count: 10 });
     await modeCard(page, 'all').click();
     for (let i = 0; i < 10; i++) {
@@ -303,10 +384,10 @@ test.describe('Tier 2: Subjective, Nav, Sheet, Result, Storage & Responsive Boun
     page,
   }, testInfo) => {
     onlyDesktop(testInfo);
-    const stemMap = buildQuestionStemMap();
-    await gotoRoute(page, '#/quiz');
+    const stemMap = buildQuestionStemMap(FIXTURE_BANK);
+    await seedFixtureBank(page, FIXTURE_BANK, makeEmptyStore(), { targetHashRoute: '#/quiz' });
     await selectQuizFilters(page, { count: 20 });
-    await modeCard(page, 'tf').click();
+    await modeCard(page, 'all').click();
     await answerCurrentQuestion(page, stemMap, 'correct');
     for (let i = 0; i < 20; i++) {
       await btnNext(page).click();
@@ -321,8 +402,8 @@ test.describe('Tier 2: Subjective, Nav, Sheet, Result, Storage & Responsive Boun
     page,
   }, testInfo) => {
     onlyDesktop(testInfo);
-    const stemMap = buildQuestionStemMap();
-    await gotoRoute(page, '#/quiz');
+    const stemMap = buildQuestionStemMap(FIXTURE_BANK);
+    await seedFixtureBank(page, FIXTURE_BANK, makeEmptyStore(), { targetHashRoute: '#/quiz' });
     await selectQuizFilters(page, { count: 10 });
     await modeCard(page, 'tf').click();
     for (let i = 0; i < 10; i++) {
@@ -344,9 +425,9 @@ test.describe('Tier 2: Subjective, Nav, Sheet, Result, Storage & Responsive Boun
     page,
   }, testInfo) => {
     onlyDesktop(testInfo);
-    const stemMap = buildQuestionStemMap();
+    const stemMap = buildQuestionStemMap(FIXTURE_BANK);
     const runWithCorrectCount = async (rightCount: number): Promise<string> => {
-      await gotoRoute(page, '#/quiz');
+      await seedFixtureBank(page, FIXTURE_BANK, makeEmptyStore(), { targetHashRoute: '#/quiz' });
       await selectQuizFilters(page, { count: 10 });
       await modeCard(page, 'tf').click();
       for (let i = 0; i < 10; i++) {
@@ -375,8 +456,8 @@ test.describe('Tier 2: Subjective, Nav, Sheet, Result, Storage & Responsive Boun
     page,
   }, testInfo) => {
     onlyMobile(testInfo);
-    const stemMap = buildQuestionStemMap();
-    await gotoRoute(page, '#/quiz');
+    const stemMap = buildQuestionStemMap(FIXTURE_BANK);
+    await seedFixtureBank(page, FIXTURE_BANK, makeEmptyStore(), { targetHashRoute: '#/quiz' });
     await selectQuizFilters(page, { count: 10 });
     await modeCard(page, 'tf').click();
     for (let i = 0; i < 10; i++) {
@@ -411,7 +492,9 @@ test.describe('Tier 2: Subjective, Nav, Sheet, Result, Storage & Responsive Boun
     page,
   }, testInfo) => {
     onlyDesktop(testInfo);
-    await seedStaleIdsStoreAndReload(page, { staleCount: 3 }, '#/wrong');
+    await seedFixtureBank(page, FIXTURE_BANK, makeStaleIdsStore({ staleCount: 3 }, FIXTURE_BANK), {
+      targetHashRoute: '#/wrong',
+    });
     await expect(listEmpty(page)).toBeVisible();
     await expect(page.locator('body')).not.toContainText('undefined');
 
@@ -424,11 +507,12 @@ test.describe('Tier 2: Subjective, Nav, Sheet, Result, Storage & Responsive Boun
     page,
   }, testInfo) => {
     onlyDesktop(testInfo);
-    const qs = pickQuestions({ type: 'choice', limit: 2 });
-    await seedStoreAndReload(
+    const qs = pickQuestions({ type: 'choice', limit: 2 }, FIXTURE_BANK);
+    await seedFixtureBank(
       page,
-      makeSeededStore({ favIds: qs.map((q) => q.id) }),
-      '#/fav',
+      FIXTURE_BANK,
+      makeSeededStore({ favIds: qs.map((q) => q.id) }, FIXTURE_BANK),
+      { targetHashRoute: '#/fav' },
     );
     await expect(listClearWrong(page)).toBeHidden();
     const item0 = listItems(page).first();
@@ -442,8 +526,13 @@ test.describe('Tier 2: Subjective, Nav, Sheet, Result, Storage & Responsive Boun
     page,
   }, testInfo) => {
     onlyMobile(testInfo);
-    const q = pickQuestion({ type: 'analysis' });
-    await seedStoreAndReload(page, makeSeededStore({ wrongIds: [q.id] }), '#/wrong');
+    const q = pickQuestion({ type: 'analysis' }, FIXTURE_BANK);
+    await seedFixtureBank(
+      page,
+      FIXTURE_BANK,
+      makeSeededStore({ wrongIds: [q.id] }, FIXTURE_BANK),
+      { targetHashRoute: '#/wrong' },
+    );
     await listItemToggle(listItems(page).first()).click();
     await expect(listItemAnswer(listItems(page).first())).toBeVisible();
     await assertFullLayoutAudit(page);
@@ -473,16 +562,15 @@ test.describe('Tier 2: Subjective, Nav, Sheet, Result, Storage & Responsive Boun
     page,
   }, testInfo) => {
     onlyDesktop(testInfo);
-    const stemMap = buildQuestionStemMap();
     await page.addInitScript(() => {
       Storage.prototype.setItem = () => {
         throw new DOMException('Quota exceeded', 'QuotaExceededError');
       };
     });
     await gotoRoute(page, '#/quiz');
-    await selectQuizFilters(page, { count: 10 });
-    await modeCard(page, 'tf').click();
-    await answerCurrentQuestion(page, stemMap, 'correct');
+    await modeCard(page, 'choice').click();
+    await quizOption(page, 0).click();
+    await expect(quizFeedback(page)).toBeVisible();
     await btnStar(page).click();
     await expect(btnStar(page)).toHaveAttribute('aria-pressed', 'true');
   });
@@ -491,24 +579,36 @@ test.describe('Tier 2: Subjective, Nav, Sheet, Result, Storage & Responsive Boun
     page,
   }, testInfo) => {
     onlyDesktop(testInfo);
-    const q = pickQuestion({ type: 'choice' });
-    await seedStoreAndReload(page, makeSeededStore({ correctIds: [q.id] }), '#/quiz');
+    const q = pickQuestion({ type: 'choice' }, FIXTURE_BANK);
+    await seedFixtureBank(
+      page,
+      FIXTURE_BANK,
+      makeSeededStore({ correctIds: [q.id] }, FIXTURE_BANK),
+      { targetHashRoute: '#/quiz' },
+    );
 
-    page.once('dialog', (d) => d.accept());
-    await importJsonFile(inputImportFile(page), '{not valid json');
-    await expect(statCard(page, 'done')).toContainText('1');
-
-    page.once('dialog', (d) => d.accept());
-    await importJsonFile(inputImportFile(page), '{"foo": 1}');
-    await expect(statCard(page, 'done')).toContainText('1');
+    for (const input of ['{not valid json', '{"foo": 1}']) {
+      const message = page.waitForEvent('dialog').then(async (dialog) => {
+        await dialog.accept();
+        return dialog.message();
+      });
+      await importJsonFile(inputImportFile(page), input);
+      expect(await message).toContain('导入失败');
+      await expect(statCard(page, 'done')).toContainText('1');
+    }
   });
 
   test('T2-086 [UF17] Importing JSON with invalid ok value rejects or sanitizes without corrupting store', async ({
     page,
   }, testInfo) => {
     onlyDesktop(testInfo);
-    const q = pickQuestion({ type: 'choice' });
-    await seedStoreAndReload(page, makeSeededStore({ correctIds: [q.id] }), '#/quiz');
+    const q = pickQuestion({ type: 'choice' }, FIXTURE_BANK);
+    await seedFixtureBank(
+      page,
+      FIXTURE_BANK,
+      makeSeededStore({ correctIds: [q.id] }, FIXTURE_BANK),
+      { targetHashRoute: '#/quiz' },
+    );
 
     page.once('dialog', (d) => d.accept());
     await importJsonFile(inputImportFile(page), {
@@ -516,8 +616,9 @@ test.describe('Tier 2: Subjective, Nav, Sheet, Result, Storage & Responsive Boun
       fav: {},
       mastery: {},
     });
-    const persisted = await readPersistedStore(page);
-    expect([0, 1]).toContain(persisted?.records[q.id]?.ok);
+    await expect
+      .poll(async () => (await readIdbProgress(page))?.records[q.id]?.ok)
+      .toBe(1);
   });
 
   test('T2-087 [UF18] Gibberish Handbook search displays clean empty state without crash', async ({
@@ -529,15 +630,20 @@ test.describe('Tier 2: Subjective, Nav, Sheet, Result, Storage & Responsive Boun
     await expect(page.getByText(/没有|未找到|无匹配/).first()).toBeVisible();
   });
 
-  test('T2-088 [UF18] Clearing Handbook search restores all 9 chapters', async ({
+  test('T2-088 [UF18] Clearing Handbook search restores all chapters', async ({
     page,
   }, testInfo) => {
     onlyDesktop(testInfo);
+    const notes = loadNotesCatalog();
+    const keyword =
+      notes.chapters[0]?.sections[0]?.terms?.[0]?.term ??
+      notes.chapters[0]?.short ??
+      'QuizHub';
     await gotoRoute(page, '#/notes');
-    await notesSearch(page).fill('图灵');
+    await notesSearch(page).fill(keyword);
     await notesSearch(page).fill('');
-    for (let ch = 1; ch <= 9; ch++) {
-      await expect(notesChapter(page, ch)).toBeVisible();
+    for (const ch of notes.chapters) {
+      await expect(notesChapter(page, ch.id)).toBeVisible();
     }
   });
 
@@ -552,16 +658,19 @@ test.describe('Tier 2: Subjective, Nav, Sheet, Result, Storage & Responsive Boun
     }
   });
 
-  test('T2-090 [UF18] Clicking 刷本章题 on Chapter 9 activates ONLY Chapter 9', async ({
+  test('T2-090 [UF18] Clicking 刷本章题 on target chapter activates ONLY that chapter', async ({
     page,
   }, testInfo) => {
     onlyDesktop(testInfo);
+    const notes = loadNotesCatalog();
+    const targetCh = notes.chapters[notes.chapters.length - 1] ?? notes.chapters[0]!;
     await gotoRoute(page, '#/notes');
-    await btnQuizChapter(page, 9).click();
+    await btnQuizChapter(page, targetCh.id).click();
     await expect(page).toHaveURL(/#\/quiz/);
-    await expect(chapterChip(page, 9)).toHaveAttribute('aria-pressed', 'true');
-    for (let ch = 1; ch <= 8; ch++) {
-      await expect(chapterChip(page, ch)).toHaveAttribute('aria-pressed', 'false');
+    await expect(chapterChip(page, targetCh.id)).toHaveAttribute('aria-pressed', 'true');
+    for (const ch of notes.chapters) {
+      if (ch.id === targetCh.id) continue;
+      await expect(chapterChip(page, ch.id)).toHaveAttribute('aria-pressed', 'false');
     }
   });
 
@@ -579,10 +688,11 @@ test.describe('Tier 2: Subjective, Nav, Sheet, Result, Storage & Responsive Boun
     page,
   }, testInfo) => {
     onlyMobile(testInfo);
+    const notes = loadNotesCatalog();
     await gotoRoute(page, '#/notes');
     await assertHandbookTablesContained(page);
-    for (const ch of [1, 4, 7, 9]) {
-      await notesChapter(page, ch).scrollIntoViewIfNeeded();
+    for (const ch of notes.chapters) {
+      await notesChapter(page, ch.id).scrollIntoViewIfNeeded();
       await assertNoHorizontalOverflow(page);
     }
   });
@@ -611,20 +721,27 @@ test.describe('Tier 2: Subjective, Nav, Sheet, Result, Storage & Responsive Boun
     page,
   }, testInfo) => {
     onlyDesktop(testInfo);
+    const notes = loadNotesCatalog();
+    const firstChId = notes.chapters[0]?.id ?? 1;
     await gotoRoute(page, '#/notes');
     await page.emulateMedia({ media: 'print' });
     await expect(navLink(page, 'quiz')).toBeHidden();
     await expect(notesSearch(page)).toBeHidden();
-    await expect(notesChapter(page, 1)).toBeVisible();
+    await expect(notesChapter(page, firstChId)).toBeVisible();
   });
 
   test('T2-096 [UF19] Mobile 390x844 Result & Wrong Book have >=36px hitboxes and zero overflow', async ({
     page,
   }, testInfo) => {
     onlyMobile(testInfo);
-    const qs = pickQuestions({ type: 'tf', limit: 2 });
-    const stemMap = buildQuestionStemMap();
-    await seedStoreAndReload(page, makeSeededStore({ wrongIds: qs.map((q) => q.id) }), '#/wrong');
+    const qs = pickQuestions({ type: 'tf', limit: 2 }, FIXTURE_BANK);
+    const stemMap = buildQuestionStemMap(FIXTURE_BANK);
+    await seedFixtureBank(
+      page,
+      FIXTURE_BANK,
+      makeSeededStore({ wrongIds: qs.map((q) => q.id) }, FIXTURE_BANK),
+      { targetHashRoute: '#/wrong' },
+    );
     await assertFullLayoutAudit(page);
     const redoBox = await listRedoAll(page).boundingBox();
     expect(redoBox!.height).toBeGreaterThanOrEqual(36);

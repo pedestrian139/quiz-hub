@@ -57,6 +57,7 @@ import {
   getCloudSyncSnapshot,
   hydrateAccountFromCloud,
   mergeStoresThreeWay,
+  queueCloudBankUpdate,
   queueCloudProgressSave,
   retryCloudSync,
   saveAccountCloudApiConfig,
@@ -267,6 +268,72 @@ describe('live cloud sync coordinator', () => {
     expect(getCloudSyncSnapshot()).toMatchObject({ status: 'synced', pendingCount: 0 });
   });
 
+  it('keeps remote answers and AI analysis when another answer is queued during a 40001 retry', async () => {
+    const bankId = 'builtin-ai-intro';
+    const empty = createEmptyStore();
+    const remote = {
+      ...empty,
+      records: { remote: { ok: 1 as const, ts: 200 } },
+      aiExplanations: { remote: { content: 'Remote analysis', updatedAt: 200 } },
+    };
+    const first = { ...empty, records: { first: { ok: 0 as const, ts: 300 } } };
+    const newer = { ...first, records: { ...first.records, newer: { ok: 1 as const, ts: 400 } } };
+    mock.listCloudProgress.mockResolvedValue({ [bankId]: { store: empty, revision: 1, resetAt: null } });
+    await hydrateAccountFromCloud(USER_ID);
+
+    let releaseRetry!: () => void;
+    const blockedRetry = new Promise<void>((resolve) => { releaseRetry = resolve; });
+    mock.loadCloudProgress.mockResolvedValue({ store: remote, revision: 2, resetAt: null });
+    mock.saveCloudProgress
+      .mockRejectedValueOnce(Object.assign(new Error('Progress changed'), { code: '40001' }))
+      .mockImplementationOnce(async (_bankId, store) => {
+        await blockedRetry;
+        return { store, revision: 3, resetAt: null };
+      })
+      .mockImplementation(async (_bankId, store) => ({ store, revision: 4, resetAt: null }));
+
+    queueCloudProgressSave(SCOPE, bankId, first);
+    await vi.waitFor(() => expect(mock.saveCloudProgress).toHaveBeenCalledTimes(2));
+    queueCloudProgressSave(SCOPE, bankId, newer);
+    releaseRetry();
+    await flushPendingCloudWrites();
+
+    const expected = { ...remote, records: { ...remote.records, ...newer.records } };
+    expect(mock.saveCloudProgress).toHaveBeenNthCalledWith(3, bankId, expected, 3);
+    expect(await getBankDb(SCOPE).getBankProgress(bankId)).toEqual(expected);
+  });
+
+  it('keeps another device’s edits when a new bank save queues during a 40001 retry', async () => {
+    const bank = makeBank('b-overlapping-retry', '原题库', 100);
+    const local = { ...bank, description: '第一次本地编辑', updatedAt: 200 };
+    const newer = { ...local, description: '第二次本地编辑', updatedAt: 400 };
+    const remote = { ...bank, name: '其他设备改名', updatedAt: 300 };
+    mock.listCloudBanks.mockResolvedValueOnce([{ bank, revision: 1 }]);
+    await hydrateAccountFromCloud(USER_ID);
+
+    let releaseRetry!: () => void;
+    const blockedRetry = new Promise<void>((resolve) => { releaseRetry = resolve; });
+    mock.listCloudBanks.mockResolvedValueOnce([{ bank: remote, revision: 2 }]);
+    mock.saveCloudBank
+      .mockRejectedValueOnce(Object.assign(new Error('Bank changed'), { code: '40001' }))
+      .mockImplementationOnce(async (payload) => {
+        await blockedRetry;
+        return { bank: payload, revision: 3 };
+      })
+      .mockImplementation(async (payload) => ({ bank: payload, revision: 4 }));
+
+    queueCloudBankUpdate(SCOPE, local, 0);
+    await vi.waitFor(() => expect(mock.saveCloudBank).toHaveBeenCalledTimes(2));
+    queueCloudBankUpdate(SCOPE, newer, 0);
+    releaseRetry();
+    await flushPendingCloudWrites();
+
+    expect(mock.saveCloudBank).toHaveBeenNthCalledWith(3, expect.objectContaining({
+      name: remote.name,
+      description: newer.description,
+    }), 3);
+  });
+
   it('handles 40001 conflicts on custom bank rename and delete including remotely deleted banks', async () => {
     const initialBank = makeBank('b1', '旧名字', 100);
     const remoteUpdatedBank = makeBank('b1', '他端改名', 200);
@@ -312,6 +379,585 @@ describe('live cloud sync coordinator', () => {
     mock.saveCloudBank.mockResolvedValueOnce({ bank: newBank, revision: 1 });
     mock.listCloudBanks.mockResolvedValue([{ bank: newBank, revision: 1 }]);
     await retryCloudSync(USER_ID);
+    expect(getCloudSyncSnapshot()).toMatchObject({ status: 'synced', pendingCount: 0 });
+  });
+
+  it('merges aiExplanations in mergeStoresThreeWay while respecting remoteResetAt', () => {
+    const base = {
+      records: {},
+      fav: {},
+      mastery: {},
+      aiExplanations: {
+        qShared: { content: '初始解析', updatedAt: 100 },
+      },
+    };
+    const remote = {
+      records: {},
+      fav: {},
+      mastery: {},
+      aiExplanations: {
+        qShared: { content: '初始解析', updatedAt: 100 },
+        qRemote: { content: '远端新解析', updatedAt: 300 },
+      },
+    };
+    const local = {
+      records: {},
+      fav: {},
+      mastery: {},
+      aiExplanations: {
+        qShared: { content: '本地更新解析', updatedAt: 250, model: 'deepseek-chat' },
+        qPreReset: { content: '重置前解析', updatedAt: 150 },
+      },
+    };
+
+    const merged = mergeStoresThreeWay(base, remote, local, '1970-01-01T00:00:00.200Z');
+    expect(merged.aiExplanations?.qShared?.content).toBe('本地更新解析');
+    expect(merged.aiExplanations?.qRemote?.content).toBe('远端新解析');
+    expect(merged.aiExplanations?.qPreReset).toBeUndefined();
+  });
+
+  it('preserves data.questions aiAnalysis across expectedRevision=null, 40001 conflict retries, and debounced queueCloudBankUpdate', async () => {
+    const q1 = {
+      id: 'q1',
+      type: 'choice' as const,
+      chapter: 1,
+      stem: '题目 1',
+      options: ['A', 'B'],
+      answer: 0,
+      explain: '原始解析',
+      source: { origin: 'comprehensive_bank' as const, file: 'test', ref: '#1' },
+    };
+    const q2 = {
+      id: 'q2',
+      type: 'tf' as const,
+      chapter: 1,
+      stem: '题目 2',
+      answer: true,
+      explain: '',
+      source: { origin: 'comprehensive_bank' as const, file: 'test', ref: '#2' },
+    };
+
+    const baseBank: BankRecord = {
+      ...makeBank('b-ai', 'AI 解析题库', 100),
+      data: {
+        ...makeBank('b-ai', 'AI 解析题库', 100).data,
+        questions: [q1, q2],
+      },
+    };
+
+    // Case 1: expectedRevision === null (before hydration) still preserves local aiAnalysis on q1
+    const localBeforeHydrate: BankRecord = {
+      ...baseBank,
+      updatedAt: 200,
+      data: {
+        ...baseBank.data,
+        questions: [{ ...q1, aiAnalysis: '### 【核心考点】\n本地 Q1 解析' }, q2],
+      },
+    };
+    const remoteWithQ2: BankRecord = {
+      ...baseBank,
+      updatedAt: 150,
+      data: {
+        ...baseBank.data,
+        questions: [q1, { ...q2, aiAnalysis: '远端 Q2 解析' }],
+      },
+    };
+    mock.listCloudBanks.mockResolvedValueOnce([{ bank: remoteWithQ2, revision: 2 }]);
+    mock.saveCloudBank.mockImplementationOnce(async (bankArg: BankRecord) => ({
+      bank: bankArg,
+      revision: 3,
+    }));
+
+    await syncCloudBankUpdate(SCOPE, localBeforeHydrate);
+    const savedArg1 = mock.saveCloudBank.mock.calls[0]![0] as BankRecord;
+    expect(savedArg1.data.questions.find((q) => q.id === 'q1')?.aiAnalysis).toBe(
+      '### 【核心考点】\n本地 Q1 解析',
+    );
+    expect(savedArg1.data.questions.find((q) => q.id === 'q2')?.aiAnalysis).toBe('远端 Q2 解析');
+
+    // Case 2: debounced queueCloudBankUpdate coalesces rapid edits and survives 40001 conflict retry
+    setCloudSyncDebounceMs(25);
+    mock.listCloudBanks.mockResolvedValue([{ bank: savedArg1, revision: 3 }]);
+    await hydrateAccountFromCloud(USER_ID, { force: true });
+
+    const edit1: BankRecord = {
+      ...savedArg1,
+      updatedAt: 400,
+      data: {
+        ...savedArg1.data,
+        questions: [
+          { ...q1, aiAnalysis: '中间态解析' },
+          { ...q2, aiAnalysis: '远端 Q2 解析' },
+        ],
+      },
+    };
+    const edit2: BankRecord = {
+      ...savedArg1,
+      updatedAt: 500,
+      data: {
+        ...savedArg1.data,
+        questions: [
+          { ...q1, aiAnalysis: '最终版 Q1 解析' },
+          { ...q2, aiAnalysis: '远端 Q2 解析' },
+        ],
+      },
+    };
+    const remoteConflict: BankRecord = {
+      ...savedArg1,
+      name: '他端同步改名',
+      updatedAt: 450,
+      data: {
+        ...savedArg1.data,
+        meta: { ...savedArg1.data.meta, title: '他端同步改名' },
+      },
+    };
+
+    mock.listCloudBanks.mockResolvedValueOnce([{ bank: remoteConflict, revision: 4 }]);
+    mock.saveCloudBank
+      .mockRejectedValueOnce(Object.assign(new Error('conflict'), { code: '40001' }))
+      .mockImplementationOnce(async (bankArg: BankRecord) => ({ bank: bankArg, revision: 5 }));
+
+    queueCloudBankUpdate(SCOPE, edit1);
+    queueCloudBankUpdate(SCOPE, edit2);
+    expect(getCloudSyncSnapshot().pendingCount).toBe(1);
+
+    await flushPendingCloudWrites();
+    expect(mock.saveCloudBank).toHaveBeenCalledTimes(3);
+    const conflictRetryArg = mock.saveCloudBank.mock.calls[2]![0] as BankRecord;
+    expect(conflictRetryArg.name).toBe('他端同步改名');
+    expect(conflictRetryArg.data.questions.find((q) => q.id === 'q1')?.aiAnalysis).toBe(
+      '最终版 Q1 解析',
+    );
+    expect(getCloudSyncSnapshot()).toMatchObject({ status: 'synced', pendingCount: 0 });
+  });
+
+  it('does not overwrite newer queued bank update or delete with stale failedBankOps during flushPendingCloudWrites', async () => {
+    const q1 = {
+      id: 'q1',
+      type: 'choice' as const,
+      chapter: 1,
+      stem: '并发题',
+      options: ['A', 'B'],
+      answer: 0,
+      explain: '',
+      source: { origin: 'comprehensive_bank' as const, file: 'test', ref: '#1' },
+    };
+    const base = makeBank('b-race', '竞争题库', 100);
+    const hydrated: BankRecord = {
+      ...base,
+      data: { ...base.data, questions: [q1] },
+    };
+
+    mock.listCloudBanks.mockResolvedValueOnce([{ bank: hydrated, revision: 1 }]);
+    await hydrateAccountFromCloud(USER_ID, { force: true });
+
+    const bankV1: BankRecord = {
+      ...hydrated,
+      updatedAt: 200,
+      data: { ...hydrated.data, questions: [{ ...q1, aiAnalysis: 'STALE_V1' }] },
+    };
+    const bankV2: BankRecord = {
+      ...hydrated,
+      updatedAt: 300,
+      data: { ...hydrated.data, questions: [{ ...q1, aiAnalysis: 'NEWER_V2' }] },
+    };
+
+    const savedVersions: string[] = [];
+    mock.saveCloudBank
+      .mockRejectedValueOnce(new Error('network down'))
+      .mockImplementation(async (bankArg: BankRecord) => {
+        savedVersions.push(bankArg.data.questions[0]?.aiAnalysis ?? '');
+        return { bank: bankArg, revision: 2 };
+      });
+
+    await syncCloudBankUpdate(SCOPE, bankV1);
+    expect(getCloudSyncSnapshot().status).toBe('error');
+
+    queueCloudBankUpdate(SCOPE, bankV2, 50);
+    await flushPendingCloudWrites();
+
+    expect(savedVersions).toEqual(['NEWER_V2']);
+    expect(getCloudSyncSnapshot()).toMatchObject({ status: 'synced', pendingCount: 0 });
+
+    // Also ensure syncCloudBankDelete supersedes any prior failed save
+    mock.saveCloudBank.mockRejectedValueOnce(new Error('network down again'));
+    await syncCloudBankUpdate(SCOPE, bankV2);
+    expect(getCloudSyncSnapshot().status).toBe('error');
+
+    mock.deleteCloudBank.mockResolvedValueOnce(undefined);
+    await syncCloudBankDelete(SCOPE, 'b-race');
+    await flushPendingCloudWrites();
+    expect(mock.deleteCloudBank).toHaveBeenCalledWith('b-race', 2);
+    expect(savedVersions).toEqual(['NEWER_V2']);
+  });
+
+  it('preserves offline-created bank and creates with expectedRevision=0 after queueCloudBankUpdate and flushPendingCloudWrites', async () => {
+    const q1 = {
+      id: 'q1',
+      type: 'choice' as const,
+      chapter: 1,
+      stem: '离线建库题',
+      options: ['A', 'B'],
+      answer: 0,
+      explain: '',
+      source: { origin: 'comprehensive_bank' as const, file: 'test', ref: '#1' },
+    };
+    const createdBase = makeBank('b-offline-create', '离线新建库', 100);
+    const created: BankRecord = {
+      ...createdBase,
+      data: { ...createdBase.data, questions: [q1] },
+    };
+    const updated: BankRecord = {
+      ...created,
+      updatedAt: 200,
+      data: { ...created.data, questions: [{ ...q1, aiAnalysis: 'AI_EXPLAIN' }] },
+    };
+
+    await hydrateAccountFromCloud(USER_ID, { force: true });
+    await getBankDb(SCOPE).saveCustomBank(created);
+
+    const savedCalls: Array<{ expectedRevision: number; aiAnalysis: string | undefined }> = [];
+    mock.saveCloudBank
+      .mockRejectedValueOnce(new Error('offline'))
+      .mockImplementationOnce(async (bankArg: BankRecord, expectedRevision: number) => {
+        savedCalls.push({
+          expectedRevision,
+          aiAnalysis: bankArg.data.questions[0]?.aiAnalysis,
+        });
+        return { bank: bankArg, revision: 1 };
+      });
+
+    await syncCloudBankCreate(SCOPE, created);
+    expect(getCloudSyncSnapshot()).toMatchObject({ status: 'error', pendingCount: 1 });
+
+    await getBankDb(SCOPE).saveCustomBank(updated);
+    queueCloudBankUpdate(SCOPE, updated, 50);
+    await flushPendingCloudWrites();
+
+    const localBanks = await getBankDb(SCOPE).listCustomBanks();
+    expect(localBanks.some((b) => b.id === 'b-offline-create')).toBe(true);
+    expect(localBanks.find((b) => b.id === 'b-offline-create')?.data.questions[0]?.aiAnalysis).toBe('AI_EXPLAIN');
+    expect(savedCalls).toEqual([{ expectedRevision: 0, aiAnalysis: 'AI_EXPLAIN' }]);
+    expect(mock.listCloudBanks).toHaveBeenCalledTimes(1); // Only during initial hydrate; never fell back to remote-delete check
+    expect(getCloudSyncSnapshot()).toMatchObject({ status: 'synced', pendingCount: 0 });
+  });
+
+  it('preserves bank when in-flight syncCloudBankCreate fails after queueCloudBankUpdate and resolves 40001 if create succeeded remotely', async () => {
+    const q1 = {
+      id: 'q1',
+      type: 'choice' as const,
+      chapter: 1,
+      stem: '飞行建库题',
+      options: ['A', 'B'],
+      answer: 0,
+      explain: '',
+      source: { origin: 'comprehensive_bank' as const, file: 'test', ref: '#1' },
+    };
+    const createdBase = makeBank('b-inflight-create', '飞行新建库', 100);
+    const created: BankRecord = {
+      ...createdBase,
+      data: { ...createdBase.data, questions: [q1] },
+    };
+    const updated: BankRecord = {
+      ...created,
+      updatedAt: 200,
+      data: { ...created.data, questions: [{ ...q1, aiAnalysis: 'AI_EXPLAIN' }] },
+    };
+
+    await hydrateAccountFromCloud(USER_ID, { force: true });
+    await getBankDb(SCOPE).saveCustomBank(created);
+
+    // Case A: in-flight create rejects after queueCloudBankUpdate -> flushPendingCloudWrites saves with expectedRevision=0
+    let rejectInflight!: (err: Error) => void;
+    const savedCallsA: Array<{ expectedRevision: number; aiAnalysis: string | undefined }> = [];
+    mock.saveCloudBank
+      .mockImplementationOnce(
+        () =>
+          new Promise((_, reject) => {
+            rejectInflight = reject;
+          }),
+      )
+      .mockImplementationOnce(async (bankArg: BankRecord, expectedRevision: number) => {
+        savedCallsA.push({
+          expectedRevision,
+          aiAnalysis: bankArg.data.questions[0]?.aiAnalysis,
+        });
+        return { bank: bankArg, revision: 1 };
+      });
+
+    const createPromise = syncCloudBankCreate(SCOPE, created);
+    await getBankDb(SCOPE).saveCustomBank(updated);
+    queueCloudBankUpdate(SCOPE, updated, 50);
+    rejectInflight(new Error('network drop'));
+    await createPromise;
+
+    await flushPendingCloudWrites();
+    const localBanksA = await getBankDb(SCOPE).listCustomBanks();
+    expect(localBanksA.some((b) => b.id === 'b-inflight-create')).toBe(true);
+    expect(savedCallsA).toEqual([{ expectedRevision: 0, aiAnalysis: 'AI_EXPLAIN' }]);
+    expect(getCloudSyncSnapshot()).toMatchObject({ status: 'synced', pendingCount: 0 });
+
+    // Case B: create actually succeeded on server before response returned -> 40001 on expectedRevision=0 merges and saves cleanly
+    clearCloudSyncSession(USER_ID);
+    const created2Base = makeBank('b-create-40001', '隐式成功库', 100);
+    const created2: BankRecord = {
+      ...created2Base,
+      data: { ...created2Base.data, questions: [q1] },
+    };
+    const updated2: BankRecord = {
+      ...created2,
+      updatedAt: 200,
+      data: { ...created2.data, questions: [{ ...q1, aiAnalysis: 'AI_EXPLAIN_40001' }] },
+    };
+    mock.listCloudBanks.mockResolvedValueOnce([]);
+    await hydrateAccountFromCloud(USER_ID, { force: true });
+    await getBankDb(SCOPE).saveCustomBank(created2);
+
+    const savedCallsB: Array<{ expectedRevision: number; aiAnalysis: string | undefined }> = [];
+    mock.saveCloudBank
+      .mockRejectedValueOnce(new Error('timeout after server commit'))
+      .mockRejectedValueOnce(Object.assign(new Error('already exists'), { code: '40001' }))
+      .mockImplementationOnce(async (bankArg: BankRecord, expectedRevision: number) => {
+        savedCallsB.push({
+          expectedRevision,
+          aiAnalysis: bankArg.data.questions[0]?.aiAnalysis,
+        });
+        return { bank: bankArg, revision: 2 };
+      });
+    mock.listCloudBanks.mockResolvedValueOnce([{ bank: created2, revision: 1 }]);
+
+    await syncCloudBankCreate(SCOPE, created2);
+    await getBankDb(SCOPE).saveCustomBank(updated2);
+    queueCloudBankUpdate(SCOPE, updated2, 50);
+    await flushPendingCloudWrites();
+
+    const localBanksB = await getBankDb(SCOPE).listCustomBanks();
+    expect(localBanksB.some((b) => b.id === 'b-create-40001')).toBe(true);
+    expect(savedCallsB).toEqual([{ expectedRevision: 1, aiAnalysis: 'AI_EXPLAIN_40001' }]);
+    expect(getCloudSyncSnapshot()).toMatchObject({ status: 'synced', pendingCount: 0 });
+  });
+
+  it('does not overwrite unsynced local bank edits in IndexedDB when force-hydrating with pending failedBankOps save', async () => {
+    const q1 = {
+      id: 'q1',
+      type: 'choice' as const,
+      chapter: 1,
+      stem: '同步失败回放题',
+      options: ['A', 'B'],
+      answer: 0,
+      explain: '',
+      source: { origin: 'comprehensive_bank' as const, file: 'test', ref: '#1' },
+    };
+    const base = makeBank('b-failed-save-hydrate', '失败回放题库', 100);
+    const remoteRev1: BankRecord = {
+      ...base,
+      data: { ...base.data, questions: [q1] },
+    };
+    const localUpdated: BankRecord = {
+      ...remoteRev1,
+      updatedAt: 200,
+      data: { ...remoteRev1.data, questions: [{ ...q1, aiAnalysis: 'LOCAL_AI_1' }] },
+    };
+
+    mock.listCloudBanks.mockResolvedValueOnce([{ bank: remoteRev1, revision: 1 }]);
+    await hydrateAccountFromCloud(USER_ID, { force: true });
+
+    await getBankDb(SCOPE).saveCustomBank(localUpdated);
+    mock.saveCloudBank.mockRejectedValueOnce(new Error('offline'));
+    await syncCloudBankUpdate(SCOPE, localUpdated);
+    expect(getCloudSyncSnapshot()).toMatchObject({ status: 'error', pendingCount: 1 });
+
+    // Force-hydrate returns stale remote rev 1 while failedBankOps holds kind: 'save'
+    mock.listCloudBanks.mockResolvedValueOnce([{ bank: remoteRev1, revision: 1 }]);
+    await hydrateAccountFromCloud(USER_ID, { force: true });
+
+    const midBanks = await getBankDb(SCOPE).listCustomBanks();
+    expect(midBanks.find((b) => b.id === 'b-failed-save-hydrate')?.data.questions[0]?.aiAnalysis).toBe('LOCAL_AI_1');
+
+    const savedCalls: Array<{ expectedRevision: number; aiAnalysis: string | undefined }> = [];
+    mock.saveCloudBank.mockImplementationOnce(async (bankArg: BankRecord, expectedRevision: number) => {
+      savedCalls.push({
+        expectedRevision,
+        aiAnalysis: bankArg.data.questions[0]?.aiAnalysis,
+      });
+      return { bank: bankArg, revision: 2 };
+    });
+
+    await flushPendingCloudWrites();
+
+    expect(savedCalls).toEqual([{ expectedRevision: 1, aiAnalysis: 'LOCAL_AI_1' }]);
+    const finalBanks = await getBankDb(SCOPE).listCustomBanks();
+    expect(finalBanks.find((b) => b.id === 'b-failed-save-hydrate')?.data.questions[0]?.aiAnalysis).toBe('LOCAL_AI_1');
+    expect(getCloudSyncSnapshot()).toMatchObject({ status: 'synced', pendingCount: 0 });
+  });
+
+  it('merges failedBankOps save with remote rev 2 on flush after force-hydrate instead of clobbering remote changes (Target 1b)', async () => {
+    const q1 = {
+      id: 'q1',
+      type: 'choice' as const,
+      chapter: 1,
+      stem: '冲突合并题1',
+      options: ['A', 'B'],
+      answer: 0,
+      explain: '',
+      source: { origin: 'comprehensive_bank' as const, file: 'test', ref: '#1' },
+    };
+    const q2 = {
+      id: 'q2',
+      type: 'choice' as const,
+      chapter: 1,
+      stem: '冲突合并题2',
+      options: ['A', 'B'],
+      answer: 1,
+      explain: '',
+      source: { origin: 'comprehensive_bank' as const, file: 'test', ref: '#2' },
+    };
+    const base = makeBank('b-target-1b', 'Original Name', 100);
+    const rev1: BankRecord = {
+      ...base,
+      data: { ...base.data, questions: [q1, q2] },
+    };
+    const localUpdated: BankRecord = {
+      ...rev1,
+      updatedAt: 200,
+      data: {
+        ...rev1.data,
+        questions: [{ ...q1, aiAnalysis: 'LOCAL_AI_1' }, q2],
+      },
+    };
+    const remoteRev2: BankRecord = {
+      ...rev1,
+      name: 'Remote Renamed',
+      updatedAt: 300,
+      data: {
+        ...rev1.data,
+        meta: { ...rev1.data.meta, title: 'Remote Renamed' },
+        questions: [q1, { ...q2, aiAnalysis: 'REMOTE_AI_2' }],
+      },
+    };
+
+    mock.listCloudBanks.mockResolvedValueOnce([{ bank: rev1, revision: 1 }]);
+    await hydrateAccountFromCloud(USER_ID, { force: true });
+
+    await getBankDb(SCOPE).saveCustomBank(localUpdated);
+    mock.saveCloudBank.mockRejectedValueOnce(new Error('offline'));
+    await syncCloudBankUpdate(SCOPE, localUpdated);
+    expect(getCloudSyncSnapshot()).toMatchObject({ status: 'error', pendingCount: 1 });
+
+    // Remote moves to rev 2 before force-hydrate runs
+    let serverBank = structuredClone(remoteRev2);
+    let serverRev = 2;
+    mock.listCloudBanks.mockImplementation(async () => [{ bank: structuredClone(serverBank), revision: serverRev }]);
+    await hydrateAccountFromCloud(USER_ID, { force: true });
+
+    const midBanks = await getBankDb(SCOPE).listCustomBanks();
+    expect(midBanks.find((b) => b.id === 'b-target-1b')?.data.questions.find((q) => q.id === 'q1')?.aiAnalysis).toBe('LOCAL_AI_1');
+
+    const saveAttempts: number[] = [];
+    mock.saveCloudBank.mockImplementation(async (bankArg: BankRecord, expectedRevision: number) => {
+      saveAttempts.push(expectedRevision);
+      if (expectedRevision !== serverRev) {
+        throw Object.assign(new Error('revision conflict'), { code: '40001' });
+      }
+      serverRev += 1;
+      serverBank = structuredClone(bankArg);
+      return { bank: structuredClone(serverBank), revision: serverRev };
+    });
+
+    await flushPendingCloudWrites();
+
+    expect(saveAttempts).toEqual([1, 2]);
+    expect(serverBank.name).toBe('Remote Renamed');
+    expect(serverBank.data.questions.find((q) => q.id === 'q1')?.aiAnalysis).toBe('LOCAL_AI_1');
+    expect(serverBank.data.questions.find((q) => q.id === 'q2')?.aiAnalysis).toBe('REMOTE_AI_2');
+
+    const finalBanks = await getBankDb(SCOPE).listCustomBanks();
+    const idbBank = finalBanks.find((b) => b.id === 'b-target-1b');
+    expect(idbBank?.name).toBe('Remote Renamed');
+    expect(idbBank?.data.questions.find((q) => q.id === 'q1')?.aiAnalysis).toBe('LOCAL_AI_1');
+    expect(idbBank?.data.questions.find((q) => q.id === 'q2')?.aiAnalysis).toBe('REMOTE_AI_2');
+    expect(getCloudSyncSnapshot()).toMatchObject({ status: 'synced', pendingCount: 0 });
+  });
+
+  it('merges pendingBankUpdates with remote rev 2 on flush after force-hydrate instead of clobbering remote changes (Target 1c)', async () => {
+    const q1 = {
+      id: 'q1',
+      type: 'choice' as const,
+      chapter: 1,
+      stem: '防抖冲突合并题1',
+      options: ['A', 'B'],
+      answer: 0,
+      explain: '',
+      source: { origin: 'comprehensive_bank' as const, file: 'test', ref: '#1' },
+    };
+    const q2 = {
+      id: 'q2',
+      type: 'choice' as const,
+      chapter: 1,
+      stem: '防抖冲突合并题2',
+      options: ['A', 'B'],
+      answer: 1,
+      explain: '',
+      source: { origin: 'comprehensive_bank' as const, file: 'test', ref: '#2' },
+    };
+    const base = makeBank('b-target-1c', 'Original Name', 100);
+    const rev1: BankRecord = {
+      ...base,
+      data: { ...base.data, questions: [q1, q2] },
+    };
+    const localUpdated: BankRecord = {
+      ...rev1,
+      updatedAt: 200,
+      data: {
+        ...rev1.data,
+        questions: [{ ...q1, aiAnalysis: 'LOCAL_AI_1' }, q2],
+      },
+    };
+    const remoteRev2: BankRecord = {
+      ...rev1,
+      name: 'Remote Renamed',
+      updatedAt: 300,
+      data: {
+        ...rev1.data,
+        meta: { ...rev1.data.meta, title: 'Remote Renamed' },
+        questions: [q1, { ...q2, aiAnalysis: 'REMOTE_AI_2' }],
+      },
+    };
+
+    mock.listCloudBanks.mockResolvedValueOnce([{ bank: rev1, revision: 1 }]);
+    await hydrateAccountFromCloud(USER_ID, { force: true });
+
+    await getBankDb(SCOPE).saveCustomBank(localUpdated);
+    queueCloudBankUpdate(SCOPE, localUpdated, 5000);
+
+    let serverBank = structuredClone(remoteRev2);
+    let serverRev = 2;
+    mock.listCloudBanks.mockImplementation(async () => [{ bank: structuredClone(serverBank), revision: serverRev }]);
+    await hydrateAccountFromCloud(USER_ID, { force: true });
+
+    const saveAttempts: number[] = [];
+    mock.saveCloudBank.mockImplementation(async (bankArg: BankRecord, expectedRevision: number) => {
+      saveAttempts.push(expectedRevision);
+      if (expectedRevision !== serverRev) {
+        throw Object.assign(new Error('revision conflict'), { code: '40001' });
+      }
+      serverRev += 1;
+      serverBank = structuredClone(bankArg);
+      return { bank: structuredClone(serverBank), revision: serverRev };
+    });
+
+    await flushPendingCloudWrites();
+
+    expect(saveAttempts).toEqual([1, 2]);
+    expect(serverBank.name).toBe('Remote Renamed');
+    expect(serverBank.data.questions.find((q) => q.id === 'q1')?.aiAnalysis).toBe('LOCAL_AI_1');
+    expect(serverBank.data.questions.find((q) => q.id === 'q2')?.aiAnalysis).toBe('REMOTE_AI_2');
+
+    const finalBanks = await getBankDb(SCOPE).listCustomBanks();
+    const idbBank = finalBanks.find((b) => b.id === 'b-target-1c');
+    expect(idbBank?.name).toBe('Remote Renamed');
+    expect(idbBank?.data.questions.find((q) => q.id === 'q1')?.aiAnalysis).toBe('LOCAL_AI_1');
+    expect(idbBank?.data.questions.find((q) => q.id === 'q2')?.aiAnalysis).toBe('REMOTE_AI_2');
     expect(getCloudSyncSnapshot()).toMatchObject({ status: 'synced', pendingCount: 0 });
   });
 });

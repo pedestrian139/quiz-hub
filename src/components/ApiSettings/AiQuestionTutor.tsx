@@ -1,5 +1,12 @@
-import { useEffect, useRef, useState, type FormEvent, type ReactNode } from 'react';
-import type { MasteryLevel, Question, UserRecord } from '../../types/quiz';
+import {
+  useCallback,
+  useEffect,
+  useRef,
+  useState,
+  type FormEvent,
+  type RefObject,
+} from 'react';
+import type { MasteryLevel, Question, UserRecord, UserStore } from '../../types/quiz';
 import { isObjectiveQuestion } from '../../core/questionUtils';
 import { usePracticeScope } from '../../hooks/practiceScope';
 import {
@@ -15,7 +22,14 @@ import {
   type ChatMessage,
   type SubjectiveGradeFeedback,
 } from '../../services';
+import { Icon } from '../Icons';
+import { RichContent } from '../RichContent';
 import './ApiSettings.css';
+
+export const QUICK_FOLLOWUPS = [
+  '为什么不选其他干扰项？',
+  '请举一道同类考点变式题',
+] as const;
 
 export interface AiQuestionTutorProps {
   question: Question;
@@ -23,10 +37,13 @@ export interface AiQuestionTutorProps {
   isGraded: boolean;
   isRevealed: boolean;
   chapterTitle?: string;
+  bankName?: string;
+  store?: UserStore;
+  autoExplainOnWrong?: boolean;
+  onToggleAutoExplain?: (next: boolean) => void;
   onSuggestedMastery?: (level: MasteryLevel) => void;
+  onSaveAiAnalysis?: (questionId: string, content: string, model?: string) => Promise<void> | void;
 }
-
-type TutorTab = 'none' | 'explain' | 'grade' | 'chat';
 
 const MASTERY_LABEL: Record<MasteryLevel, string> = {
   2: '完全会',
@@ -34,96 +51,95 @@ const MASTERY_LABEL: Record<MasteryLevel, string> = {
   0: '不会',
 };
 
-function renderInlineMarkdown(text: string): ReactNode[] {
-  const nodes: ReactNode[] = [];
-  const pattern = /(\*\*[^*]+\*\*|`[^`]+`)/g;
-  let lastIndex = 0;
-  let match: RegExpExecArray | null;
-  let key = 0;
-
-  while ((match = pattern.exec(text)) !== null) {
-    if (match.index > lastIndex) {
-      nodes.push(text.slice(lastIndex, match.index));
+/**
+ * Resolve persisted AI explanation cache for a question.
+ * Intentionally excludes legacy/short `question.explain` so first-time
+ * "AI 深度解析" still calls the LLM to generate structured 3-section analysis.
+ */
+export function getCachedAiExplanation(question: Question, store?: UserStore): string {
+  const candidates = [
+    store?.aiExplanations?.[question.id]?.content,
+    question.aiAnalysis,
+    question.explanation,
+  ];
+  for (const candidate of candidates) {
+    if (typeof candidate === 'string' && candidate.trim().length > 0) {
+      return candidate;
     }
-    const token = match[0];
-    if (token.startsWith('**') && token.endsWith('**')) {
-      nodes.push(<strong key={`b-${key++}`}>{token.slice(2, -2)}</strong>);
-    } else if (token.startsWith('`') && token.endsWith('`')) {
-      nodes.push(<code key={`c-${key++}`}>{token.slice(1, -1)}</code>);
-    }
-    lastIndex = match.index + token.length;
   }
-
-  if (lastIndex < text.length) {
-    nodes.push(text.slice(lastIndex));
-  }
-  return nodes;
+  return '';
 }
 
-function SimpleMarkdown({ text }: { text: string }) {
-  const lines = text.replace(/\r\n/g, '\n').split('\n');
-  const blocks: ReactNode[] = [];
-  let listItems: string[] = [];
-  let blockKey = 0;
-
-  const flushList = () => {
-    if (listItems.length === 0) return;
-    blocks.push(
-      <ul key={`ul-${blockKey++}`}>
-        {listItems.map((item, idx) => (
-          <li key={idx}>{renderInlineMarkdown(item)}</li>
-        ))}
-      </ul>,
-    );
-    listItems = [];
-  };
-
-  for (const rawLine of lines) {
-    const line = rawLine.trim();
-    if (!line) {
-      flushList();
-      continue;
-    }
-    const bulletMatch = line.match(/^[-*•]\s+(.*)$/);
-    if (bulletMatch) {
-      listItems.push(bulletMatch[1]);
-      continue;
-    }
-    flushList();
-    const headingMatch = line.match(/^#{1,4}\s+(.*)$/);
-    if (headingMatch) {
-      blocks.push(
-        <p key={`h-${blockKey++}`}>
-          <strong>{renderInlineMarkdown(headingMatch[1])}</strong>
-        </p>,
-      );
-      continue;
-    }
-    blocks.push(<p key={`p-${blockKey++}`}>{renderInlineMarkdown(line)}</p>);
-  }
-  flushList();
-
-  return <div className="ai-tutor-markdown">{blocks}</div>;
+interface AnalysisSave {
+  questionId: string;
+  content: string;
+  model?: string;
 }
 
-export function AiQuestionTutor({
+export interface AiQuestionTutorController {
+  question: Question;
+  objective: boolean;
+  isGraded: boolean;
+  isRevealed: boolean;
+  config: ApiConfig;
+  ready: boolean;
+  drawerOpen: boolean;
+  setDrawerOpen: (open: boolean) => void;
+  explainText: string;
+  explainLoading: boolean;
+  explainError: string | null;
+  analysisSaveFailed: boolean;
+  retryAnalysisSave: () => Promise<void>;
+  isCachedHit: boolean;
+  gradeOpen: boolean;
+  setGradeOpen: (open: boolean | ((prev: boolean) => boolean)) => void;
+  draftAnswer: string;
+  setDraftAnswer: (val: string) => void;
+  gradeLoading: boolean;
+  gradeError: string | null;
+  gradeResult: SubjectiveGradeFeedback | null;
+  appliedMastery: MasteryLevel | null;
+  chatHistory: ChatMessage[];
+  chatInput: string;
+  setChatInput: (val: string) => void;
+  chatLoading: boolean;
+  chatError: string | null;
+  chatInputRef: RefObject<HTMLInputElement | null>;
+  stopActiveRequest: () => void;
+  runExplain: (force?: boolean, recordOverride?: UserRecord) => Promise<void>;
+  runGrade: () => Promise<void>;
+  sendFollowUp: (rawText: string) => Promise<void>;
+  runFollowUp: (e: FormEvent) => Promise<void>;
+  clearChat: () => void;
+  openChatDrawer: () => void;
+  canApplyMastery: boolean;
+  handleApplyMastery: (level: MasteryLevel) => void;
+}
+
+export function useAiQuestionTutor({
   question,
   userRecord,
   isGraded,
   isRevealed,
   chapterTitle,
+  bankName,
+  store,
   onSuggestedMastery,
-}: AiQuestionTutorProps) {
+  onSaveAiAnalysis,
+}: AiQuestionTutorProps): AiQuestionTutorController {
   const scope = usePracticeScope();
   const [config, setConfig] = useState<ApiConfig>(() => loadApiConfig(scope));
-  const [activeTab, setActiveTab] = useState<TutorTab>('none');
+  const [drawerOpen, setDrawerOpen] = useState(false);
 
   // Deep explanation state
   const [explainText, setExplainText] = useState('');
   const [explainLoading, setExplainLoading] = useState(false);
   const [explainError, setExplainError] = useState<string | null>(null);
+  const [failedAnalysisSave, setFailedAnalysisSave] = useState<AnalysisSave | null>(null);
+  const [isCachedHit, setIsCachedHit] = useState(false);
 
   // Subjective AI grader state
+  const [gradeOpen, setGradeOpen] = useState(false);
   const [draftAnswer, setDraftAnswer] = useState('');
   const [gradeLoading, setGradeLoading] = useState(false);
   const [gradeError, setGradeError] = useState<string | null>(null);
@@ -137,65 +153,180 @@ export function AiQuestionTutor({
   const [chatError, setChatError] = useState<string | null>(null);
 
   const abortRef = useRef<AbortController | null>(null);
+  const activeQuestionIdRef = useRef<string>(question.id);
+  const activeSaveRef = useRef<AnalysisSave | null>(null);
+  const localSavedCacheRef = useRef<Record<string, string>>({});
+  const chatInputRef = useRef<HTMLInputElement | null>(null);
 
   useEffect(() => {
     setConfig(loadApiConfig(scope));
     return subscribeApiConfig(setConfig, scope);
   }, [scope]);
 
+  // Abort in-flight streams and reset transient state whenever question changes
+  useEffect(() => {
+    activeQuestionIdRef.current = question.id;
+    activeSaveRef.current = null;
+    abortRef.current?.abort();
+    abortRef.current = null;
+
+    setDrawerOpen(false);
+    setExplainText('');
+    setExplainLoading(false);
+    setExplainError(null);
+    setFailedAnalysisSave(null);
+    setIsCachedHit(false);
+
+    setGradeOpen(false);
+    setDraftAnswer('');
+    setGradeLoading(false);
+    setGradeError(null);
+    setGradeResult(null);
+    setAppliedMastery(null);
+
+    setChatHistory([]);
+    setChatInput('');
+    setChatLoading(false);
+    setChatError(null);
+  }, [question.id]);
+
   useEffect(() => {
     return () => {
       abortRef.current?.abort();
+      abortRef.current = null;
+      activeSaveRef.current = null;
     };
   }, []);
+
+  const saveAnalysis = useCallback(async (save: AnalysisSave) => {
+    activeSaveRef.current = save;
+    setFailedAnalysisSave(null);
+    try {
+      await onSaveAiAnalysis?.(save.questionId, save.content, save.model);
+    } catch {
+      if (activeSaveRef.current === save) setFailedAnalysisSave(save);
+    } finally {
+      if (activeSaveRef.current === save) activeSaveRef.current = null;
+    }
+  }, [onSaveAiAnalysis]);
+
+  const retryAnalysisSave = useCallback(async () => {
+    if (failedAnalysisSave?.questionId === question.id) await saveAnalysis(failedAnalysisSave);
+  }, [failedAnalysisSave, question.id, saveAnalysis]);
 
   const objective = isObjectiveQuestion(question.type);
   const ready = isApiConfigReady(config);
 
-  // Objective questions: never show AI tutor before grading (zero spoilers)
-  if (objective && !isGraded) {
-    return null;
-  }
-
-  const stopActiveRequest = () => {
+  const stopActiveRequest = useCallback(() => {
     abortRef.current?.abort();
     abortRef.current = null;
     setExplainLoading(false);
     setGradeLoading(false);
     setChatLoading(false);
-  };
+  }, []);
 
-  const runExplain = async (force = false) => {
-    setActiveTab('explain');
-    if (!force && explainText.trim() && !explainError) return;
-    if (!ready) {
-      setExplainError('尚未配置大模型 API，点击下方按钮完成配置后即可使用 AI 深度解析。');
-      return;
-    }
+  const runExplain = useCallback(
+    async (force = false, recordOverride?: UserRecord) => {
+      const targetQuestion = question;
+      const targetQuestionId = targetQuestion.id;
+      const effectiveRecord = recordOverride ?? userRecord;
 
-    stopActiveRequest();
-    const controller = new AbortController();
-    abortRef.current = controller;
+      const persistedCache =
+        getCachedAiExplanation(targetQuestion, store) ||
+        localSavedCacheRef.current[targetQuestionId] ||
+        '';
 
-    setExplainLoading(true);
-    setExplainError(null);
-    setExplainText('');
-    try {
-      await explainQuestionStream(
-        question,
-        { userRecord, chapterTitle },
-        (_chunk, accumulated) => setExplainText(accumulated),
-        { signal: controller.signal, practiceScope: scope },
-      );
-    } catch (err) {
-      if (err instanceof LlmApiError && err.code === 'ABORTED') return;
-      setExplainError(err instanceof LlmApiError ? err.userMessage : 'AI 解析生成失败，请稍后重试。');
-    } finally {
-      setExplainLoading(false);
-    }
-  };
+      if (!force && persistedCache) {
+        stopActiveRequest();
+        setDrawerOpen(true);
+        setExplainError(null);
+        setExplainLoading(false);
+        setExplainText(persistedCache);
+        setIsCachedHit(true);
+        return;
+      }
 
-  const runGrade = async () => {
+      if (!force && explainText.trim() && !explainError) {
+        setDrawerOpen(true);
+        return;
+      }
+
+      if (!ready) {
+        stopActiveRequest();
+        setDrawerOpen(true);
+        setExplainText('');
+        setIsCachedHit(false);
+        setExplainError('尚未配置大模型 API，点击下方按钮完成配置后即可使用 AI 深度解析。');
+        return;
+      }
+
+      stopActiveRequest();
+      const controller = new AbortController();
+      abortRef.current = controller;
+
+      setDrawerOpen(true);
+      setExplainLoading(true);
+      setExplainError(null);
+      setExplainText('');
+      setIsCachedHit(false);
+
+      try {
+        const result = await explainQuestionStream(
+          targetQuestion,
+          { userRecord: effectiveRecord, chapterTitle, bankName },
+          (_chunk, accumulated) => {
+            if (controller.signal.aborted || activeQuestionIdRef.current !== targetQuestionId) {
+              return;
+            }
+            setExplainText(accumulated);
+          },
+          { signal: controller.signal, practiceScope: scope },
+        );
+        if (controller.signal.aborted || activeQuestionIdRef.current !== targetQuestionId) {
+          return;
+        }
+        const finalContent = result.content.trim() ? result.content : '';
+        setExplainText(finalContent);
+        if (finalContent) {
+          localSavedCacheRef.current[targetQuestionId] = finalContent;
+          void saveAnalysis({ questionId: targetQuestionId, content: finalContent, model: result.model });
+        }
+      } catch (err) {
+        if (controller.signal.aborted || activeQuestionIdRef.current !== targetQuestionId) {
+          return;
+        }
+        if (err instanceof LlmApiError && err.code === 'ABORTED') return;
+        setExplainError(
+          err instanceof LlmApiError ? err.userMessage : 'AI 解析生成失败，请稍后重试。',
+        );
+      } finally {
+        if (abortRef.current === controller) {
+          abortRef.current = null;
+        }
+        if (!controller.signal.aborted && activeQuestionIdRef.current === targetQuestionId) {
+          setExplainLoading(false);
+        }
+      }
+    },
+    [
+      bankName,
+      chapterTitle,
+      explainError,
+      explainText,
+      question,
+      ready,
+      saveAnalysis,
+      scope,
+      stopActiveRequest,
+      store,
+      userRecord,
+    ],
+  );
+
+  const runGrade = useCallback(async () => {
+    const targetQuestion = question;
+    const targetQuestionId = targetQuestion.id;
+
     if (!draftAnswer.trim()) {
       setGradeError('请先输入你的作答思路或关键词，再点击 AI 批改。');
       return;
@@ -213,79 +344,228 @@ export function AiQuestionTutor({
     setGradeError(null);
     setAppliedMastery(null);
     try {
-      const { feedback } = await gradeSubjectiveDraft(question, draftAnswer, {
+      const { feedback } = await gradeSubjectiveDraft(targetQuestion, draftAnswer, {
         signal: controller.signal,
         practiceScope: scope,
       });
+      if (controller.signal.aborted || activeQuestionIdRef.current !== targetQuestionId) {
+        return;
+      }
       setGradeResult(feedback);
     } catch (err) {
+      if (controller.signal.aborted || activeQuestionIdRef.current !== targetQuestionId) {
+        return;
+      }
       if (err instanceof LlmApiError && err.code === 'ABORTED') return;
       setGradeError(err instanceof LlmApiError ? err.userMessage : 'AI 批改失败，请稍后重试。');
     } finally {
-      setGradeLoading(false);
+      if (abortRef.current === controller) {
+        abortRef.current = null;
+      }
+      if (!controller.signal.aborted && activeQuestionIdRef.current === targetQuestionId) {
+        setGradeLoading(false);
+      }
     }
-  };
+  }, [draftAnswer, question, ready, scope, stopActiveRequest]);
 
-  const runFollowUp = async (e: FormEvent) => {
-    e.preventDefault();
-    const text = chatInput.trim();
-    if (!text || chatLoading) return;
-    if (!ready) {
-      setChatError('尚未配置大模型 API，请先点击“API 设置”完成配置。');
-      return;
-    }
+  const sendFollowUp = useCallback(
+    async (rawText: string) => {
+      const text = rawText.trim();
+      const targetQuestion = question;
+      const targetQuestionId = targetQuestion.id;
+      if (!text || chatLoading) return;
 
-    stopActiveRequest();
-    const controller = new AbortController();
-    abortRef.current = controller;
+      if (!ready) {
+        setDrawerOpen(true);
+        setChatError('尚未配置大模型 API，请先点击“API 设置”完成配置。');
+        return;
+      }
 
-    const historySnapshot = [...chatHistory];
-    const nextHistory: ChatMessage[] = [
-      ...historySnapshot,
-      { role: 'user', content: text },
-      { role: 'assistant', content: '' },
-    ];
-    setChatHistory(nextHistory);
-    setChatInput('');
-    setChatLoading(true);
-    setChatError(null);
+      stopActiveRequest();
+      const controller = new AbortController();
+      abortRef.current = controller;
 
-    try {
-      const res = await askQuestionFollowUpStream(
-        question,
-        historySnapshot,
-        text,
-        { userRecord, chapterTitle },
-        (_chunk, accumulated) => {
-          setChatHistory([
-            ...historySnapshot,
-            { role: 'user', content: text },
-            { role: 'assistant', content: accumulated },
-          ]);
-        },
-        { signal: controller.signal, practiceScope: scope },
-      );
-      setChatHistory([
+      const historySnapshot = [...chatHistory];
+      const nextHistory: ChatMessage[] = [
         ...historySnapshot,
         { role: 'user', content: text },
-        { role: 'assistant', content: res.content },
-      ]);
-    } catch (err) {
-      if (err instanceof LlmApiError && err.code === 'ABORTED') return;
-      setChatError(err instanceof LlmApiError ? err.userMessage : 'AI 回复失败，请稍后重试。');
-      setChatHistory(historySnapshot);
-      setChatInput(text);
-    } finally {
-      setChatLoading(false);
-    }
-  };
+        { role: 'assistant', content: '' },
+      ];
+      setDrawerOpen(true);
+      setChatHistory(nextHistory);
+      if (rawText === chatInput) {
+        setChatInput('');
+      }
+      setChatLoading(true);
+      setChatError(null);
 
-  const handleApplyMastery = (level: MasteryLevel) => {
-    onSuggestedMastery?.(level);
-    setAppliedMastery(level);
-  };
+      const previousExplanation =
+        explainText.trim() ||
+        getCachedAiExplanation(targetQuestion, store) ||
+        localSavedCacheRef.current[targetQuestionId] ||
+        undefined;
 
-  const showFullToolbar = objective || isRevealed;
+      try {
+        const res = await askQuestionFollowUpStream(
+          targetQuestion,
+          historySnapshot,
+          text,
+          { userRecord, chapterTitle, bankName, previousExplanation },
+          (_chunk, accumulated) => {
+            if (controller.signal.aborted || activeQuestionIdRef.current !== targetQuestionId) {
+              return;
+            }
+            setChatHistory([
+              ...historySnapshot,
+              { role: 'user', content: text },
+              { role: 'assistant', content: accumulated },
+            ]);
+          },
+          { signal: controller.signal, practiceScope: scope },
+        );
+        if (controller.signal.aborted || activeQuestionIdRef.current !== targetQuestionId) {
+          return;
+        }
+        setChatHistory([
+          ...historySnapshot,
+          { role: 'user', content: text },
+          { role: 'assistant', content: res.content },
+        ]);
+      } catch (err) {
+        if (controller.signal.aborted || activeQuestionIdRef.current !== targetQuestionId) {
+          return;
+        }
+        if (err instanceof LlmApiError && err.code === 'ABORTED') return;
+        setChatError(err instanceof LlmApiError ? err.userMessage : 'AI 回复失败，请稍后重试。');
+        setChatHistory(historySnapshot);
+        if (rawText === chatInput) {
+          setChatInput(text);
+        }
+      } finally {
+        if (abortRef.current === controller) {
+          abortRef.current = null;
+        }
+        if (!controller.signal.aborted && activeQuestionIdRef.current === targetQuestionId) {
+          setChatLoading(false);
+        }
+      }
+    },
+    [
+      bankName,
+      chapterTitle,
+      chatHistory,
+      chatInput,
+      chatLoading,
+      explainText,
+      question,
+      ready,
+      scope,
+      stopActiveRequest,
+      store,
+      userRecord,
+    ],
+  );
+
+  const runFollowUp = useCallback(
+    async (e: FormEvent) => {
+      e.preventDefault();
+      await sendFollowUp(chatInput);
+    },
+    [chatInput, sendFollowUp],
+  );
+
+  const clearChat = useCallback(() => {
+    stopActiveRequest();
+    setChatHistory([]);
+    setChatError(null);
+  }, [stopActiveRequest]);
+
+  const openChatDrawer = useCallback(() => {
+    setDrawerOpen(true);
+    window.requestAnimationFrame(() => {
+      chatInputRef.current?.focus();
+    });
+  }, []);
+
+  const handleApplyMastery = useCallback(
+    (level: MasteryLevel) => {
+      onSuggestedMastery?.(level);
+      setAppliedMastery(level);
+    },
+    [onSuggestedMastery],
+  );
+
+  return {
+    question,
+    objective,
+    isGraded,
+    isRevealed,
+    config,
+    ready,
+    drawerOpen,
+    setDrawerOpen,
+    explainText,
+    explainLoading,
+    explainError,
+    analysisSaveFailed: failedAnalysisSave?.questionId === question.id,
+    retryAnalysisSave,
+    isCachedHit,
+    gradeOpen,
+    setGradeOpen,
+    draftAnswer,
+    setDraftAnswer,
+    gradeLoading,
+    gradeError,
+    gradeResult,
+    appliedMastery,
+    chatHistory,
+    chatInput,
+    setChatInput,
+    chatLoading,
+    chatError,
+    chatInputRef,
+    stopActiveRequest,
+    runExplain,
+    runGrade,
+    sendFollowUp,
+    runFollowUp,
+    clearChat,
+    openChatDrawer,
+    canApplyMastery: Boolean(onSuggestedMastery),
+    handleApplyMastery,
+  };
+}
+
+export function AiTutorInlinePanel({ tutor }: { tutor: AiQuestionTutorController }) {
+  const {
+    objective,
+    isGraded,
+    isRevealed,
+    drawerOpen,
+    ready,
+    config,
+    gradeOpen,
+    setGradeOpen,
+    draftAnswer,
+    setDraftAnswer,
+    gradeLoading,
+    gradeError,
+    gradeResult,
+    appliedMastery,
+    stopActiveRequest,
+    runGrade,
+    openChatDrawer,
+    handleApplyMastery,
+  } = tutor;
+
+  // Objective questions: keep ai-tutor-panel hidden before grading unless drawer is explicitly opened
+  if (objective && !isGraded && !drawerOpen) {
+    return null;
+  }
+
+  const showFollowupButton = objective || isRevealed || drawerOpen;
+  const drawerShowsInlineSettingsCta =
+    drawerOpen && !ready && (Boolean(tutor.explainError) || Boolean(tutor.chatError));
 
   return (
     <section className="ai-tutor-root" data-testid="ai-tutor-panel" aria-label="AI 助教工具">
@@ -295,45 +575,30 @@ export function AiQuestionTutor({
             <button
               type="button"
               data-testid="ai-btn-grade-toggle"
-              className={`ai-tutor-btn ai-tutor-btn--accent${activeTab === 'grade' ? ' is-active' : ''}`}
-              onClick={() => setActiveTab((prev) => (prev === 'grade' ? 'none' : 'grade'))}
+              className={`ai-tutor-btn ai-tutor-btn--accent${gradeOpen ? ' is-active' : ''}`}
+              onClick={() => setGradeOpen((prev) => !prev)}
             >
               <span>{isRevealed ? 'AI 批改我的作答' : 'AI 辅助作答与批改'}</span>
             </button>
           )}
 
-          {showFullToolbar && (
-            <>
-              <button
-                type="button"
-                data-testid="ai-btn-explain"
-                className={`ai-tutor-btn${activeTab === 'explain' ? ' is-active' : ''}`}
-                onClick={() => {
-                  if (activeTab === 'explain') {
-                    setActiveTab('none');
-                  } else {
-                    void runExplain(false);
-                  }
-                }}
-              >
-                <span>AI 深度解析</span>
-              </button>
-
-              <button
-                type="button"
-                data-testid="ai-btn-chat"
-                className={`ai-tutor-btn${activeTab === 'chat' ? ' is-active' : ''}`}
-                onClick={() => setActiveTab((prev) => (prev === 'chat' ? 'none' : 'chat'))}
-              >
-                <span>追问助教</span>
-              </button>
-            </>
+          {showFollowupButton && (
+            <button
+              type="button"
+              data-testid="ai-btn-chat"
+              className={`ai-tutor-btn${drawerOpen ? ' is-active' : ''}`}
+              onClick={openChatDrawer}
+            >
+              <span>追问助教</span>
+            </button>
           )}
         </div>
 
         <div className="ai-tutor-meta">
           {ready ? (
             <span>当前模型：{config.model}</span>
+          ) : drawerShowsInlineSettingsCta ? (
+            <span>未配置 API</span>
           ) : (
             <button
               type="button"
@@ -347,52 +612,7 @@ export function AiQuestionTutor({
         </div>
       </div>
 
-      {activeTab === 'explain' && (
-        <div className="ai-tutor-card" data-testid="ai-explain-card">
-          <div className="ai-tutor-card__head">
-            <span className="ai-tutor-card__title">AI 深度解析</span>
-            <div className="ai-tutor-card__tools">
-              {explainLoading ? (
-                <button type="button" className="ai-tutor-mini-btn" onClick={stopActiveRequest}>
-                  停止生成
-                </button>
-              ) : (
-                <button
-                  type="button"
-                  className="ai-tutor-mini-btn"
-                  onClick={() => void runExplain(true)}
-                >
-                  重新生成
-                </button>
-              )}
-            </div>
-          </div>
-
-          {explainError && (
-            <div className="api-banner api-banner--bad">
-              <div>{explainError}</div>
-              {!ready && (
-                <button
-                  type="button"
-                  className="ai-tutor-link"
-                  style={{ marginTop: 6 }}
-                  onClick={requestOpenApiSettings}
-                >
-                  立即打开 API 设置
-                </button>
-              )}
-            </div>
-          )}
-
-          {explainLoading && !explainText && (
-            <div className="api-field__hint">正在流式生成解析，请稍候...</div>
-          )}
-
-          {explainText && <SimpleMarkdown text={explainText} />}
-        </div>
-      )}
-
-      {activeTab === 'grade' && !objective && (
+      {gradeOpen && !objective && (
         <div className="ai-tutor-card" data-testid="ai-grade-card">
           <div className="ai-tutor-card__head">
             <span className="ai-tutor-card__title">主观题 AI 智能批改</span>
@@ -457,7 +677,7 @@ export function AiQuestionTutor({
                   {gradeResult.score} / 100
                 </span>
 
-                {onSuggestedMastery && (
+                {tutor.canApplyMastery && (
                   <button
                     type="button"
                     data-testid="ai-btn-apply-mastery"
@@ -510,98 +730,258 @@ export function AiQuestionTutor({
               {gradeResult.improvedAnswer && (
                 <div className="ai-grade-box">
                   <div className="ai-grade-box__label">高分示范改写</div>
-                  <SimpleMarkdown text={gradeResult.improvedAnswer} />
+                  <RichContent content={gradeResult.improvedAnswer} />
                 </div>
               )}
             </div>
           )}
-        </div>
-      )}
-
-      {activeTab === 'chat' && showFullToolbar && (
-        <div className="ai-tutor-card" data-testid="ai-chat-card">
-          <div className="ai-tutor-card__head">
-            <span className="ai-tutor-card__title">追问 AI 助教</span>
-            {chatHistory.length > 0 && (
-              <button
-                type="button"
-                className="ai-tutor-mini-btn"
-                onClick={() => {
-                  stopActiveRequest();
-                  setChatHistory([]);
-                  setChatError(null);
-                }}
-              >
-                清空对话
-              </button>
-            )}
-          </div>
-
-          {chatHistory.length > 0 ? (
-            <div className="ai-chat-list">
-              {chatHistory.map((msg, idx) => (
-                <div
-                  key={idx}
-                  className={`ai-chat-msg ${msg.role === 'user' ? 'ai-chat-msg--user' : 'ai-chat-msg--assistant'}`}
-                >
-                  {msg.role === 'user' ? (
-                    msg.content
-                  ) : msg.content ? (
-                    <SimpleMarkdown text={msg.content} />
-                  ) : (
-                    <span className="api-field__hint">正在思考中...</span>
-                  )}
-                </div>
-              ))}
-            </div>
-          ) : (
-            <div className="api-field__hint">
-              针对这道题有哪里没懂？例如：“为什么 B 选项不对？”“能举个生活中的例子解释吗？”
-            </div>
-          )}
-
-          {chatError && (
-            <div className="api-banner api-banner--bad">
-              <div>{chatError}</div>
-              {!ready && (
-                <button
-                  type="button"
-                  className="ai-tutor-link"
-                  style={{ marginTop: 6 }}
-                  onClick={requestOpenApiSettings}
-                >
-                  立即打开 API 设置
-                </button>
-              )}
-            </div>
-          )}
-
-          <form className="ai-chat-form" onSubmit={runFollowUp}>
-            <input
-              type="text"
-              data-testid="ai-chat-input"
-              className="api-input"
-              placeholder="输入你的追问..."
-              value={chatInput}
-              onChange={(e) => setChatInput(e.target.value)}
-            />
-            {chatLoading ? (
-              <button type="button" className="api-btn-inline" onClick={stopActiveRequest}>
-                停止
-              </button>
-            ) : (
-              <button
-                type="submit"
-                data-testid="ai-chat-send"
-                className="btn btn--primary"
-                disabled={!chatInput.trim()}
-              >
-                发送
-              </button>
-            )}
-          </form>
         </div>
       )}
     </section>
+  );
+}
+
+export function AiExplainDrawer({ tutor }: { tutor: AiQuestionTutorController }) {
+  const {
+    drawerOpen,
+    setDrawerOpen,
+    ready,
+    explainText,
+    explainLoading,
+    explainError,
+    analysisSaveFailed,
+    retryAnalysisSave,
+    isCachedHit,
+    chatHistory,
+    chatInput,
+    setChatInput,
+    chatLoading,
+    chatError,
+    chatInputRef,
+    stopActiveRequest,
+    runExplain,
+    sendFollowUp,
+    runFollowUp,
+    clearChat,
+  } = tutor;
+
+  if (!drawerOpen) {
+    return null;
+  }
+
+  return (
+    <aside
+      data-testid="ai-explain-drawer"
+      className="ai-explain-drawer"
+      aria-label="AI 深度解析与多轮追问抽屉"
+    >
+      <div className="ai-explain-drawer__head">
+        <div className="ai-explain-drawer__title-group">
+          <Icon name="sparkles" size={16} />
+          <h3 className="ai-explain-drawer__title">AI 深度解析</h3>
+          {isCachedHit && !explainLoading && (
+            <span className="pill pill--subtle">已命中缓存</span>
+          )}
+        </div>
+        <div className="ai-explain-drawer__actions">
+          {explainLoading ? (
+            <button type="button" className="ai-tutor-mini-btn" onClick={stopActiveRequest}>
+              停止生成
+            </button>
+          ) : (
+            <button
+              type="button"
+              className="ai-tutor-mini-btn"
+              onClick={() => void runExplain(true)}
+            >
+              重新生成
+            </button>
+          )}
+          <button
+            type="button"
+            className="ai-tutor-mini-btn"
+            aria-label="关闭 AI 解析抽屉"
+            onClick={() => {
+              stopActiveRequest();
+              setDrawerOpen(false);
+            }}
+          >
+            收起
+          </button>
+        </div>
+      </div>
+
+      <div className="ai-tutor-card ai-explain-card" data-testid="ai-explain-card">
+        {analysisSaveFailed && (
+          <div className="api-banner api-banner--bad" role="alert">
+            <div>AI 解析保存失败，当前结果仍可查看。</div>
+            <button type="button" className="ai-tutor-link" onClick={() => void retryAnalysisSave()}>
+              重试保存
+            </button>
+          </div>
+        )}
+        {explainError && (
+          <div className="api-banner api-banner--bad">
+            <div>{explainError}</div>
+            {!ready && (
+              <button
+                type="button"
+                data-testid="ai-open-settings-inline"
+                className="ai-tutor-link"
+                style={{ marginTop: 6 }}
+                onClick={requestOpenApiSettings}
+              >
+                立即打开 API 设置
+              </button>
+            )}
+          </div>
+        )}
+
+        {explainLoading && !explainText && (
+          <div className="api-field__hint">正在流式生成结构化解析，请稍候...</div>
+        )}
+
+        {explainText ? (
+          <RichContent content={explainText} />
+        ) : (
+          !explainLoading &&
+          !explainError && (
+            <div className="api-field__hint">
+              点击上方“重新生成”或直接在下方输入问题开始追问。
+            </div>
+          )
+        )}
+      </div>
+
+      <div className="ai-followup-pills" role="group" aria-label="快捷追问">
+        {QUICK_FOLLOWUPS.map((prompt, idx) => (
+          <button
+            key={prompt}
+            type="button"
+            data-testid={`ai-followup-pill-${idx}`}
+            className="ai-followup-pill"
+            disabled={chatLoading}
+            onClick={() => void sendFollowUp(prompt)}
+          >
+            {prompt}
+          </button>
+        ))}
+      </div>
+
+      <div className="ai-tutor-card ai-chat-card" data-testid="ai-chat-card">
+        <div className="ai-tutor-card__head">
+          <span className="ai-tutor-card__title">追问 AI 助教</span>
+          {chatHistory.length > 0 && (
+            <button type="button" className="ai-tutor-mini-btn" onClick={clearChat}>
+              清空对话
+            </button>
+          )}
+        </div>
+
+        {chatHistory.length > 0 ? (
+          <div className="ai-chat-list">
+            {chatHistory.map((msg, idx) => (
+              <div
+                key={idx}
+                className={`ai-chat-msg ${msg.role === 'user' ? 'ai-chat-msg--user' : 'ai-chat-msg--assistant'}`}
+              >
+                {msg.role === 'user' ? (
+                  msg.content
+                ) : msg.content ? (
+                  <RichContent content={msg.content} />
+                ) : (
+                  <span className="api-field__hint">正在思考中...</span>
+                )}
+              </div>
+            ))}
+          </div>
+        ) : (
+          <div className="api-field__hint">
+            针对这道题有哪里没懂？可直接点击上方快捷追问胶囊或输入自定义问题。
+          </div>
+        )}
+
+        {chatError && (
+          <div className="api-banner api-banner--bad">
+            <div>{chatError}</div>
+            {!ready && !explainError && (
+              <button
+                type="button"
+                data-testid="ai-open-settings-inline"
+                className="ai-tutor-link"
+                style={{ marginTop: 6 }}
+                onClick={requestOpenApiSettings}
+              >
+                立即打开 API 设置
+              </button>
+            )}
+          </div>
+        )}
+
+        <form className="ai-chat-form" onSubmit={runFollowUp}>
+          <input
+            ref={chatInputRef}
+            type="text"
+            data-testid="ai-chat-input"
+            className="api-input"
+            placeholder="输入你的追问..."
+            value={chatInput}
+            onChange={(e) => setChatInput(e.target.value)}
+          />
+          {chatLoading ? (
+            <button type="button" className="api-btn-inline" onClick={stopActiveRequest}>
+              停止
+            </button>
+          ) : (
+            <button
+              type="submit"
+              data-testid="ai-chat-send"
+              className="btn btn--primary"
+              disabled={!chatInput.trim()}
+            >
+              发送
+            </button>
+          )}
+        </form>
+      </div>
+    </aside>
+  );
+}
+
+export function AiQuestionTutor(props: AiQuestionTutorProps) {
+  const tutor = useAiQuestionTutor(props);
+  const { autoExplainOnWrong = false, onToggleAutoExplain } = props;
+
+  return (
+    <div className="ai-tutor-standalone">
+      <div className="ai-workspace-controls">
+        {onToggleAutoExplain ? (
+          <label className="workspace-auto-toggle">
+            <input
+              type="checkbox"
+              data-testid="ai-auto-explain-toggle"
+              checked={autoExplainOnWrong}
+              onChange={(e) => onToggleAutoExplain(e.target.checked)}
+            />
+            <span>答错自动触发 AI 解析</span>
+          </label>
+        ) : (
+          <span />
+        )}
+
+        <button
+          type="button"
+          data-testid="ai-btn-explain"
+          className={`ai-tutor-btn ai-tutor-btn--accent${tutor.drawerOpen ? ' is-active' : ''}`}
+          onClick={() => void tutor.runExplain(false)}
+        >
+          <Icon name="sparkles" size={14} />
+          <span>✨ AI 深度解析</span>
+        </button>
+      </div>
+
+      <AiTutorInlinePanel tutor={tutor} />
+      <AiExplainDrawer tutor={tutor} />
+    </div>
   );
 }
