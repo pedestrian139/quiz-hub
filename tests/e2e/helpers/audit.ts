@@ -108,6 +108,38 @@ export async function assertNoOverlappingControls(
       '[tabindex]:not([tabindex="-1"])',
     ].join(', ');
 
+    const getVisibleClippedRect = (el: Element) => {
+      const r = el.getBoundingClientRect();
+      let left = r.left;
+      let top = r.top;
+      let right = r.right;
+      let bottom = r.bottom;
+      if (right - left < 2 || bottom - top < 2) return null;
+
+      let childPos = window.getComputedStyle(el).position;
+      let cur = el.parentElement;
+      while (cur && cur !== document.documentElement) {
+        if (childPos === 'fixed') break;
+        const cst = window.getComputedStyle(cur);
+        const ox = cst.overflowX;
+        const oy = cst.overflowY;
+        if (ox === 'auto' || ox === 'scroll' || ox === 'hidden' || ox === 'clip') {
+          const cr = cur.getBoundingClientRect();
+          left = Math.max(left, cr.left);
+          right = Math.min(right, cr.right);
+        }
+        if (oy === 'auto' || oy === 'scroll' || oy === 'hidden' || oy === 'clip') {
+          const cr = cur.getBoundingClientRect();
+          top = Math.max(top, cr.top);
+          bottom = Math.min(bottom, cr.bottom);
+        }
+        if (right - left < 2 || bottom - top < 2) return null;
+        childPos = cst.position;
+        cur = cur.parentElement;
+      }
+      return { left, top, right, bottom };
+    };
+
     const isElementVisible = (el: Element): boolean => {
       if (el.closest('[hidden], [aria-hidden="true"]')) return false;
       let cur: Element | null = el;
@@ -119,9 +151,7 @@ export async function assertNoOverlappingControls(
         cur = cur.parentElement;
       }
       if (el.getClientRects().length === 0) return false;
-      const rect = el.getBoundingClientRect();
-      if (rect.width < 2 || rect.height < 2) return false;
-      return true;
+      return getVisibleClippedRect(el) !== null;
     };
 
     const modals = Array.from(
@@ -136,30 +166,28 @@ export async function assertNoOverlappingControls(
       return true;
     });
 
-    const items = rawCandidates.map((el) => {
-      const rect = el.getBoundingClientRect();
-      const tag = el.tagName.toLowerCase();
-      const testId = el.getAttribute('data-testid');
-      const label = (
-        el.getAttribute('aria-label') ||
-        (el as HTMLElement).innerText ||
-        el.textContent ||
-        ''
-      )
-        .replace(/\s+/g, ' ')
-        .trim()
-        .slice(0, 32);
-      return {
-        el,
-        rect: {
-          left: rect.left,
-          top: rect.top,
-          right: rect.right,
-          bottom: rect.bottom,
-        },
-        desc: `${tag}${testId ? `[data-testid="${testId}"]` : ''}(${label})`,
-      };
-    });
+    const items = rawCandidates
+      .map((el) => {
+        const rect = getVisibleClippedRect(el);
+        if (!rect) return null;
+        const tag = el.tagName.toLowerCase();
+        const testId = el.getAttribute('data-testid');
+        const label = (
+          el.getAttribute('aria-label') ||
+          (el as HTMLElement).innerText ||
+          el.textContent ||
+          ''
+        )
+          .replace(/\s+/g, ' ')
+          .trim()
+          .slice(0, 32);
+        return {
+          el,
+          rect,
+          desc: `${tag}${testId ? `[data-testid="${testId}"]` : ''}(${label})`,
+        };
+      })
+      .filter((item): item is NonNullable<typeof item> => item !== null);
 
     const found: string[] = [];
     for (let i = 0; i < items.length; i++) {

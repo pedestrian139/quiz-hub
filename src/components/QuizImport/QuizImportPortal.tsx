@@ -248,7 +248,7 @@ function QuizImportPortalInner({
               )}
             </div>
 
-            <div className="qi-modal__body">
+            <div className={`qi-modal__body${tab === 'import' ? ' qi-modal__body--workbench' : ''}`}>
               {toast && (
                 <div
                   role="status"
@@ -298,7 +298,7 @@ function QuizImportPortalInner({
               {tab === 'banks' && (
                 <div className="qi-draft-list">
                   <div className="qi-toolbar">
-                    <span style={{ fontSize: '13.5px', color: 'var(--sub)' }}>
+                    <span style={{ fontSize: '13.5px', color: 'var(--apple-text-tertiary)' }}>
                       每个题库的答题进度、错题本、收藏夹与掌握度均按题库独立隔离存储
                     </span>
                     <div className="qi-btn-group">

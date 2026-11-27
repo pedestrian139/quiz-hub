@@ -70,6 +70,7 @@ import {
   washPrefExplain,
   washPrefTags,
   washTargetBankName,
+  workbenchSidebarToggle,
   workspaceMobileBar,
 } from './helpers/selectors.ts';
 import {
@@ -278,7 +279,12 @@ test.describe('Tier 4 Phase 2: Real-World Application Journeys (T4-P2-001..T4-P2
       makeMdUploadFile('lecture-notes.md', SMART_WASH_CHUNKS.join('\n\n')),
     );
 
-    // Step 2: Switch to paste tab, paste messy multi-chunk lecture notes, toggle preferences & cancel slow wash
+    // Step 2: Re-open collapsed sidebar, switch to paste tab, paste messy multi-chunk lecture notes, toggle preferences & cancel slow wash
+    const sidebarToggle = workbenchSidebarToggle(page);
+    await expect(sidebarToggle).toBeVisible();
+    if ((await sidebarToggle.getAttribute('aria-expanded')) !== 'true') {
+      await sidebarToggle.click();
+    }
     await importTab(page, 'paste').click();
     await importPasteTextarea(page).fill(SMART_WASH_CHUNKS.join('\n\n'));
     if (await washPrefExplain(page).isVisible().catch(() => false)) {

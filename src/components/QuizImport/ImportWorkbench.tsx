@@ -96,6 +96,20 @@ interface PendingJsonIntercept {
   trigger: 'paste' | 'drop' | 'wash';
 }
 
+interface ReviewSnapshot {
+  sourceText: string;
+  sourceFileName: string;
+  autoFillExplain: boolean;
+  autoTag: boolean;
+}
+
+function isDraftTypeAllowed(type: QuestionType, allowed: WashQuestionType[]): boolean {
+  if (type === 'analysis') {
+    return allowed.includes('short');
+  }
+  return allowed.includes(type);
+}
+
 const PAGE_STEP = 50;
 const MAX_OPTIONS = 8;
 
@@ -215,6 +229,39 @@ export function ImportWorkbench({
   const [formulaPreviewIds, setFormulaPreviewIds] = useState<Record<string, boolean>>({});
   const [visibleCount, setVisibleCount] = useState(PAGE_STEP);
   const [committing, setCommitting] = useState(false);
+  const [sidebarOpen, setSidebarOpen] = useState(false);
+  const [reviewSnapshot, setReviewSnapshot] = useState<ReviewSnapshot | null>(null);
+  const [isMobileViewport, setIsMobileViewport] = useState<boolean>(() => {
+    if (typeof window === 'undefined' || typeof window.matchMedia !== 'function') {
+      return false;
+    }
+    return window.matchMedia('(max-width: 767px)').matches;
+  });
+
+  const isReviewMode = drafts.length > 0 || failedChunks.length > 0;
+  const wasReviewModeRef = useRef(false);
+
+  useEffect(() => {
+    if (isReviewMode && !wasReviewModeRef.current) {
+      setSidebarOpen(false);
+    }
+    wasReviewModeRef.current = isReviewMode;
+  }, [isReviewMode]);
+
+  useEffect(() => {
+    if (typeof window === 'undefined' || typeof window.matchMedia !== 'function') {
+      return;
+    }
+    const mql = window.matchMedia('(max-width: 767px)');
+    const update = () => setIsMobileViewport(mql.matches);
+    update();
+    if (typeof mql.addEventListener === 'function') {
+      mql.addEventListener('change', update);
+      return () => mql.removeEventListener('change', update);
+    }
+    mql.addListener(update);
+    return () => mql.removeListener(update);
+  }, []);
 
   const toggleFormulaPreview = (tempId: string) => {
     setFormulaPreviewIds((prev) => ({ ...prev, [tempId]: !prev[tempId] }));
@@ -244,7 +291,10 @@ export function ImportWorkbench({
 
   const applyParseResult = (
     res: ImportParseResult,
-    options?: { suppressZeroDraftToast?: boolean },
+    options?: {
+      suppressZeroDraftToast?: boolean;
+      sourceOverride?: { sourceText: string; sourceFileName?: string };
+    },
   ) => {
     pendingPasteDetectRef.current = false;
     setPendingJsonIntercept(null);
@@ -264,6 +314,24 @@ export function ImportWorkbench({
     setFailedChunks([]);
     setWashProgress(null);
 
+    if (res.drafts.length > 0) {
+      setSidebarOpen(false);
+      const active = options?.sourceOverride
+        ? {
+            sourceText: options.sourceOverride.sourceText,
+            sourceFile: options.sourceOverride.sourceFileName,
+          }
+        : getActiveWashSource();
+      setReviewSnapshot({
+        sourceText: normalizeLineEndings(active.sourceText),
+        sourceFileName: active.sourceFile ?? '',
+        autoFillExplain,
+        autoTag,
+      });
+    } else {
+      setReviewSnapshot(null);
+    }
+
     if (res.fatalError) {
       notify(res.fatalError, 'error');
     } else if (res.drafts.length > 0) {
@@ -274,9 +342,6 @@ export function ImportWorkbench({
   };
 
   const handleSelectedFile = async (file: File, targetArea: 'file' | 'paste' = 'file') => {
-    pendingPasteDetectRef.current = false;
-    setPendingJsonIntercept(null);
-    setBypassedJsonText(null);
     const fileName = file.name || '未命名文件';
     const lower = fileName.toLowerCase();
     const isTextLike =
@@ -285,9 +350,28 @@ export function ImportWorkbench({
 
     setParsing(true);
     try {
+      let decoded = '';
       if (isTextLike || isJson) {
         const buffer = await file.arrayBuffer();
-        const decoded = decodeTextBuffer(buffer);
+        decoded = decodeTextBuffer(buffer);
+      }
+
+      const res = await parseImportFile(file);
+      if (isReviewMode && (res.fatalError || (!isTextLike && res.drafts.length === 0))) {
+        notify(
+          res.fatalError ||
+            res.notes[0] ||
+            `未能从《${fileName}》解析出有效题目，当前预览修改已保留`,
+          'error',
+        );
+        return;
+      }
+
+      pendingPasteDetectRef.current = false;
+      setPendingJsonIntercept(null);
+      setBypassedJsonText(null);
+
+      if (isTextLike || isJson) {
         setWashSourceText(decoded);
         setWashSourceFileName(fileName);
         if (targetArea === 'paste') {
@@ -298,16 +382,30 @@ export function ImportWorkbench({
         setWashSourceFileName('');
       }
 
-      const res = await parseImportFile(file);
-      if (isTextLike && res.drafts.length === 0 && !res.fatalError) {
+      if (isTextLike && isReviewMode && !res.fatalError) {
+        notify(
+          `已切换源文件《${fileName}》，当前预览修改已保留；请点击「按新配置重新洗题」确认`,
+          'info',
+        );
+      } else if (isTextLike && res.drafts.length === 0 && !res.fatalError) {
         setParseResult(res);
         setBankName((prev) => prev.trim() || res.suggestedName);
         setBankDesc(res.suggestedDescription ?? '');
         setDrafts([]);
         setFailedChunks([]);
+        setReviewSnapshot(null);
         notify(`已加载文件《${fileName}》，点击「开始 AI 洗题」即可智能识别题目`, 'info');
       } else {
-        applyParseResult(res);
+        const sourceOverride =
+          isTextLike || isJson
+            ? inputMode === 'paste' || targetArea === 'paste'
+              ? { sourceText: decoded, sourceFileName: '' }
+              : { sourceText: decoded, sourceFileName: decoded.trim() ? fileName : '' }
+            : {
+                sourceText: inputMode === 'paste' || pasteText.trim() ? pasteText : '',
+                sourceFileName: '',
+              };
+        applyParseResult(res, { sourceOverride });
       }
     } catch (err) {
       notify(
@@ -542,7 +640,14 @@ export function ImportWorkbench({
     abortRef.current = controller;
 
     setWashConfigError(null);
+    setReviewSnapshot({
+      sourceText: normalizedSource,
+      sourceFileName: sourceFile ?? '',
+      autoFillExplain,
+      autoTag,
+    });
     setWashing(true);
+    setSidebarOpen(false);
     setDrafts([]);
     setParseResult(null);
     setFailedChunks([]);
@@ -703,6 +808,16 @@ export function ImportWorkbench({
       const fallbackName = washSourceFileName
         ? suggestBankNameFromFile(washSourceFileName, 'AI 智能洗题题库')
         : 'AI 智能洗题题库';
+      setReviewSnapshot((prev) => {
+        if (prev) return prev;
+        const active = getActiveWashSource();
+        return {
+          sourceText: normalizeLineEndings(active.sourceText),
+          sourceFileName: active.sourceFile ?? '',
+          autoFillExplain,
+          autoTag,
+        };
+      });
       setBankName((prev) => (prev.trim() ? prev : fallbackName));
       setParseResult((prev) => ({
         format: prev?.format ?? 'txt',
@@ -741,13 +856,18 @@ export function ImportWorkbench({
     }
   };
 
+  const typeFilteredDrafts = useMemo(
+    () => drafts.filter((d) => isDraftTypeAllowed(d.type, selectedWashTypes)),
+    [drafts, selectedWashTypes],
+  );
+
   const summary = useMemo(() => {
     let validIncluded = 0;
     let errorIncluded = 0;
     let warningCount = 0;
     let totalErrors = 0;
 
-    for (const d of drafts) {
+    for (const d of typeFilteredDrafts) {
       const hasErr = d.issues.some((i) => i.severity === 'error');
       const hasWarn = d.issues.some((i) => i.severity === 'warning');
       if (hasErr) totalErrors += 1;
@@ -759,13 +879,13 @@ export function ImportWorkbench({
     }
 
     return {
-      total: drafts.length,
+      total: typeFilteredDrafts.length,
       validIncluded,
       errorIncluded,
       warningCount,
       totalErrors,
     };
-  }, [drafts]);
+  }, [typeFilteredDrafts]);
 
   const updateDraft = (tempId: string, updater: (prev: DraftQuestion) => DraftQuestion) => {
     setDrafts((prev) => {
@@ -784,7 +904,10 @@ export function ImportWorkbench({
   const handleExcludeAllErrors = () => {
     setDrafts((prev) =>
       prev.map((d) =>
-        d.issues.some((i) => i.severity === 'error') ? { ...d, included: false } : d,
+        isDraftTypeAllowed(d.type, selectedWashTypes) &&
+        d.issues.some((i) => i.severity === 'error')
+          ? { ...d, included: false }
+          : d,
       ),
     );
     notify('已自动取消勾选全部异常题目', 'info');
@@ -800,11 +923,11 @@ export function ImportWorkbench({
         await onCommit({
           mode: 'existing',
           targetBankId: effectiveTargetBank.id,
-          drafts,
+          drafts: typeFilteredDrafts,
           sourceFormat: parseResult?.format,
         });
       } else {
-        const finalized = finalizeDraftsToBank(drafts, {
+        const finalized = finalizeDraftsToBank(typeFilteredDrafts, {
           name: bankName,
           description: bankDesc,
           sourceFormat: parseResult?.format,
@@ -826,6 +949,8 @@ export function ImportWorkbench({
       pendingPasteDetectRef.current = false;
       setWashProgress(null);
       setFailedChunks([]);
+      setReviewSnapshot(null);
+      setSidebarOpen(false);
       setBankName('');
       setBankDesc('');
       bankNameDirtyRef.current = false;
@@ -842,12 +967,26 @@ export function ImportWorkbench({
   const filteredDraftEntries = useMemo(() => {
     return drafts
       .map((draft, origIndex) => ({ draft, origIndex }))
-      .filter(({ draft }) => (filterIssuesOnly ? draft.issues.length > 0 : true));
-  }, [drafts, filterIssuesOnly]);
+      .filter(
+        ({ draft }) =>
+          isDraftTypeAllowed(draft.type, selectedWashTypes) &&
+          (filterIssuesOnly ? draft.issues.length > 0 : true),
+      );
+  }, [drafts, selectedWashTypes, filterIssuesOnly]);
 
   const visibleEntries = filteredDraftEntries.slice(0, visibleCount);
-  const showPreviewPane =
-    Boolean(parseResult) || drafts.length > 0 || washing || failedChunks.length > 0;
+  const activeSource = getActiveWashSource();
+  const normalizedActiveSource = normalizeLineEndings(activeSource.sourceText);
+  const activeSourceFile = activeSource.sourceFile ?? '';
+  const isRewashDirty =
+    isReviewMode &&
+    reviewSnapshot !== null &&
+    Boolean(normalizedActiveSource.trim()) &&
+    (autoFillExplain !== reviewSnapshot.autoFillExplain ||
+      autoTag !== reviewSnapshot.autoTag ||
+      normalizedActiveSource !== reviewSnapshot.sourceText ||
+      activeSourceFile !== reviewSnapshot.sourceFileName);
+
   const progressPct =
     washProgress && washProgress.totalChunks > 0
       ? Math.min(
@@ -857,10 +996,45 @@ export function ImportWorkbench({
       : 0;
 
   return (
-    <div className="qi-workbench">
-      {/* Left Pane: Source Input, Target Bank & AI Wash Config */}
-      <div className="qi-workbench__input">
-        <div className="qi-card">
+    <div
+      className={`qi-workbench ${isReviewMode ? 'qi-workbench--review' : 'qi-workbench--initial'}`}
+    >
+      {isReviewMode && isMobileViewport && sidebarOpen && (
+        <div
+          className="qi-sidebar-backdrop"
+          aria-hidden="true"
+          onClick={() => setSidebarOpen(false)}
+        />
+      )}
+
+      {/* Left Pane / Sidebar: Source Input, Target Bank & AI Wash Config */}
+      <div
+        data-testid="workbench-sidebar"
+        data-open={isReviewMode ? (sidebarOpen ? 'true' : 'false') : 'true'}
+        aria-hidden={isReviewMode && !sidebarOpen ? true : undefined}
+        className={`qi-workbench__input${
+          isReviewMode
+            ? ` qi-workbench__sidebar${sidebarOpen ? ' is-open' : ' is-collapsed'}`
+            : ' qi-workbench__input--initial'
+        }`}
+      >
+        {isReviewMode && (
+          <div className="qi-sidebar-header">
+            <span className="qi-sidebar-header__title">导入与洗题配置</span>
+            <button
+              type="button"
+              data-testid="workbench-sidebar-close"
+              className="qi-sidebar-close-btn"
+              aria-label="收起导入配置"
+              title="收起导入配置"
+              onClick={() => setSidebarOpen(false)}
+            >
+              <Icon name="x" size={16} />
+            </button>
+          </div>
+        )}
+
+        <div className="qi-card qi-config-card">
           <div className="qi-toolbar">
             <div className="qi-btn-group">
               <button
@@ -893,7 +1067,7 @@ export function ImportWorkbench({
               onDrop={handleDrop}
             >
               <strong>支持 Excel (.xlsx/.xls) · CSV/TSV · Word (.docx) · TXT/Markdown · JSON</strong>
-              <span style={{ fontSize: '13px', color: 'var(--sub)' }}>
+              <span style={{ fontSize: '13px', color: 'var(--apple-text-tertiary)' }}>
                 拖拽或选择文件上传；结构化题库立即预览，杂乱文本 / Markdown 可直接发起 AI 智能洗题
               </span>
               {washSourceFileName && (
@@ -1178,12 +1352,25 @@ export function ImportWorkbench({
               <button
                 type="button"
                 data-testid="ai-wash-btn"
-                className="qi-btn qi-btn--primary qi-wash-cta"
+                data-dirty={isRewashDirty ? 'true' : 'false'}
+                className={`qi-btn qi-wash-cta${
+                  !isReviewMode || isRewashDirty ? ' qi-btn--primary' : ''
+                }${isRewashDirty ? ' qi-wash-cta--dirty' : ''}`}
                 disabled={washing || parsing || selectedWashTypes.length === 0}
                 onClick={() => void handleAiWash()}
               >
                 {washing ? (
                   'AI 正在分段洗题…'
+                ) : isRewashDirty ? (
+                  <>
+                    <Icon name="refreshCw" size={15} />
+                    <span>按新配置重新洗题</span>
+                  </>
+                ) : isReviewMode ? (
+                  <>
+                    <Icon name="sparkles" size={15} />
+                    <span>重新 AI 洗题</span>
+                  </>
                 ) : (
                   <>
                     <Icon name="sparkles" size={15} />
@@ -1191,7 +1378,7 @@ export function ImportWorkbench({
                   </>
                 )}
               </button>
-              {washing && (
+              {!isReviewMode && washing && (
                 <button
                   type="button"
                   data-testid="ai-wash-cancel"
@@ -1202,13 +1389,26 @@ export function ImportWorkbench({
                 </button>
               )}
             </div>
+
+            {isRewashDirty && !washing && (
+              <div
+                data-testid="ai-rewash-dirty-hint"
+                className="qi-rewash-hint"
+                role="status"
+              >
+                AI 洗题偏好或源内容已更改，右侧人工校对内容已保留；点击上方「按新配置重新洗题」后才会发起 AI 请求。
+              </div>
+            )}
           </div>
         </div>
-      </div>
 
-      {/* Right Pane: Washing Progress, Failed Chunk Retry, Draft Cards & Sticky Confirm */}
-      <div className="qi-workbench__preview">
-        {washing && washProgress && (
+        {!isReviewMode && parseResult?.fatalError && (
+          <div className="qi-toast qi-toast--error" role="alert">
+            {parseResult.fatalError}
+          </div>
+        )}
+
+        {!isReviewMode && washing && washProgress && (
           <div data-testid="ai-wash-progress" className="qi-card qi-wash-progress">
             <div className="qi-toolbar">
               <strong style={{ fontSize: '14px' }}>{washProgress.statusText}</strong>
@@ -1217,278 +1417,338 @@ export function ImportWorkbench({
             <div className="qi-progress-track" aria-hidden="true">
               <div className="qi-progress-fill" style={{ width: `${progressPct}%` }} />
             </div>
-            <span style={{ fontSize: '12.5px', color: 'var(--sub)' }}>
-              长文本已自动分段处理，已识别 {washProgress.draftsSoFar.length} 道题目将实时显示在下方预览区
+            <span style={{ fontSize: '12.5px', color: 'var(--apple-text-tertiary)' }}>
+              长文本已自动分段处理，已识别 {washProgress.draftsSoFar.length} 道题目将实时显示在预览区
             </span>
           </div>
         )}
+      </div>
 
-        {failedChunks.length > 0 && (
-          <div className="qi-card qi-failed-chunks" role="alert">
-            <strong style={{ fontSize: '14px', color: 'var(--bad-text)' }}>
-              部分分段洗题失败（{failedChunks.length} 批），可单独重试恢复：
-            </strong>
-            <div className="qi-draft-list">
-              {failedChunks.map((chunk) => (
-                <div key={chunk.chunkIndex} className="qi-failed-chunk-item">
-                  <div className="qi-failed-chunk-item__info">
-                    <strong>
-                      第 {chunk.chunkIndex + 1}/{chunk.totalChunks} 批失败
-                    </strong>
-                    <span>{chunk.errorMessage}</span>
-                  </div>
-                  <button
-                    type="button"
-                    data-testid={`ai-wash-retry-chunk-${chunk.chunkIndex}`}
-                    className="qi-btn qi-btn--sm qi-btn--warn"
-                    disabled={
-                      washing ||
-                      retryingChunkIndex !== null ||
-                      selectedWashTypes.length === 0
-                    }
-                    onClick={() => void handleRetryChunk(chunk)}
-                  >
-                    {retryingChunkIndex === chunk.chunkIndex
-                      ? '重试中…'
-                      : `重试第 ${chunk.chunkIndex + 1} 批`}
-                  </button>
-                </div>
-              ))}
-            </div>
-          </div>
-        )}
-
-        {!showPreviewPane && (
-          <div className="qi-card qi-preview-placeholder">
-            <strong style={{ fontSize: '15px' }}>清洗预览与校对台</strong>
-            <span style={{ fontSize: '13.5px', color: 'var(--sub)', lineHeight: 1.6 }}>
-              在左侧上传题库文件或粘贴任意格式试题文本，点击「开始 AI 洗题」或「本地规则解析预览」，洗出的题目将渲染为可编辑预览卡片（无答案题干自动推导并标注“AI 推断答案”）。
-            </span>
-          </div>
-        )}
-
-        {showPreviewPane && (
-          <div data-testid="import-preview" className="qi-card">
-            <div className="qi-toolbar">
-              <div>
-                <h3 style={{ margin: 0, fontSize: '16px' }}>导入前可视化预览与校对</h3>
-                <span style={{ fontSize: '12.5px', color: 'var(--sub)' }}>
-                  支持直接在卡片上修改题干、增删选项、切换正确答案、编辑标签与删题
-                </span>
-              </div>
+      {/* Right Pane (Review Mode Only): Locked-Height Full-Width Preview + Sticky Footer */}
+      {isReviewMode && (
+        <div
+          className="qi-workbench__preview"
+          aria-hidden={isMobileViewport && sidebarOpen ? true : undefined}
+        >
+          <div className="qi-preview-header">
+            <div className="qi-preview-header__left">
               <button
                 type="button"
-                data-testid="btn-cancel-import"
-                className="qi-btn qi-btn--sm"
-                disabled={washing}
-                onClick={() => {
-                  setParseResult(null);
-                  setDrafts([]);
-                  setFailedChunks([]);
-                  setWashProgress(null);
-                }}
+                data-testid="workbench-sidebar-toggle"
+                className={`qi-sidebar-toggle${sidebarOpen ? ' is-active' : ''}`}
+                aria-label={sidebarOpen ? '收起导入配置' : '展开导入配置'}
+                aria-expanded={sidebarOpen}
+                title={sidebarOpen ? '收起导入配置' : '展开导入配置'}
+                onClick={() => setSidebarOpen((v) => !v)}
               >
-                放弃本次预览
+                <Icon name="panelLeft" size={18} />
               </button>
+              <div className="qi-preview-header__titles">
+                <h3 className="qi-preview-header__title">导入预览与校对台</h3>
+                <span className="qi-preview-header__sub">
+                  共 {summary.total} 题 · 可入库 {summary.validIncluded} 题
+                </span>
+              </div>
             </div>
+            <button
+              type="button"
+              data-testid="btn-cancel-import"
+              className="qi-btn qi-btn--sm"
+              disabled={washing}
+              onClick={() => {
+                setParseResult(null);
+                setDrafts([]);
+                setFailedChunks([]);
+                setWashProgress(null);
+                setReviewSnapshot(null);
+                setSidebarOpen(false);
+              }}
+            >
+              放弃本次预览
+            </button>
+          </div>
 
-            {parseResult?.fatalError && (
-              <div className="qi-toast qi-toast--error">{parseResult.fatalError}</div>
-            )}
-
-            {parseResult && parseResult.notes.length > 0 && (
-              <div className="qi-pill-row">
-                {parseResult.notes.map((n, i) => (
-                  <span key={i} className="qi-pill qi-pill--brand">
-                    {n}
-                  </span>
-                ))}
+          <div className="qi-preview-scroll">
+            {washing && washProgress && (
+              <div data-testid="ai-wash-progress" className="qi-card qi-wash-progress">
+                <div className="qi-toolbar">
+                  <strong style={{ fontSize: '14px' }}>{washProgress.statusText}</strong>
+                  <div className="qi-btn-group">
+                    <span className="qi-pill qi-pill--brand">{progressPct}%</span>
+                    <button
+                      type="button"
+                      data-testid="ai-wash-cancel"
+                      className="qi-btn qi-btn--sm qi-btn--danger"
+                      onClick={handleCancelWash}
+                    >
+                      取消洗题
+                    </button>
+                  </div>
+                </div>
+                <div className="qi-progress-track" aria-hidden="true">
+                  <div className="qi-progress-fill" style={{ width: `${progressPct}%` }} />
+                </div>
+                <span style={{ fontSize: '12.5px', color: 'var(--apple-text-tertiary)' }}>
+                  长文本已自动分段处理，已识别 {washProgress.draftsSoFar.length} 道题目将实时显示在下方预览区
+                </span>
               </div>
             )}
 
-            {drafts.length > 0 && (
-              <>
-                {effectiveTargetBankMode === 'new' ? (
-                  <div className="qi-grid-two">
-                    <label className="qi-field">
-                      <span className="qi-field__label">新题库名称</span>
-                      <input
-                        type="text"
-                        data-testid="import-bank-name"
-                        className="qi-input"
-                        value={bankName}
-                        onChange={(e) => {
-                          const nextVal = e.target.value;
-                          bankNameDirtyRef.current = nextVal.trim().length > 0;
-                          setBankName(nextVal);
-                        }}
-                        onKeyDown={stopShortcutBubble}
-                      />
-                    </label>
-                    <label className="qi-field">
-                      <span className="qi-field__label">题库简介（选填）</span>
-                      <input
-                        type="text"
-                        data-testid="import-bank-desc"
-                        className="qi-input"
-                        placeholder="例如：期末重点题库 / 课后复习整理"
-                        value={bankDesc}
-                        onChange={(e) => setBankDesc(e.target.value)}
-                        onKeyDown={stopShortcutBubble}
-                      />
-                    </label>
-                  </div>
-                ) : (
-                  <div className="qi-toast">
-                    将追加 {summary.validIncluded} 道有效题目到已有题库：
-                    <strong>《{effectiveTargetBank?.name}》</strong>
-                    （当前 {effectiveTargetBank?.data.questions.length ?? 0} 题）
-                  </div>
-                )}
-
-                <div data-testid="preview-summary" className="qi-toolbar">
-                  <div className="qi-pill-row">
-                    <span className="qi-pill">共识别 {summary.total} 题</span>
-                    <span className="qi-pill qi-pill--ok">
-                      可入库 {summary.validIncluded} 题
-                    </span>
-                    {summary.warningCount > 0 && (
-                      <span className="qi-pill qi-pill--warn">
-                        告警 {summary.warningCount} 题
-                      </span>
-                    )}
-                    {summary.totalErrors > 0 && (
-                      <span className="qi-pill qi-pill--bad">
-                        异常 {summary.totalErrors} 题（未剔除勾选 {summary.errorIncluded} 题）
-                      </span>
-                    )}
-                  </div>
-
-                  <div className="qi-btn-group">
-                    <button
-                      type="button"
-                      data-testid="preview-filter-issues"
-                      className={`qi-btn qi-btn--sm${filterIssuesOnly ? ' qi-btn--primary' : ''}`}
-                      onClick={() => setFilterIssuesOnly((v) => !v)}
-                    >
-                      {filterIssuesOnly ? '显示全部题目' : '仅看异常与告警'}
-                    </button>
-                    {summary.errorIncluded > 0 && (
+            {failedChunks.length > 0 && (
+              <div className="qi-card qi-failed-chunks" role="alert">
+                <strong style={{ fontSize: '14px', color: 'var(--apple-bad-text)' }}>
+                  部分分段洗题失败（{failedChunks.length} 批），可单独重试恢复：
+                </strong>
+                <div className="qi-draft-list">
+                  {failedChunks.map((chunk) => (
+                    <div key={chunk.chunkIndex} className="qi-failed-chunk-item">
+                      <div className="qi-failed-chunk-item__info">
+                        <strong>
+                          第 {chunk.chunkIndex + 1}/{chunk.totalChunks} 批失败
+                        </strong>
+                        <span>{chunk.errorMessage}</span>
+                      </div>
                       <button
                         type="button"
-                        data-testid="btn-exclude-errors"
-                        className="qi-btn qi-btn--sm qi-btn--danger"
-                        onClick={handleExcludeAllErrors}
+                        data-testid={`ai-wash-retry-chunk-${chunk.chunkIndex}`}
+                        className="qi-btn qi-btn--sm qi-btn--warn"
+                        disabled={
+                          washing ||
+                          retryingChunkIndex !== null ||
+                          selectedWashTypes.length === 0
+                        }
+                        onClick={() => void handleRetryChunk(chunk)}
                       >
-                        一键剔除异常项 ({summary.errorIncluded})
+                        {retryingChunkIndex === chunk.chunkIndex
+                          ? '重试中…'
+                          : `重试第 ${chunk.chunkIndex + 1} 批`}
                       </button>
-                    )}
-                  </div>
+                    </div>
+                  ))}
                 </div>
+              </div>
+            )}
 
-                <div data-testid="draft-list-container" className="qi-draft-list">
-                  {visibleEntries.map(({ draft, origIndex }) => {
-                    const hasErr = draft.issues.some((i) => i.severity === 'error');
-                    const hasWarn = draft.issues.some((i) => i.severity === 'warning');
-                    const severity = hasErr ? 'error' : hasWarn ? 'warning' : 'ok';
-                    const isEditing = editingId === draft.tempId;
-                    const isFormulaPreviewOpen = Boolean(formulaPreviewIds[draft.tempId]);
+            <div data-testid="import-preview" className="qi-card qi-preview-card">
+              {parseResult?.fatalError && (
+                <div className="qi-toast qi-toast--error">{parseResult.fatalError}</div>
+              )}
 
-                    return (
-                      <div
-                        key={draft.tempId}
-                        data-testid={`preview-draft-${origIndex}`}
-                        data-severity={severity}
-                        className={`qi-draft-card${draft.included ? '' : ' is-excluded'}`}
+              {parseResult && parseResult.notes.length > 0 && (
+                <div className="qi-pill-row">
+                  {parseResult.notes.map((n, i) => (
+                    <span key={i} className="qi-pill qi-pill--brand">
+                      {n}
+                    </span>
+                  ))}
+                </div>
+              )}
+
+              {drafts.length > 0 && (
+                <>
+                  {effectiveTargetBankMode === 'new' ? (
+                    <div className="qi-grid-two">
+                      <label className="qi-field">
+                        <span className="qi-field__label">新题库名称</span>
+                        <input
+                          type="text"
+                          data-testid="import-bank-name"
+                          className="qi-input"
+                          value={bankName}
+                          onChange={(e) => {
+                            const nextVal = e.target.value;
+                            bankNameDirtyRef.current = nextVal.trim().length > 0;
+                            setBankName(nextVal);
+                          }}
+                          onKeyDown={stopShortcutBubble}
+                        />
+                      </label>
+                      <label className="qi-field">
+                        <span className="qi-field__label">题库简介（选填）</span>
+                        <input
+                          type="text"
+                          data-testid="import-bank-desc"
+                          className="qi-input"
+                          placeholder="例如：期末重点题库 / 课后复习整理"
+                          value={bankDesc}
+                          onChange={(e) => setBankDesc(e.target.value)}
+                          onKeyDown={stopShortcutBubble}
+                        />
+                      </label>
+                    </div>
+                  ) : (
+                    <div className="qi-toast">
+                      将追加 {summary.validIncluded} 道有效题目到已有题库：
+                      <strong>《{effectiveTargetBank?.name}》</strong>
+                      （当前 {effectiveTargetBank?.data.questions.length ?? 0} 题）
+                    </div>
+                  )}
+
+                  <div data-testid="preview-summary" className="qi-toolbar">
+                    <div className="qi-pill-row">
+                      <span className="qi-pill">共识别 {summary.total} 题</span>
+                      <span className="qi-pill qi-pill--ok">
+                        可入库 {summary.validIncluded} 题
+                      </span>
+                      {summary.warningCount > 0 && (
+                        <span className="qi-pill qi-pill--warn">
+                          告警 {summary.warningCount} 题
+                        </span>
+                      )}
+                      {summary.totalErrors > 0 && (
+                        <span className="qi-pill qi-pill--bad">
+                          异常 {summary.totalErrors} 题（未剔除勾选 {summary.errorIncluded} 题）
+                        </span>
+                      )}
+                    </div>
+
+                    <div className="qi-btn-group">
+                      <button
+                        type="button"
+                        data-testid="preview-filter-issues"
+                        className={`qi-btn qi-btn--sm${filterIssuesOnly ? ' qi-btn--primary' : ''}`}
+                        onClick={() => setFilterIssuesOnly((v) => !v)}
                       >
-                        <div className="qi-toolbar">
-                          <div className="qi-pill-row">
-                            <span className="qi-pill">#{origIndex + 1}</span>
-                            <span className="qi-pill qi-pill--brand">
-                              {getTypeLabel(draft.type)}
-                            </span>
-                            <span className="qi-pill">
-                              第{draft.chapter || 1}章 · {draft.chapterName}
-                            </span>
-                            <span className="qi-pill">{draft.sourceLoc}</span>
-                            {draft.aiInferredAnswer === true && (
-                              <span
-                                data-testid={`draft-ai-inferred-${origIndex}`}
-                                className="qi-pill qi-pill--warn"
+                        {filterIssuesOnly ? '显示全部题目' : '仅看异常与告警'}
+                      </button>
+                      {summary.errorIncluded > 0 && (
+                        <button
+                          type="button"
+                          data-testid="btn-exclude-errors"
+                          className="qi-btn qi-btn--sm qi-btn--danger"
+                          onClick={handleExcludeAllErrors}
+                        >
+                          一键剔除异常项 ({summary.errorIncluded})
+                        </button>
+                      )}
+                    </div>
+                  </div>
+
+                  <div data-testid="draft-list-container" className="qi-draft-list">
+                    {filteredDraftEntries.length === 0 && (
+                      <div data-testid="preview-empty-filter" className="qi-empty-filter">
+                        {selectedWashTypes.length === 0
+                          ? '当前未勾选任何题型，请在左侧导入配置中勾选需要保留的题型。'
+                          : '当前筛选条件下暂无匹配题目，可调整左侧题型勾选或关闭「仅看异常与告警」。'}
+                      </div>
+                    )}
+
+                    {visibleEntries.map(({ draft, origIndex }) => {
+                      const hasErr = draft.issues.some((i) => i.severity === 'error');
+                      const hasWarn = draft.issues.some((i) => i.severity === 'warning');
+                      const severity = hasErr ? 'error' : hasWarn ? 'warning' : 'ok';
+                      const isEditing = editingId === draft.tempId;
+                      const isFormulaPreviewOpen = Boolean(formulaPreviewIds[draft.tempId]);
+
+                      return (
+                        <div
+                          key={draft.tempId}
+                          data-testid={`preview-draft-${origIndex}`}
+                          data-severity={severity}
+                          className={`qi-draft-card${draft.included ? '' : ' is-excluded'}`}
+                        >
+                          <div className="qi-draft-card__head">
+                            <div className="qi-draft-card__meta">
+                              <span className="qi-draft-num">#{origIndex + 1}</span>
+                              <span className="qi-pill qi-pill--brand">
+                                {getTypeLabel(draft.type)}
+                              </span>
+                              <span className="qi-draft-chapter" title={`第${draft.chapter || 1}章 · ${draft.chapterName}`}>
+                                第{draft.chapter || 1}章 · {draft.chapterName}
+                              </span>
+                              {draft.aiInferredAnswer === true && (
+                                <span
+                                  data-testid={`draft-ai-inferred-${origIndex}`}
+                                  className="qi-pill qi-pill--warn"
+                                >
+                                  AI 推断答案
+                                </span>
+                              )}
+                              {hasErr ? (
+                                <span className="qi-pill qi-pill--bad">存在异常</span>
+                              ) : hasWarn ? (
+                                <span className="qi-pill qi-pill--warn">有告警</span>
+                              ) : null}
+                            </div>
+
+                            <div className="qi-draft-card__actions">
+                              <button
+                                type="button"
+                                data-testid={`draft-toggle-${origIndex}`}
+                                aria-pressed={draft.included}
+                                title={draft.included ? '点击剔除该题' : '点击恢复该题'}
+                                className={`qi-btn qi-btn--sm${draft.included ? '' : ' qi-btn--warn'}`}
+                                onClick={() =>
+                                  updateDraft(draft.tempId, (d) => ({
+                                    ...d,
+                                    included: !d.included,
+                                  }))
+                                }
                               >
-                                AI 推断答案
-                              </span>
-                            )}
-                            {draft.tags.map((tag, tIdx) => (
-                              <span key={tIdx} className="qi-pill qi-pill--tag">
-                                #{tag}
-                              </span>
-                            ))}
-                            {hasErr ? (
-                              <span className="qi-pill qi-pill--bad">存在异常</span>
-                            ) : hasWarn ? (
-                              <span className="qi-pill qi-pill--warn">有告警</span>
-                            ) : (
-                              <span className="qi-pill qi-pill--ok">校验通过</span>
-                            )}
+                                <Icon name={draft.included ? 'check' : 'x'} size={13} />
+                                <span>{draft.included ? '保留' : '已剔除'}</span>
+                              </button>
+                              <button
+                                type="button"
+                                data-testid={`draft-edit-${origIndex}`}
+                                className="qi-btn qi-btn--sm"
+                                onClick={() =>
+                                  setEditingId((cur) =>
+                                    cur === draft.tempId ? null : draft.tempId,
+                                  )
+                                }
+                              >
+                                <Icon name="pen" size={13} />
+                                <span>{isEditing ? '收起' : '修正'}</span>
+                              </button>
+                              <button
+                                type="button"
+                                data-testid={`draft-delete-${origIndex}`}
+                                className="qi-btn qi-btn--sm qi-btn--danger"
+                                onClick={() => handleDeleteDraft(draft.tempId)}
+                              >
+                                <Icon name="trash" size={13} />
+                                <span>删除</span>
+                              </button>
+                            </div>
                           </div>
 
-                          <div className="qi-btn-group">
-                            <button
-                              type="button"
-                              data-testid={`draft-toggle-${origIndex}`}
-                              className={`qi-btn qi-btn--sm${draft.included ? '' : ' qi-btn--warn'}`}
-                              onClick={() =>
-                                updateDraft(draft.tempId, (d) => ({
-                                  ...d,
-                                  included: !d.included,
-                                }))
-                              }
-                            >
-                              {draft.included ? '已保留（点击剔除）' : '已剔除（点击恢复）'}
-                            </button>
-                            <button
-                              type="button"
-                              data-testid={`draft-edit-${origIndex}`}
-                              className="qi-btn qi-btn--sm"
-                              onClick={() =>
-                                setEditingId((cur) =>
-                                  cur === draft.tempId ? null : draft.tempId,
-                                )
-                              }
-                            >
-                              {isEditing ? '收起编辑' : '修正'}
-                            </button>
-                            <button
-                              type="button"
-                              data-testid={`draft-delete-${origIndex}`}
-                              className="qi-btn qi-btn--sm qi-btn--danger"
-                              onClick={() => handleDeleteDraft(draft.tempId)}
-                            >
-                              删除
-                            </button>
+                          <div className="qi-draft-stem">
+                            {draft.stem.trim() ? draft.stem : '（空题干）'}
                           </div>
-                        </div>
 
-                        <div className="qi-draft-stem">
-                          {draft.stem.trim() ? draft.stem : '（空题干）'}
-                        </div>
+                          {draft.options.length > 0 && (
+                            <div className="qi-draft-options">
+                              {draft.options
+                                .map((opt, oIdx) => `${getOptionLabel(oIdx)}. ${opt}`)
+                                .join('  |  ')}
+                            </div>
+                          )}
 
-                        {draft.options.length > 0 && (
-                          <div className="qi-draft-options">
-                            {draft.options
-                              .map((opt, oIdx) => `${getOptionLabel(oIdx)}. ${opt}`)
-                              .join('  |  ')}
+                          <div className="qi-draft-answer">
+                            <strong>当前答案：</strong>
+                            {formatDraftRawAnswer(draft.type, draft.answer) ||
+                              draft.rawAnswer ||
+                              '（未设置）'}
+                            {draft.explain ? ` · 解析：${draft.explain}` : ''}
                           </div>
-                        )}
 
-                        <div className="qi-draft-answer">
-                          <strong>当前答案：</strong>
-                          {formatDraftRawAnswer(draft.type, draft.answer) ||
-                            draft.rawAnswer ||
-                            '（未设置）'}
-                          {draft.explain ? ` · 解析：${draft.explain}` : ''}
-                        </div>
+                          {(draft.sourceLoc || draft.tags.length > 0) && (
+                            <div className="qi-draft-subline">
+                              {draft.sourceLoc && (
+                                <span className="qi-draft-source">{draft.sourceLoc}</span>
+                              )}
+                              {draft.tags.length > 0 && (
+                                <div className="qi-draft-tags">
+                                  {draft.tags.map((tag, tIdx) => (
+                                    <span key={tIdx} className="qi-pill qi-pill--tag">
+                                      #{tag}
+                                    </span>
+                                  ))}
+                                </div>
+                              )}
+                            </div>
+                          )}
 
                         {draft.issues.length > 0 && (
                           <ul className="qi-issue-list">
@@ -1917,51 +2177,56 @@ export function ImportWorkbench({
                     );
                   })}
 
-                  {filteredDraftEntries.length > visibleEntries.length && (
-                    <button
-                      type="button"
-                      className="qi-btn"
-                      onClick={() => setVisibleCount((c) => c + PAGE_STEP)}
-                    >
-                      继续加载更多（剩余 {filteredDraftEntries.length - visibleEntries.length} 题）
-                    </button>
-                  )}
-                </div>
-
-                <div className="qi-sticky-confirm">
-                  <span className="qi-sticky-confirm__status">
-                    {summary.errorIncluded > 0
-                      ? `还有 ${summary.errorIncluded} 道已勾选题目存在异常，请点击“修正”或“一键剔除异常项”后再入库。`
-                      : summary.validIncluded > 0
-                        ? effectiveTargetBankMode === 'existing'
-                          ? `准备就绪：将向《${effectiveTargetBank?.name ?? ''}》追加 ${summary.validIncluded} 题。`
-                          : `准备就绪：将导入 ${summary.validIncluded} 道有效题目并同步至题库。`
-                        : '当前没有可入库的有效题目。'}
-                  </span>
-                  <button
-                    type="button"
-                    data-testid="btn-confirm-import-sticky"
-                    className="qi-btn qi-btn--primary"
-                    disabled={
-                      summary.validIncluded === 0 ||
-                      summary.errorIncluded > 0 ||
-                      committing ||
-                      washing
-                    }
-                    onClick={() => void handleCommit()}
-                  >
-                    {committing
-                      ? '正在入库…'
-                      : effectiveTargetBankMode === 'existing'
-                        ? `确认追加到题库（共 ${summary.validIncluded} 题）`
-                        : `确认导入题库（共 ${summary.validIncluded} 题）`}
-                  </button>
-                </div>
-              </>
-            )}
+                    {filteredDraftEntries.length > visibleEntries.length && (
+                      <button
+                        type="button"
+                        className="qi-btn"
+                        onClick={() => setVisibleCount((c) => c + PAGE_STEP)}
+                      >
+                        继续加载更多（剩余 {filteredDraftEntries.length - visibleEntries.length} 题）
+                      </button>
+                    )}
+                  </div>
+                </>
+              )}
+            </div>
           </div>
-        )}
-      </div>
+
+          {drafts.length > 0 && (
+            <div data-testid="workbench-sticky-bar" className="qi-sticky-confirm">
+              <span className="qi-sticky-confirm__status">
+                {summary.errorIncluded > 0
+                  ? `还有 ${summary.errorIncluded} 道已勾选题目存在异常，请点击“修正”或“一键剔除异常项”后再入库。`
+                  : summary.validIncluded > 0
+                    ? effectiveTargetBankMode === 'existing'
+                      ? `准备就绪：将向《${effectiveTargetBank?.name ?? ''}》追加 ${summary.validIncluded} 题。`
+                      : bankName.trim()
+                        ? `准备就绪：将导入 ${summary.validIncluded} 道有效题目到《${bankName.trim()}》。`
+                        : `准备就绪：将导入 ${summary.validIncluded} 道有效题目并同步至题库。`
+                    : '当前没有可入库的有效题目。'}
+              </span>
+              <button
+                type="button"
+                data-testid="btn-confirm-import-sticky"
+                className="qi-btn qi-btn--primary"
+                disabled={
+                  summary.validIncluded === 0 ||
+                  summary.errorIncluded > 0 ||
+                  committing ||
+                  washing
+                }
+                onClick={() => void handleCommit()}
+              >
+                {committing
+                  ? '正在入库…'
+                  : effectiveTargetBankMode === 'existing'
+                    ? `确认追加到题库（共 ${summary.validIncluded} 题）`
+                    : `确认导入题库（共 ${summary.validIncluded} 题）`}
+              </button>
+            </div>
+          )}
+        </div>
+      )}
     </div>
   );
 }

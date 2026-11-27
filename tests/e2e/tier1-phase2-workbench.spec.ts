@@ -60,6 +60,7 @@ import {
   washPrefTags,
   washTargetBankMode,
   washTargetBankName,
+  workbenchSidebarToggle,
   workspaceMobileBar,
 } from './helpers/selectors.ts';
 import {
@@ -101,7 +102,18 @@ async function togglePrefControl(locator: Locator): Promise<boolean> {
   return true;
 }
 
+async function ensureWorkbenchSidebarOpen(page: Page): Promise<void> {
+  const toggle = workbenchSidebarToggle(page);
+  if (await toggle.isVisible().catch(() => false)) {
+    const expanded = await toggle.getAttribute('aria-expanded');
+    if (expanded !== 'true') {
+      await toggle.click();
+    }
+  }
+}
+
 async function setWashTargetNewBank(page: Page, bankName: string): Promise<void> {
+  await ensureWorkbenchSidebarOpen(page);
   const modeEl = washTargetBankMode(page);
   if (await modeEl.isVisible()) {
     const tagName = await modeEl.evaluate((el) => el.tagName.toLowerCase());
@@ -372,6 +384,7 @@ test.describe('Tier 1 (Phase 2): QuizHub Brand, Smart Import Workbench, Unified 
     await expect(quizImportDialog(page)).toBeVisible();
 
     await bankImportFileInput(page).setInputFiles(makeTxtUploadFile('txt-wash-bank.txt'));
+    await expect(workbenchSidebarToggle(page)).toBeVisible();
     await setWashTargetNewBank(page, 'TXT洗题导入库');
     if (await aiWashBtn(page).isEnabled()) {
       await aiWashBtn(page).click();
@@ -404,6 +417,7 @@ test.describe('Tier 1 (Phase 2): QuizHub Brand, Smart Import Workbench, Unified 
     await expect(quizImportDialog(page)).toBeVisible();
 
     await bankImportFileInput(page).setInputFiles(makeMdUploadFile('md-wash-bank.md'));
+    await expect(workbenchSidebarToggle(page)).toBeVisible();
     await setWashTargetNewBank(page, 'Markdown洗题导入库');
     if (await aiWashBtn(page).isEnabled()) {
       await aiWashBtn(page).click();

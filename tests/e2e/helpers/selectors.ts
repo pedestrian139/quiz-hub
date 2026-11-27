@@ -524,6 +524,26 @@ export function importBankName(page: Page): Locator {
   return page.getByTestId('import-bank-name');
 }
 
+export function workbenchSidebarToggle(page: Page): Locator {
+  return page.getByTestId('workbench-sidebar-toggle');
+}
+
+export function workbenchSidebar(page: Page): Locator {
+  return page.getByTestId('workbench-sidebar');
+}
+
+export function workbenchSidebarClose(page: Page): Locator {
+  return page.getByTestId('workbench-sidebar-close');
+}
+
+export function workbenchStickyBar(page: Page): Locator {
+  return page.getByTestId('workbench-sticky-bar');
+}
+
+export function aiRewashDirtyHint(page: Page): Locator {
+  return page.getByTestId('ai-rewash-dirty-hint');
+}
+
 // Phase 2 Quiz Workspace & AI Tutor
 export function bankSwitcher(page: Page): Locator {
   return page.getByTestId('bank-switcher');
