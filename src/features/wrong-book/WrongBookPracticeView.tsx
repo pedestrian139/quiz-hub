@@ -18,6 +18,15 @@ function isFocusDropped(el: Element | null): boolean {
   return el instanceof HTMLElement && el.getAttribute('role') === 'dialog' && el.tabIndex === -1;
 }
 
+function getWrongStatusTone(
+  wrongCount: number,
+  mastery?: MasteryLevel,
+): 'attention' | 'warn' | 'neutral' {
+  if (wrongCount >= 2 || mastery === 0) return 'attention';
+  if (mastery === 1) return 'warn';
+  return 'neutral';
+}
+
 interface WrongBookPracticeViewProps {
   items: readonly WrongBookItem[];
   onRetryWrong: (
@@ -232,15 +241,27 @@ export function WrongBookPracticeView({
       </div>
 
       <article className="wb-practice-card">
-        <div className="wb-item__meta">
-          <span className="wb-tag wb-tag--bank">{currentItem.bankName}</span>
-          <span className="wb-tag wb-tag--type">{getTypeLabel(q.type)}</span>
-          {currentItem.chapterLabel && (
-            <span className="wb-tag wb-tag--chapter">{currentItem.chapterLabel}</span>
-          )}
-          <span className="wb-tag wb-tag--wrong" data-testid="wb-practice-wrong-count">
-            累计错误 {currentItem.wrongCount} 次
-          </span>
+        <div className="wb-item__top wb-practice-card__meta-row">
+          <div className="wb-item__meta">
+            <span className="wb-tag wb-tag--type">{getTypeLabel(q.type)}</span>
+            <span
+              className="wb-item__source"
+              title={`${currentItem.bankName}${currentItem.chapterLabel ? ` · ${currentItem.chapterLabel}` : ''}`}
+            >
+              <span>{currentItem.bankName}</span>
+              {currentItem.chapterLabel && (
+                <span className="wb-item__chapter"> · {currentItem.chapterLabel}</span>
+              )}
+            </span>
+          </div>
+          <div className="wb-item__stats">
+            <span
+              className={`wb-status-pill wb-status-pill--${getWrongStatusTone(currentItem.wrongCount, currentItem.mastery)}`}
+              data-testid="wb-practice-wrong-count"
+            >
+              累计错误 {currentItem.wrongCount} 次
+            </span>
+          </div>
         </div>
 
         <h3 className="wb-practice-card__stem" data-testid="wb-practice-stem">
@@ -364,9 +385,12 @@ export function WrongBookPracticeView({
             data-testid="wb-practice-feedback"
           >
             <div className="wb-feedback__title">
-              {feedback.isCorrect
-                ? '回答正确！原错题记录暂时保留，确认掌握后可点击下方按钮移出错题本。'
-                : `回答错误（本次选择：${feedback.submittedLabel}），已累加错误次数并记录历史错选。`}
+              <Icon name={feedback.isCorrect ? 'circleCheck' : 'alertTriangle'} size={16} />
+              <span>
+                {feedback.isCorrect
+                  ? '回答正确！原错题记录暂时保留，确认掌握后可点击下方按钮移出错题本。'
+                  : `回答错误（本次选择：${feedback.submittedLabel}），已累加错误次数并记录历史错选。`}
+              </span>
             </div>
           </div>
         )}
@@ -374,7 +398,8 @@ export function WrongBookPracticeView({
         {subjectiveRatedWrong && !isObjective && (
           <div className="wb-feedback wb-feedback--bad" data-testid="wb-practice-feedback">
             <div className="wb-feedback__title">
-              已标记为仍需巩固，错误次数已累加。可对照下方解析后再次尝试。
+              <Icon name="alertTriangle" size={16} />
+              <span>已标记为仍需巩固，错误次数已累加。可对照下方解析后再次尝试。</span>
             </div>
           </div>
         )}
@@ -423,7 +448,8 @@ export function WrongBookPracticeView({
             data-testid="wb-practice-mastered-btn"
             onClick={handleMarkMasteredClick}
           >
-            移出错题本（标记为已掌握）
+            <Icon name="check" size={15} />
+            <span>移出错题本（标记为已掌握）</span>
           </button>
         </div>
       </article>

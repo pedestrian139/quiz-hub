@@ -9,6 +9,7 @@ import {
   BankLibraryProvider,
   useOptionalBankLibraryContext,
 } from '../../utils/BankLibraryContext';
+import { Icon } from '../../components/ui/Icons';
 import { downloadWrongBookMarkdown, formatWrongTimestamp } from './markdownExport';
 import type { SmartWrongBookProps, WrongBookSort } from './types';
 import { useWrongBook } from './useWrongBook';
@@ -21,6 +22,15 @@ function isFocusDropped(el: Element | null): boolean {
     return true;
   }
   return el instanceof HTMLElement && el.getAttribute('role') === 'dialog' && el.tabIndex === -1;
+}
+
+function getWrongStatusTone(
+  wrongCount: number,
+  mastery?: number,
+): 'attention' | 'warn' | 'neutral' {
+  if (wrongCount >= 2 || mastery === 0) return 'attention';
+  if (mastery === 1) return 'warn';
+  return 'neutral';
 }
 
 export function EnsureBankLibraryProvider({ children }: { children: ReactNode }) {
@@ -218,9 +228,10 @@ function SmartWrongBookInner({
               className="wb-close-btn"
               data-testid="wb-close-btn"
               data-dialog-initial-focus=""
+              aria-label="关闭智能错题本"
               onClick={onClose}
             >
-              关闭
+              <Icon name="x" size={18} />
             </button>
           )}
         </div>
@@ -297,7 +308,8 @@ function SmartWrongBookInner({
                   disabled={filteredItems.length === 0}
                   onClick={handleStartPractice}
                 >
-                  重练当前筛选错题
+                  <Icon name="refreshCw" size={15} />
+                  <span>重练当前筛选错题</span>
                 </button>
                 <button
                   type="button"
@@ -306,16 +318,31 @@ function SmartWrongBookInner({
                   disabled={filteredItems.length === 0}
                   onClick={handleExportMarkdown}
                 >
-                  导出 Markdown
+                  <Icon name="download" size={15} />
+                  <span>导出 Markdown</span>
                 </button>
               </div>
             </div>
 
             {filteredItems.length === 0 ? (
               <div className="wb-empty" data-testid="wb-empty-state">
-                <div className="wb-empty__title">当前筛选下暂无错题</div>
+                <div
+                  className={`wb-empty__icon${items.length === 0 ? ' is-clear' : ''}`}
+                  aria-hidden="true"
+                >
+                  <Icon
+                    name={items.length === 0 ? 'circleCheck' : 'book'}
+                    size={26}
+                    strokeWidth={1.6}
+                  />
+                </div>
+                <div className="wb-empty__title">
+                  {items.length === 0 ? '暂无待巩固错题' : '当前筛选下暂无错题'}
+                </div>
                 <p className="wb-empty__desc">
-                  在内置题库或自定义导入题库中作答出错的题目会自动汇总到这里。
+                  {items.length === 0
+                    ? '在内置题库或自定义导入题库中作答出错的题目会自动汇总到这里。'
+                    : '该题库下的错题已全部掌握，可切换「全部题库」查看其他待巩固题目。'}
                 </p>
               </div>
             ) : (
@@ -324,6 +351,14 @@ function SmartWrongBookInner({
                   const q = item.question;
                   const isExpanded = Boolean(expandedKeys[item.key]);
                   const isObj = isObjectiveQuestion(q.type);
+                  const statusTone = getWrongStatusTone(item.wrongCount, item.mastery);
+                  const historyTone = isObj
+                    ? item.wrongChoices.length > 0
+                      ? 'bad'
+                      : 'neutral'
+                    : item.mastery === 1
+                      ? 'warn'
+                      : 'bad';
 
                   return (
                     <li
@@ -335,16 +370,22 @@ function SmartWrongBookInner({
                     >
                       <div className="wb-item__top">
                         <div className="wb-item__meta">
-                          <span className="wb-tag wb-tag--bank" data-testid="wb-item-bank">
-                            {item.bankName}
-                          </span>
                           <span className="wb-tag wb-tag--type">{getTypeLabel(q.type)}</span>
-                          {item.chapterLabel && (
-                            <span className="wb-tag wb-tag--chapter">{item.chapterLabel}</span>
-                          )}
+                          <span
+                            className="wb-item__source"
+                            title={`${item.bankName}${item.chapterLabel ? ` · ${item.chapterLabel}` : ''}`}
+                          >
+                            <span data-testid="wb-item-bank">{item.bankName}</span>
+                            {item.chapterLabel && (
+                              <span className="wb-item__chapter"> · {item.chapterLabel}</span>
+                            )}
+                          </span>
                         </div>
                         <div className="wb-item__stats">
-                          <span className="wb-tag wb-tag--wrong" data-testid="wb-item-wrong-count">
+                          <span
+                            className={`wb-status-pill wb-status-pill--${statusTone}`}
+                            data-testid="wb-item-wrong-count"
+                          >
                             错误 {item.wrongCount} 次
                           </span>
                           <span className="wb-item__time" data-testid="wb-item-last-time">
@@ -358,8 +399,8 @@ function SmartWrongBookInner({
                       </div>
 
                       <div className="wb-item__history" data-testid="wb-item-wrong-choices">
-                        <strong>历史错选：</strong>
-                        <span>
+                        <strong className="wb-item__history-label">历史错选：</strong>
+                        <span className={`wb-item__history-value wb-item__history-value--${historyTone}`}>
                           {isObj
                             ? item.wrongChoices.length > 0
                               ? item.wrongChoices.map((c) => c.label).join('、')
@@ -410,7 +451,8 @@ function SmartWrongBookInner({
                           aria-expanded={isExpanded}
                           onClick={() => toggleExpand(item.key)}
                         >
-                          {isExpanded ? '收起解析' : '查看答案与解析'}
+                          <Icon name={isExpanded ? 'chevronUp' : 'chevronDown'} size={14} />
+                          <span>{isExpanded ? '收起解析' : '查看答案与解析'}</span>
                         </button>
                         <button
                           type="button"
@@ -427,7 +469,8 @@ function SmartWrongBookInner({
                             setNotice('已标记为已掌握并移出错题本');
                           }}
                         >
-                          移出错题本（标记为已掌握）
+                          <Icon name="check" size={14} />
+                          <span>移出错题本（标记为已掌握）</span>
                         </button>
                       </div>
                     </li>

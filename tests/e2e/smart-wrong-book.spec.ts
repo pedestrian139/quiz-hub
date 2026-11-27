@@ -3,6 +3,7 @@ import { expect, test } from './helpers/fixtures.ts';
 import { assertFullLayoutAudit } from './helpers/audit.ts';
 import { installAuthGateway } from './helpers/authGateway.ts';
 import {
+  filterOrder,
   gotoRoute,
   modeCard,
   quizOption,
@@ -16,6 +17,7 @@ import {
   getCorrectChoiceFor,
   getWrongChoiceFor,
   loadBankCatalog,
+  makeEmptyStore,
   makeSeededStore,
   pickQuestions,
   type Question,
@@ -194,6 +196,7 @@ D. 哈希表
     await page.getByTestId('btn-confirm-import-sticky').or(page.getByTestId('btn-confirm-import')).first().click();
 
     await expect(page.getByTestId('quiz-import-dialog')).toBeHidden({ timeout: 10_000 });
+    await filterOrder(page).selectOption('seq');
     await modeCard(page, 'all').click();
     // Question 1 (choice): pick wrong option A (index 0)
     await expect(page.getByTestId('q-stem')).toContainText('后进先出');
@@ -556,5 +559,230 @@ D. 哈希表
     const guestGuideStore = await readGuestGuideStore(page);
     expect(guestGuideStore).not.toBeNull();
     expect(guestGuideStore?.records?.[q1.id]?.ok).toBe(0);
+  });
+
+  test('R6: Apple HIG Light/Dark contrast, single-line headers, and layout audit on desktop & 390x844 mobile', async ({
+    page,
+  }) => {
+    const measureEffectiveContrast = async (selector: string) => {
+      return page.evaluate((sel) => {
+        const el = document.querySelector(sel);
+        if (!el) return null;
+        const parseColor = (css: string): [number, number, number, number] | null => {
+          const m = css.match(/rgba?\((\d+),\s*(\d+),\s*(\d+)(?:,\s*([\d.]+))?\)/);
+          if (!m) return null;
+          return [Number(m[1]), Number(m[2]), Number(m[3]), m[4] !== undefined ? Number(m[4]) : 1];
+        };
+        const compositeOver = (
+          fg: [number, number, number, number],
+          bg: [number, number, number],
+        ): [number, number, number] => {
+          const a = fg[3];
+          return [
+            fg[0] * a + bg[0] * (1 - a),
+            fg[1] * a + bg[1] * (1 - a),
+            fg[2] * a + bg[2] * (1 - a),
+          ];
+        };
+        const layers: [number, number, number, number][] = [];
+        let cur: Element | null = el;
+        while (cur) {
+          const bg = parseColor(window.getComputedStyle(cur).backgroundColor);
+          if (bg && bg[3] > 0) {
+            layers.push(bg);
+            if (bg[3] >= 0.999) break;
+          }
+          cur = cur.parentElement;
+        }
+        const isDark = document.documentElement.getAttribute('data-theme') === 'dark';
+        let effectiveBg: [number, number, number] = isDark ? [0, 0, 0] : [255, 255, 255];
+        for (let i = layers.length - 1; i >= 0; i -= 1) {
+          effectiveBg = compositeOver(layers[i]!, effectiveBg);
+        }
+        const fgRaw = parseColor(window.getComputedStyle(el).color);
+        if (!fgRaw) return null;
+        const effectiveFg = compositeOver(fgRaw, effectiveBg);
+        const lum = (rgb: [number, number, number]) => {
+          const lin = rgb.map((v) => {
+            const c = v / 255;
+            return c <= 0.04045 ? c / 12.92 : Math.pow((c + 0.055) / 1.055, 2.4);
+          });
+          return 0.2126 * lin[0]! + 0.7152 * lin[1]! + 0.0722 * lin[2]!;
+        };
+        const l1 = lum(effectiveFg);
+        const l2 = lum(effectiveBg);
+        const ratio = (Math.max(l1, l2) + 0.05) / (Math.min(l1, l2) + 0.05);
+        return {
+          color: window.getComputedStyle(el).color,
+          backgroundColor: window.getComputedStyle(el).backgroundColor,
+          ratio,
+        };
+      }, selector);
+    };
+
+    const assertMinContrast = async (selector: string, minRatio = 4.5) => {
+      const metrics = await measureEffectiveContrast(selector);
+      expect(metrics, `Expected element for contrast check: ${selector}`).not.toBeNull();
+      expect(
+        metrics!.ratio,
+        `Contrast too low for ${selector}: ${metrics!.ratio.toFixed(2)} (${metrics!.color} on ${metrics!.backgroundColor})`,
+      ).toBeGreaterThanOrEqual(minRatio);
+    };
+
+    const [qChoice] = pickQuestions({ type: 'choice', limit: 1, bank: FIXTURE_BANK });
+    const [qMulti] = pickQuestions({ type: 'multi', limit: 1, bank: FIXTURE_BANK });
+    const [qShort] = pickQuestions({ type: 'short', limit: 1, bank: FIXTURE_BANK });
+    if (!qChoice || !qMulti || !qShort) {
+      throw new Error('Expected choice, multi, and short questions in FIXTURE_BANK');
+    }
+
+    const viewportWidth = page.viewportSize()?.width ?? 1440;
+    const isNarrowViewport = viewportWidth <= 768;
+
+    for (const mode of ['light', 'dark'] as const) {
+      // 1. Empty state check in current theme
+      await seedFixtureBank(page, FIXTURE_BANK, makeEmptyStore(), { targetHashRoute: '#/' });
+      await page.getByTestId(`theme-option-${mode}`).click();
+      await expect(page.locator('html')).toHaveAttribute('data-theme', mode);
+
+      const emptyBadge = page.getByTestId('wb-launcher-count');
+      await expect(emptyBadge).toHaveText('暂无错题');
+      await expect(emptyBadge).not.toHaveClass(/is-attention/);
+      await assertMinContrast('[data-testid="wb-launcher-count"]');
+
+      await page.getByTestId('wb-open-btn').click();
+      await expect(page.getByTestId('wb-empty-state')).toBeVisible();
+      await assertFullLayoutAudit(page);
+
+      // Header stays single-row (title and 36x36 circular close button aligned)
+      const headerLayout = await page.evaluate(() => {
+        const title = document.querySelector('.wb-header__title');
+        const closeBtn = document.querySelector('[data-testid="wb-close-btn"]');
+        if (!title || !closeBtn) return null;
+        const tr = title.getBoundingClientRect();
+        const cr = closeBtn.getBoundingClientRect();
+        return {
+          titleTop: tr.top,
+          titleBottom: tr.bottom,
+          closeTop: cr.top,
+          closeBottom: cr.bottom,
+          closeWidth: cr.width,
+          closeHeight: cr.height,
+        };
+      });
+      expect(headerLayout).not.toBeNull();
+      expect(headerLayout!.closeWidth).toBe(36);
+      expect(headerLayout!.closeHeight).toBe(36);
+      expect(headerLayout!.closeTop).toBeLessThan(headerLayout!.titleBottom);
+      expect(headerLayout!.titleTop).toBeLessThan(headerLayout!.closeBottom);
+
+      await assertMinContrast('.wb-header__title');
+      await assertMinContrast('.wb-empty__title');
+      await assertMinContrast('.wb-empty__desc');
+
+      await page.getByTestId('wb-close-btn').click();
+      await expect(page.getByTestId('wb-modal')).toBeHidden();
+
+      // 2. Populated list + expanded detail + practice view in current theme
+      await seedFixtureBank(
+        page,
+        FIXTURE_BANK,
+        makeSeededStore(
+          {
+            wrongIds: [qChoice.id, qMulti.id, qShort.id],
+          },
+          FIXTURE_BANK,
+        ),
+        { targetHashRoute: '#/' },
+      );
+      await page.getByTestId(`theme-option-${mode}`).click();
+      await expect(page.locator('html')).toHaveAttribute('data-theme', mode);
+
+      const activeBadge = page.getByTestId('wb-launcher-count');
+      await expect(activeBadge).toHaveText('待巩固 3 题');
+      await expect(activeBadge).toHaveClass(/is-attention/);
+      await assertMinContrast('[data-testid="wb-launcher-count"]');
+
+      await page.getByTestId('wb-open-btn').click();
+      await expect(page.getByTestId('wb-item-card')).toHaveCount(3);
+      await assertFullLayoutAudit(page);
+
+      // Single-line card header check
+      const cardHeaderAligned = await page.evaluate(() => {
+        const meta = document.querySelector('.wb-item__meta');
+        const stats = document.querySelector('.wb-item__stats');
+        if (!meta || !stats) return false;
+        const mr = meta.getBoundingClientRect();
+        const sr = stats.getBoundingClientRect();
+        return sr.top < mr.bottom && mr.top < sr.bottom;
+      });
+      expect(cardHeaderAligned).toBe(true);
+
+      if (isNarrowViewport) {
+        const selectFontSize = await page
+          .getByTestId('wb-bank-filter')
+          .evaluate((el) => window.getComputedStyle(el).fontSize);
+        expect(parseFloat(selectFontSize)).toBeGreaterThanOrEqual(16);
+      }
+
+      await assertMinContrast('.wb-sort-btn.is-active');
+      await assertMinContrast('.wb-btn--primary');
+      await assertMinContrast('.wb-item__stem');
+      await assertMinContrast('.wb-status-pill');
+      await assertMinContrast('.wb-item__history-value');
+
+      // Expand first item detail
+      await page.getByTestId('wb-item-toggle-detail').first().click();
+      await expect(page.getByTestId('wb-item-detail').first()).toBeVisible();
+      await assertFullLayoutAudit(page);
+      await assertMinContrast('.wb-item__detail');
+
+      // Enter practice view and audit every question type present
+      await page.getByTestId('wb-start-practice-btn').click();
+      await expect(page.getByTestId('wb-practice-view')).toBeVisible();
+      await assertFullLayoutAudit(page);
+      await assertMinContrast('.wb-practice-card__stem');
+      await assertMinContrast('[data-testid="wb-practice-wrong-count"]');
+
+      for (let step = 0; step < 3; step += 1) {
+        if (step > 0) {
+          await page.getByTestId('wb-practice-next-btn').click();
+        }
+        await assertFullLayoutAudit(page);
+
+        if ((await page.getByTestId('wb-practice-submit-multi-btn').count()) > 0) {
+          await assertMinContrast('.wb-option-btn__key');
+          await page.getByTestId('wb-practice-option-0').click();
+          await assertMinContrast('.wb-option-btn.is-selected .wb-option-btn__key');
+          await page.getByTestId('wb-practice-submit-multi-btn').click();
+          await expect(page.getByTestId('wb-practice-feedback')).toBeVisible();
+          await expect(page.getByTestId('wb-practice-explanation')).toBeVisible();
+          await assertFullLayoutAudit(page);
+          await assertMinContrast('[data-testid="wb-practice-feedback"]');
+          await assertMinContrast('.wb-explanation__answer');
+        } else if ((await page.getByTestId('wb-practice-subjective-input').count()) > 0) {
+          if (isNarrowViewport) {
+            const textareaFontSize = await page
+              .getByTestId('wb-practice-subjective-input')
+              .evaluate((el) => window.getComputedStyle(el).fontSize);
+            expect(parseFloat(textareaFontSize)).toBeGreaterThanOrEqual(16);
+          }
+          await page.getByTestId('wb-practice-reveal-btn').click();
+          await expect(page.getByTestId('wb-practice-explanation')).toBeVisible();
+          await assertFullLayoutAudit(page);
+          await assertMinContrast('.wb-explanation__answer');
+        } else {
+          await assertMinContrast('.wb-option-btn__key');
+          await page.getByTestId('wb-practice-option-0').click();
+          await expect(page.getByTestId('wb-practice-feedback')).toBeVisible();
+          await expect(page.getByTestId('wb-practice-explanation')).toBeVisible();
+          await assertFullLayoutAudit(page);
+          await assertMinContrast('[data-testid="wb-practice-feedback"]');
+        }
+      }
+
+      await page.getByTestId('wb-close-btn').click();
+      await expect(page.getByTestId('wb-modal')).toBeHidden();
+    }
   });
 });

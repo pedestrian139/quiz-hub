@@ -191,7 +191,17 @@ test.describe('Tier 6: Auth UI with the Supabase client (Email + OTP)', () => {
     await page.getByTestId('auth-account-input').fill('resend@example.com');
     await page.getByTestId('auth-nickname-input').fill('倒计时测试');
     await page.getByTestId('auth-password-input').fill('pass123456');
+
+    const signupResponse = page.waitForResponse(
+      (res) => new URL(res.url()).pathname === '/auth/v1/signup' && res.request().method() === 'POST' && res.status() === 200,
+    );
     await page.getByTestId('auth-submit-btn').click();
+    await signupResponse;
+
+    await expect(page.getByTestId('auth-notice')).toContainText('验证码已发送至 resend@example.com');
+    await expect(page.getByTestId('auth-otp-expiry')).toContainText('5 分钟内有效');
+    await expect(sendBtn).toBeDisabled();
+    await expect(sendBtn).toHaveText(/^(58|59|60)秒后再次发送$/);
 
     await page.clock.fastForward(61_000);
     await expect(sendBtn).toBeEnabled();
@@ -212,8 +222,15 @@ test.describe('Tier 6: Auth UI with the Supabase client (Email + OTP)', () => {
     await page.getByTestId('auth-open-btn').click();
     await page.getByTestId('auth-login-method-otp').click();
     await page.getByTestId('auth-account-input').fill('resend@example.com');
+    const otpResponse = page.waitForResponse(
+      (res) => new URL(res.url()).pathname === '/auth/v1/otp' && res.request().method() === 'POST' && res.status() === 200,
+    );
     await sendBtn.click();
+    await otpResponse;
+    await expect(page.getByTestId('auth-notice')).toContainText('验证码已发送至 resend@example.com');
     await expect(page.getByTestId('auth-otp-expiry')).toContainText('5 分钟内有效');
+    await expect(sendBtn).toBeDisabled();
+    await expect(sendBtn).toHaveText(/^(58|59|60)秒后再次发送$/);
 
     await page.clock.fastForward(301_000);
     await expect(page.getByTestId('auth-otp-expiry')).toContainText('验证码已过期');
@@ -523,6 +540,45 @@ test.describe('Tier 6: Auth UI with the Supabase client (Email + OTP)', () => {
     await page.keyboard.press('Escape');
     await expect(modal).toBeHidden();
     await expect(page.getByTestId('auth-open-btn')).toBeFocused();
+  });
+
+  test('passes Light/Dark layout audit and mobile input sizing for AuthModal', async ({ page }) => {
+    const viewport = page.viewportSize();
+    await gotoRoute(page, 'hub');
+
+    for (const theme of ['light', 'dark'] as const) {
+      await page.getByTestId(`theme-option-${theme}`).click();
+      await expect(page.locator('html')).toHaveAttribute('data-theme', theme);
+
+      await page.getByTestId('auth-open-btn').click();
+      const modal = page.getByTestId('auth-modal');
+      await expect(modal).toBeVisible();
+      await page.getByTestId('auth-login-method-otp').click();
+      await assertFullLayoutAudit(page);
+
+      const closeRect = await page.getByTestId('auth-modal-close').boundingBox();
+      expect(closeRect?.width).toBeCloseTo(36, 0);
+      expect(closeRect?.height).toBeCloseTo(36, 0);
+
+      if (viewport && viewport.width < 768) {
+        const fontSizes = await page.evaluate(() => {
+          const selectors = [
+            '[data-testid="auth-account-input"]',
+            '[data-testid="auth-otp-input"]',
+          ];
+          return selectors.map((sel) => {
+            const el = document.querySelector(sel);
+            return el ? Number.parseFloat(window.getComputedStyle(el).fontSize) : 0;
+          });
+        });
+        for (const fs of fontSizes) {
+          expect(fs).toBeGreaterThanOrEqual(16);
+        }
+      }
+
+      await page.getByTestId('auth-modal-close').click();
+      await expect(modal).toBeHidden();
+    }
   });
 });
 
