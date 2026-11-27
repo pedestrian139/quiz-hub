@@ -16,6 +16,7 @@ import {
 } from '../../services/authService';
 import type { CurrentUser } from '../../services/authService';
 import { AuthIcon } from './AuthIcons';
+import { Icon } from '../ui/Icons';
 import { applyAuthResult, closeAuthModal, refreshAuthIdentity, setAuthModalMode, useAuthUiState } from './authState';
 import type { AuthModalMode } from './authState';
 import { clearOtpTiming, getOtpTiming, recordOtpSent } from './otpThrottle';
@@ -441,7 +442,7 @@ export function AuthModal({ open: controlledOpen, initialMode, onClose, onAuthSu
             onClick={close}
             disabled={busy}
           >
-            <AuthIcon name="x" size={18} />
+            <Icon name="x" size={18} />
           </button>
         </div>
 

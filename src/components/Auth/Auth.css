@@ -124,7 +124,7 @@
   background: var(--brand-solid);
   border-color: transparent;
   color: var(--on-solid);
-  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.12);
+  box-shadow: var(--apple-shadow-sm);
 }
 
 .auth-btn--primary:hover:not(:disabled) {
@@ -326,7 +326,7 @@
   position: fixed;
   inset: 0;
   z-index: 120;
-  background: var(--scrim-bg);
+  background: var(--apple-bg-scrim);
   backdrop-filter: var(--apple-glass-blur);
   -webkit-backdrop-filter: var(--apple-glass-blur);
   display: flex;
@@ -337,12 +337,12 @@
 
 .auth-modal {
   width: min(440px, 100%);
-  max-height: calc(100dvh - 32px);
-  background: var(--card);
-  color: var(--ink);
-  border: 1px solid var(--line-strong);
-  border-radius: var(--radius);
-  box-shadow: var(--shadow-modal);
+  max-height: calc(100dvh - 32px - env(safe-area-inset-top) - env(safe-area-inset-bottom));
+  background: var(--apple-bg-surface);
+  color: var(--apple-text-primary);
+  border: 1px solid var(--apple-border-default);
+  border-radius: var(--apple-radius-lg);
+  box-shadow: var(--apple-shadow-modal);
   display: flex;
   flex-direction: column;
   overflow: hidden;
@@ -353,9 +353,10 @@
   align-items: flex-start;
   justify-content: space-between;
   gap: 12px;
+  flex-shrink: 0;
   padding: 18px 20px 14px;
-  border-bottom: 1px solid var(--line);
-  background: var(--surface-subtle);
+  border-bottom: 1px solid var(--apple-border-subtle);
+  background: var(--apple-bg-surface);
 }
 
 .auth-modal__title-wrap {
@@ -366,7 +367,7 @@
   margin: 0;
   font-size: 17px;
   font-weight: 750;
-  color: var(--ink);
+  color: var(--apple-text-primary);
   display: flex;
   align-items: center;
   gap: 8px;
@@ -375,39 +376,46 @@
 .auth-modal__sub {
   margin: 4px 0 0;
   font-size: 12.5px;
-  color: var(--sub);
+  color: var(--apple-text-tertiary);
   line-height: 1.45;
 }
 
 .auth-modal__close {
-  width: 34px;
-  height: 34px;
-  border-radius: 10px;
-  border: 1px solid var(--line);
-  background: var(--surface-elevated);
-  color: var(--sub);
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
+  width: 36px;
+  height: 36px;
+  padding: 0;
+  border-radius: var(--apple-radius-pill);
+  border: 0;
+  background: var(--apple-bg-muted);
+  color: var(--apple-text-primary);
+  display: inline-grid;
+  place-items: center;
   flex-shrink: 0;
   cursor: pointer;
-  transition: background 0.15s ease, color 0.15s ease, border-color 0.15s ease;
+  transition: background 0.15s ease, color 0.15s ease, box-shadow 0.15s ease;
 }
 
-.auth-modal__close:hover {
-  background: var(--surface-hover);
-  color: var(--ink);
-  border-color: var(--line-strong);
+.auth-modal__close:hover:not(:disabled) {
+  background: var(--apple-bg-hover);
+  color: var(--apple-text-primary);
 }
 
 .auth-modal__close:focus-visible {
   outline: none;
-  box-shadow: 0 0 0 3px var(--ring-focus);
+  box-shadow: 0 0 0 3px var(--apple-focus-ring);
+}
+
+.auth-modal__close:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
 }
 
 .auth-modal__body {
+  flex: 1 1 auto;
+  min-height: 0;
   padding: 18px 20px 20px;
   overflow-y: auto;
+  overscroll-behavior: contain;
   display: flex;
   flex-direction: column;
   gap: 14px;
@@ -514,10 +522,10 @@ html[data-theme='dark'] .auth-tab.is-active {
   min-width: 0;
   height: 42px;
   padding: 0 12px;
-  border-radius: var(--radius-sm);
-  border: 1px solid var(--line-strong);
-  background: var(--surface-elevated);
-  color: var(--ink);
+  border-radius: var(--apple-radius-md);
+  border: 1px solid var(--apple-border-default);
+  background: var(--apple-bg-elevated);
+  color: var(--apple-text-primary);
   font-size: 14px;
   box-sizing: border-box;
   transition: border-color 0.15s ease, box-shadow 0.15s ease;
@@ -525,12 +533,12 @@ html[data-theme='dark'] .auth-tab.is-active {
 
 .auth-input:focus {
   outline: none;
-  border-color: var(--brand);
-  box-shadow: 0 0 0 3px var(--ring-focus);
+  border-color: var(--apple-accent);
+  box-shadow: 0 0 0 3px var(--apple-focus-ring);
 }
 
 .auth-input--error {
-  border-color: var(--bad);
+  border-color: var(--apple-bad);
 }
 
 .auth-password-group {
@@ -547,10 +555,10 @@ html[data-theme='dark'] .auth-tab.is-active {
   gap: 4px;
   height: 42px;
   padding: 0 11px;
-  border-radius: var(--radius-sm);
-  border: 1px solid var(--line-strong);
-  background: var(--surface-muted);
-  color: var(--ink-2);
+  border-radius: var(--apple-radius-md);
+  border: 1px solid var(--apple-border-default);
+  background: var(--apple-bg-subtle);
+  color: var(--apple-text-secondary);
   font-size: 12.5px;
   font-weight: 600;
   white-space: nowrap;
@@ -560,14 +568,14 @@ html[data-theme='dark'] .auth-tab.is-active {
 }
 
 .auth-password-toggle:hover {
-  border-color: var(--brand);
-  color: var(--brand-text);
-  background: var(--surface-hover);
+  border-color: var(--apple-accent-border);
+  color: var(--apple-accent-text);
+  background: var(--apple-bg-hover);
 }
 
 .auth-password-toggle:focus-visible {
   outline: none;
-  box-shadow: 0 0 0 3px var(--ring-focus);
+  box-shadow: 0 0 0 3px var(--apple-focus-ring);
 }
 
 .auth-field__hint {
@@ -599,25 +607,25 @@ html[data-theme='dark'] .auth-tab.is-active {
 .auth-submit {
   width: 100%;
   height: 42px;
-  border-radius: var(--radius-sm);
+  border-radius: var(--apple-radius-md);
   border: none;
-  background: var(--brand-solid);
+  background: var(--apple-accent-solid);
   color: var(--on-solid);
   font-size: 14px;
   font-weight: 700;
   cursor: pointer;
-  box-shadow: var(--shadow);
+  box-shadow: var(--apple-shadow-sm);
   transition: background 0.15s ease, transform 0.12s ease, opacity 0.15s ease;
 }
 
 .auth-submit:hover:not(:disabled) {
-  filter: brightness(1.05);
+  background: var(--apple-accent-solid-hover);
   transform: translateY(-0.5px);
 }
 
 .auth-submit:focus-visible {
   outline: none;
-  box-shadow: 0 0 0 3px var(--ring-focus);
+  box-shadow: 0 0 0 3px var(--apple-focus-ring);
 }
 
 .auth-submit:disabled {
@@ -713,6 +721,39 @@ html[data-theme='dark'] .auth-tab.is-active {
   box-shadow: 0 0 0 3px var(--ring-focus);
 }
 
+@media (max-width: 767px) {
+  .auth-modal-backdrop {
+    padding: max(12px, env(safe-area-inset-top)) max(12px, env(safe-area-inset-right))
+      max(12px, env(safe-area-inset-bottom)) max(12px, env(safe-area-inset-left));
+  }
+
+  .auth-modal {
+    max-height: calc(100dvh - 24px - env(safe-area-inset-top) - env(safe-area-inset-bottom));
+    border-radius: var(--apple-radius-lg);
+  }
+
+  .auth-modal__header {
+    padding: 15px 16px 12px;
+  }
+
+  .auth-modal__body {
+    padding: 15px 16px calc(18px + env(safe-area-inset-bottom));
+  }
+
+  .auth-input {
+    font-size: 16px;
+  }
+
+  .auth-otp-input {
+    letter-spacing: 0.08em;
+  }
+
+  .auth-otp-send-btn {
+    min-width: 112px;
+    padding: 0 10px;
+  }
+}
+
 @media (max-width: 640px) {
   .auth-bar__inner {
     padding: 7px 14px;
@@ -724,18 +765,6 @@ html[data-theme='dark'] .auth-tab.is-active {
 
   .auth-guest-pill__cta {
     display: none;
-  }
-
-  .auth-modal {
-    border-radius: 14px;
-  }
-
-  .auth-modal__header {
-    padding: 15px 16px 12px;
-  }
-
-  .auth-modal__body {
-    padding: 15px 16px 18px;
   }
 }
 
@@ -837,6 +866,8 @@ html[data-theme='dark'] .auth-tab.is-active {
 }
 
 .auth-otp-input {
+  flex: 1 1 auto;
+  min-width: 0;
   letter-spacing: 0.14em;
   font-variant-numeric: tabular-nums;
   font-weight: 650;
@@ -849,10 +880,10 @@ html[data-theme='dark'] .auth-tab.is-active {
   height: 42px;
   min-width: 124px;
   padding: 0 12px;
-  border-radius: var(--radius-sm);
-  border: 1px solid var(--brand-line);
-  background: var(--brand-2);
-  color: var(--brand-text);
+  border-radius: var(--apple-radius-md);
+  border: 1px solid var(--apple-accent-border);
+  background: var(--apple-accent-soft);
+  color: var(--apple-accent-text);
   font-size: 12.5px;
   font-weight: 650;
   font-variant-numeric: tabular-nums;
@@ -863,8 +894,8 @@ html[data-theme='dark'] .auth-tab.is-active {
 }
 
 .auth-otp-send-btn:hover:not(:disabled) {
-  border-color: var(--brand);
-  background: var(--surface-hover);
+  border-color: var(--apple-accent);
+  background: var(--apple-bg-hover);
 }
 
 .auth-otp-send-btn:disabled {

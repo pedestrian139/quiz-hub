@@ -543,7 +543,7 @@ export function ApiSettingsModal({ open, onClose, onSaved }: ApiSettingsModalPro
               onClose();
             }}
           >
-            <Icon name="x" size={16} />
+            <Icon name="x" size={18} />
           </button>
         </div>
 
@@ -958,7 +958,7 @@ export function ApiSettingsModal({ open, onClose, onSaved }: ApiSettingsModalPro
           <div className="api-modal__footer">
             <button
               type="button"
-              className="btn btn--ghost"
+              className="btn api-btn-clear"
               data-testid="api-btn-clear"
               disabled={busy}
               onClick={() => { void handleClear(); }}
@@ -969,7 +969,7 @@ export function ApiSettingsModal({ open, onClose, onSaved }: ApiSettingsModalPro
             <div className="api-modal__footer-group">
               <button
                 type="button"
-                className="btn btn--ghost"
+                className="btn btn--ghost api-btn-secondary"
                 data-testid="api-btn-test"
                 disabled={testing || busy}
                 onClick={handleTest}
@@ -978,7 +978,7 @@ export function ApiSettingsModal({ open, onClose, onSaved }: ApiSettingsModalPro
               </button>
               <button
                 type="submit"
-                className="btn btn--primary"
+                className="btn btn--primary api-btn-primary"
                 data-testid="api-btn-save"
                 disabled={busy}
               >

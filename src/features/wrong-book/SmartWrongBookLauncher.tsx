@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useId, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { useDialogFocus } from '../../components/Auth/useDialogFocus';
+import { Icon } from '../../components/ui/Icons';
 import { EnsureBankLibraryProvider, SmartWrongBook } from './SmartWrongBook';
 import { useWrongBook } from './useWrongBook';
 import './WrongBook.css';
@@ -113,7 +114,10 @@ function SmartWrongBookLauncherInner() {
       >
         <div className="wb-launcher-bar__inner">
           <div className="wb-launcher-bar__info">
-            <span className="wb-launcher-bar__badge" data-testid="wb-launcher-count">
+            <span
+              className={`wb-launcher-bar__badge${items.length > 0 ? ' is-attention' : ''}`}
+              data-testid="wb-launcher-count"
+            >
               {items.length > 0 ? `待巩固 ${items.length} 题` : '暂无错题'}
             </span>
             <span className="wb-launcher-bar__text">
@@ -127,7 +131,8 @@ function SmartWrongBookLauncherInner() {
               data-testid="wb-open-btn"
               onClick={handleOpen}
             >
-              智能错题本
+              <Icon name="bookX" size={15} />
+              <span>智能错题本</span>
             </button>
           </div>
         </div>

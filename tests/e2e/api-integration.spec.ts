@@ -1,5 +1,5 @@
 import { test, expect } from './helpers/fixtures';
-import { assertNoHorizontalOverflow, assertNoOverlappingControls } from './helpers/audit';
+import { assertFullLayoutAudit, assertNoHorizontalOverflow, assertNoOverlappingControls } from './helpers/audit';
 import { gotoRoute, modeCard, quizOption, selfCheckBtn } from './helpers/selectors';
 import { seedFixtureBank } from './helpers/fixtureBank';
 
@@ -186,5 +186,55 @@ test.describe('V2 API Integration (feat/api-integration)', () => {
     await page.evaluate(() => window.scrollTo({ top: 0, behavior: 'instant' }));
     await assertNoHorizontalOverflow(page);
     await assertNoOverlappingControls(page);
+  });
+
+  test('API-E2E-04: API Settings modal passes Light/Dark layout audit and mobile input sizing', async ({
+    page,
+  }) => {
+    const viewport = page.viewportSize();
+    await gotoRoute(page, 'hub');
+
+    for (const theme of ['light', 'dark'] as const) {
+      await page.getByTestId(`theme-option-${theme}`).click();
+      await expect(page.locator('html')).toHaveAttribute('data-theme', theme);
+
+      await page.getByTestId('btn-api-settings').click();
+      const modal = page.getByTestId('api-settings-modal');
+      await expect(modal).toBeVisible();
+      await assertFullLayoutAudit(page);
+
+      const closeRect = await page.getByTestId('api-settings-close').boundingBox();
+      expect(closeRect?.width).toBeCloseTo(36, 0);
+      expect(closeRect?.height).toBeCloseTo(36, 0);
+
+      await page.getByTestId('api-model-dropdown-toggle').click();
+      await expect(page.getByTestId('api-model-panel')).toBeVisible();
+      await assertNoHorizontalOverflow(page);
+
+      if (viewport && viewport.width < 768) {
+        const fontSizes = await page.evaluate(() => {
+          const selectors = [
+            '[data-testid="api-input-baseurl"]',
+            '[data-testid="api-input-key"]',
+            '[data-testid="api-input-model"]',
+            '[data-testid="api-model-search"]',
+          ];
+          return selectors.map((sel) => {
+            const el = document.querySelector(sel);
+            return el ? Number.parseFloat(window.getComputedStyle(el).fontSize) : 0;
+          });
+        });
+        for (const fs of fontSizes) {
+          expect(fs).toBeGreaterThanOrEqual(16);
+        }
+      }
+
+      await page.getByTestId('api-model-dropdown-toggle').click();
+      await page.getByTestId('api-toggle-advanced').click();
+      await assertNoHorizontalOverflow(page);
+
+      await page.getByTestId('api-settings-close').click();
+      await expect(modal).toBeHidden();
+    }
   });
 });
