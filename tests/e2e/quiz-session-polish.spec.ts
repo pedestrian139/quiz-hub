@@ -32,6 +32,7 @@ test.describe('QuizSession Shortcuts, Apple HIG Polish & Mobile Thumb Bar', () =
     await expect(hint).not.toContainText('Space');
     await expect(hint).not.toContainText('T/F');
 
+    await page.evaluate(() => window.scrollTo({ top: 0, behavior: 'instant' }));
     await assertFullLayoutAudit(page);
 
     // Choice: Enter before grading does not skip; '1' grades; Enter advances
@@ -70,6 +71,7 @@ test.describe('QuizSession Shortcuts, Apple HIG Polish & Mobile Thumb Bar', () =
     await page.keyboard.press('Enter');
     await expect(quizFeedback(page)).toBeVisible();
     await expect(quizProgressText(page)).toContainText('1 /');
+    await page.evaluate(() => window.scrollTo({ top: 0, behavior: 'instant' }));
     await assertFullLayoutAudit(page);
 
     await page.keyboard.press('Enter');
@@ -88,6 +90,7 @@ test.describe('QuizSession Shortcuts, Apple HIG Polish & Mobile Thumb Bar', () =
 
     await page.keyboard.press('1');
     await expect(quizFeedback(page)).toBeVisible();
+    await page.evaluate(() => window.scrollTo({ top: 0, behavior: 'instant' }));
     await assertFullLayoutAudit(page);
     await page.keyboard.press('Enter');
     await expect(quizProgressText(page)).toContainText('2 /');
@@ -110,6 +113,14 @@ test.describe('QuizSession Shortcuts, Apple HIG Polish & Mobile Thumb Bar', () =
     await expect(quizProgressText(page)).toContainText('1 /');
     await page.evaluate(() => window.scrollTo({ top: 0, behavior: 'instant' }));
     await assertFullLayoutAudit(page);
+
+    // Self-eval short answer: reveal -> click selfcheck-2 (focus stays on active button) -> Enter advances
+    await page.getByTestId('short-mode-self').click();
+    await btnRevealAnswer(page).click();
+    await page.getByTestId('selfcheck-2').click();
+    await expect(page.getByTestId('selfcheck-2')).toHaveClass(/is-active/);
+    await page.keyboard.press('Enter');
+    await expect(quizProgressText(page)).toContainText('2 /');
   });
 
   test('Mobile (390x844): sticky thumb bar, non-occlusion after scroll, >=16px textarea & light/dark audit', async ({

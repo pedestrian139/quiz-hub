@@ -303,6 +303,51 @@ describe('QuizSession Keyboard Shortcuts & Mobile Bar', () => {
     expect(container.querySelector('[data-testid="q-ref-answer"]')).toBeNull();
   });
 
+  it('Self-eval Enter advances when focused on active selfcheck button, while inactive selfcheck button lets Enter switch rating', () => {
+    renderSession([makeQuestions()[3]!, makeQuestions()[4]!]);
+    expect(container.querySelector('[data-testid="quiz-progress-text"]')?.textContent).toContain('1 / 2');
+
+    act(() => {
+      (container.querySelector('[data-testid="btn-reveal-answer"]') as HTMLButtonElement).click();
+    });
+
+    const sc2 = container.querySelector('[data-testid="selfcheck-2"]') as HTMLButtonElement;
+    const sc0 = container.querySelector('[data-testid="selfcheck-0"]') as HTMLButtonElement;
+    act(() => {
+      sc2.focus();
+      sc2.click();
+    });
+    expect(document.activeElement).toBe(sc2);
+    expect(sc2.classList.contains('is-active')).toBe(true);
+
+    // Focusing an inactive selfcheck button (sc0) lets Enter pass through to native button activation without skipping
+    act(() => {
+      sc0.focus();
+    });
+    expect(document.activeElement).toBe(sc0);
+    const switchEv = dispatchKey('Enter', {}, document.activeElement ?? window);
+    expect(switchEv.defaultPrevented).toBe(false);
+    expect(container.querySelector('[data-testid="quiz-progress-text"]')?.textContent).toContain('1 / 2');
+
+    // Simulate native button activation switching rating to sc0, then refocus active sc2 and press Enter to advance
+    act(() => {
+      sc0.click();
+    });
+    expect(sc0.classList.contains('is-active')).toBe(true);
+    expect(sc2.classList.contains('is-active')).toBe(false);
+
+    act(() => {
+      sc2.focus();
+      sc2.click();
+    });
+    expect(document.activeElement).toBe(sc2);
+    expect(sc2.classList.contains('is-active')).toBe(true);
+
+    const advanceEv = dispatchKey('Enter', {}, document.activeElement ?? window);
+    expect(advanceEv.defaultPrevented).toBe(true);
+    expect(container.querySelector('[data-testid="quiz-progress-text"]')?.textContent).toContain('2 / 2');
+  });
+
   it('isolates all shortcuts inside short-ai-textarea, input, contenteditable, and open modals', async () => {
     localStorage.setItem(
       WORKSPACE_PREFS_STORAGE_KEY,

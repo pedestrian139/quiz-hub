@@ -440,7 +440,18 @@ export function QuizSession({
       const isFocusedMultiOption = Boolean(
         hasClosest && q.type === 'multi' && !isGraded && target!.closest('.option-btn--multi'),
       );
-      if (e.key === 'Enter' && onInteractive && !isFocusedMultiOption) {
+      const isFocusedActiveSelfCheck = Boolean(
+        hasClosest &&
+          isGraded &&
+          !isObjectiveQuestion(q.type) &&
+          target!.closest('.selfcheck-btn.is-active'),
+      );
+      if (
+        e.key === 'Enter' &&
+        onInteractive &&
+        !isFocusedMultiOption &&
+        !isFocusedActiveSelfCheck
+      ) {
         return;
       }
 
