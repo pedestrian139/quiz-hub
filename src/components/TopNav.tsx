@@ -1,7 +1,7 @@
 import type { Route } from '../router/useHashRoute';
 import { ROUTE_HASH } from '../router/useHashRoute';
-import { Icon, type IconName } from './Icons';
-import { useTheme } from './useTheme';
+import { Icon, type IconName } from './ui/Icons';
+import { useTheme, type ThemePreference } from '../hooks/useTheme';
 import { ApiSettingsButton } from './ApiSettings';
 
 interface NavItem {
@@ -25,9 +25,18 @@ interface TopNavProps {
   onNavClick: (route: Route) => void;
 }
 
+const THEME_OPTIONS: Array<{
+  value: ThemePreference;
+  label: string;
+  icon: IconName;
+}> = [
+  { value: 'system', label: '跟随系统主题', icon: 'monitor' },
+  { value: 'light', label: '浅色主题', icon: 'sun' },
+  { value: 'dark', label: '深色主题', icon: 'moon' },
+];
+
 export function TopNav({ route, wrongCount, favCount, onNavClick }: TopNavProps) {
-  const { theme, toggleTheme } = useTheme();
-  const isDark = theme === 'dark';
+  const { theme, setTheme } = useTheme();
 
   const badgeFor = (r: Route): number =>
     r === 'wrong' ? wrongCount : r === 'fav' ? favCount : 0;
@@ -74,22 +83,30 @@ export function TopNav({ route, wrongCount, favCount, onNavClick }: TopNavProps)
 
         <ApiSettingsButton />
 
-        <button
-          type="button"
+        <div
+          className="theme-toggle theme-switcher"
+          role="group"
+          aria-label="主题模式切换"
           data-testid="theme-toggle"
-          className="theme-toggle"
-          aria-label={isDark ? '切换为浅色主题' : '切换为深色主题'}
-          aria-pressed={isDark ? 'true' : 'false'}
-          title={isDark ? '浅色主题' : '深色主题'}
-          onClick={toggleTheme}
         >
-          <span className="theme-toggle__icon theme-toggle__icon--sun" aria-hidden="true">
-            <Icon name="sun" size={17} />
-          </span>
-          <span className="theme-toggle__icon theme-toggle__icon--moon" aria-hidden="true">
-            <Icon name="moon" size={17} />
-          </span>
-        </button>
+          {THEME_OPTIONS.map((opt) => {
+            const active = theme === opt.value;
+            return (
+              <button
+                key={opt.value}
+                type="button"
+                data-testid={`theme-option-${opt.value}`}
+                className={`theme-switcher__btn${active ? ' is-active' : ''}`}
+                aria-label={opt.label}
+                aria-pressed={active ? 'true' : 'false'}
+                title={opt.label}
+                onClick={() => setTheme(opt.value)}
+              >
+                <Icon name={opt.icon} size={15} strokeWidth={1.75} />
+              </button>
+            );
+          })}
+        </div>
       </div>
     </header>
   );

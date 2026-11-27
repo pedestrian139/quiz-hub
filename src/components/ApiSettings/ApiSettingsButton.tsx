@@ -8,6 +8,7 @@ import {
   subscribeApiConfig,
   type ApiConfig,
 } from '../../services';
+import { Icon } from '../ui/Icons';
 import { ApiSettingsModal } from './ApiSettingsModal';
 import './ApiSettings.css';
 
@@ -45,19 +46,7 @@ export function ApiSettingsButton() {
       >
         <span className="api-nav-btn__dot" aria-hidden="true" />
         <span className="api-nav-btn__icon" aria-hidden="true">
-          <svg
-            width="15"
-            height="15"
-            viewBox="0 0 24 24"
-            fill="none"
-            stroke="currentColor"
-            strokeWidth="2"
-            strokeLinecap="round"
-            strokeLinejoin="round"
-          >
-            <path d="M12 3.5 13.6 8.4 18.5 10l-4.9 1.6L12 16.5l-1.6-4.9L5.5 10l4.9-1.6Z" />
-            <path d="M19 15.5l.7 1.8 1.8.7-1.8.7-.7 1.8-.7-1.8-1.8-.7 1.8-.7Z" />
-          </svg>
+          <Icon name="sparkles" size={15} />
         </span>
         <span>API 设置</span>
       </button>

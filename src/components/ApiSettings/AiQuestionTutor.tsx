@@ -976,7 +976,7 @@ export function AiQuestionTutor(props: AiQuestionTutorProps) {
           onClick={() => void tutor.runExplain(false)}
         >
           <Icon name="sparkles" size={14} />
-          <span>✨ AI 深度解析</span>
+          <span>AI 深度解析</span>
         </button>
       </div>
 

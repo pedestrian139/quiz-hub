@@ -32,7 +32,7 @@
 .api-nav-btn:hover {
   background: var(--surface-hover);
   border-color: var(--brand);
-  color: var(--brand);
+  color: var(--brand-text);
 }
 
 .api-nav-btn:focus-visible {
@@ -44,7 +44,7 @@
 .api-nav-btn--ready {
   border-color: var(--brand-line);
   background: var(--brand-2);
-  color: var(--brand);
+  color: var(--brand-text);
 }
 
 .api-nav-btn__dot {
@@ -90,9 +90,9 @@
   position: fixed;
   inset: 0;
   z-index: 120;
-  background: rgba(10, 18, 34, 0.56);
-  backdrop-filter: blur(5px);
-  -webkit-backdrop-filter: blur(5px);
+  background: var(--scrim-bg);
+  backdrop-filter: var(--apple-glass-blur);
+  -webkit-backdrop-filter: var(--apple-glass-blur);
   display: flex;
   align-items: center;
   justify-content: center;
@@ -245,14 +245,14 @@
 
 .api-preset-chip:hover {
   border-color: var(--brand);
-  color: var(--brand);
+  color: var(--brand-text);
   background: var(--surface-hover);
 }
 
 .api-preset-chip.is-active {
   background: var(--brand-2);
   border-color: var(--brand);
-  color: var(--brand);
+  color: var(--brand-text);
 }
 
 .api-input-row {
@@ -284,7 +284,7 @@
 }
 
 .api-input--mono {
-  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-family: var(--apple-font-mono);
   font-size: 13px;
 }
 
@@ -305,7 +305,7 @@
 
 .api-btn-inline:hover:not(:disabled) {
   border-color: var(--brand);
-  color: var(--brand);
+  color: var(--brand-text);
   background: var(--surface-hover);
 }
 
@@ -345,7 +345,7 @@
 .api-fetch-btn:hover:not(:disabled) {
   border-color: var(--brand);
   background: var(--surface-hover);
-  color: var(--brand);
+  color: var(--brand-text);
 }
 
 .api-fetch-btn:focus-visible {
@@ -421,7 +421,7 @@
   border-radius: var(--radius-sm);
   border: 1px solid var(--bad-line);
   background: var(--bad-bg);
-  color: var(--bad);
+  color: var(--bad-text);
   font-size: 12px;
   line-height: 1.45;
 }
@@ -528,7 +528,7 @@
 .api-model-option__id {
   font-size: 11.5px;
   color: var(--sub);
-  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-family: var(--apple-font-mono);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -542,7 +542,7 @@
 
 .api-model-option.is-active .api-model-option__name,
 .api-model-option.is-active .api-model-option__id--solo {
-  color: var(--brand);
+  color: var(--brand-text);
 }
 
 .api-model-option__badges {
@@ -564,7 +564,7 @@
 
 .api-model-badge--ctx {
   background: var(--brand-2);
-  color: var(--brand);
+  color: var(--brand-text);
   border: 1px solid var(--brand-line);
 }
 
@@ -651,7 +651,7 @@
 .api-storage-panel__status {
   font-size: 12px;
   font-weight: 650;
-  color: var(--brand);
+  color: var(--brand-text);
   line-height: 1.45;
   overflow-wrap: anywhere;
 }
@@ -675,7 +675,7 @@
 .api-banner--bad {
   border-color: var(--bad-line);
   background: var(--bad-bg);
-  color: var(--bad);
+  color: var(--bad-text);
 }
 
 .api-banner--info {
@@ -729,14 +729,14 @@
 
 .ai-tutor-btn:hover:not(:disabled) {
   border-color: var(--brand);
-  color: var(--brand);
+  color: var(--brand-text);
   background: var(--surface-hover);
 }
 
 .ai-tutor-btn--accent {
   border-color: var(--purple-line);
   background: var(--purple-bg);
-  color: var(--purple);
+  color: var(--purple-text);
 }
 
 .ai-tutor-btn--accent:hover:not(:disabled) {
@@ -747,7 +747,7 @@
 .ai-tutor-btn.is-active {
   border-color: var(--brand);
   background: var(--brand-2);
-  color: var(--brand);
+  color: var(--brand-text);
 }
 
 .ai-tutor-btn:disabled {
@@ -767,7 +767,7 @@
   border: none;
   background: transparent;
   padding: 2px 4px;
-  color: var(--brand);
+  color: var(--brand-text);
   font-size: 12px;
   font-weight: 600;
   cursor: pointer;
@@ -822,7 +822,7 @@
 
 .ai-tutor-mini-btn:hover:not(:disabled) {
   border-color: var(--brand);
-  color: var(--brand);
+  color: var(--brand-text);
 }
 
 .ai-tutor-markdown {
@@ -856,7 +856,7 @@
   border-radius: 5px;
   background: var(--surface-muted);
   border: 1px solid var(--line);
-  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-family: var(--apple-font-mono);
   font-size: 12.5px;
 }
 
@@ -921,7 +921,7 @@
 
 .ai-grade-score--bad {
   background: var(--bad-bg);
-  color: var(--bad);
+  color: var(--bad-text);
   border: 1px solid var(--bad-line);
 }
 

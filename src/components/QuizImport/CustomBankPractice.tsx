@@ -29,6 +29,7 @@ import type {
 } from '../../types/quiz';
 import { buildBankViewModel } from '../../utils/bankCatalog';
 import type { BankRecord } from '../../utils/quizImportTypes';
+import { Icon } from '../ui/Icons';
 
 interface CustomBankPracticeProps {
   bank: BankRecord;
@@ -207,7 +208,17 @@ export function CustomBankPractice({
             className={`qi-btn qi-btn--sm${isFav ? ' qi-btn--warn' : ''}`}
             onClick={() => onUpdateStore((prev) => toggleFavorite(prev, q.id))}
           >
-            {isFav ? '已收藏 ★' : '收藏 ☆'}
+            {isFav ? (
+              <>
+                <Icon name="starFill" size={14} />
+                <span>已收藏</span>
+              </>
+            ) : (
+              <>
+                <Icon name="star" size={14} />
+                <span>收藏</span>
+              </>
+            )}
           </button>
         </div>
 

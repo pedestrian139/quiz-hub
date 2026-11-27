@@ -218,13 +218,13 @@
 
 .sheet-filter-btn:hover {
   border-color: var(--brand);
-  color: var(--brand);
+  color: var(--brand-text);
 }
 
 .sheet-filter-btn.is-active {
   border-color: var(--brand);
   background: var(--brand-2);
-  color: var(--brand);
+  color: var(--brand-text);
 }
 
 .sheet-btn.is-fav {
@@ -296,7 +296,7 @@
   border-radius: 999px;
   border: 1px solid var(--brand-line);
   background: var(--brand-2);
-  color: var(--brand);
+  color: var(--brand-text);
   font-size: 12.5px;
   font-weight: 650;
   text-align: left;
@@ -350,9 +350,9 @@
 
 .short-mode-btn.is-active {
   background: var(--card);
-  color: var(--brand);
+  color: var(--brand-text);
   border-color: var(--brand-line);
-  box-shadow: 0 1px 3px rgba(15, 23, 42, 0.08);
+  box-shadow: var(--shadow);
 }
 
 .short-ai-panel {
@@ -432,7 +432,7 @@
 .short-ai-banner--bad {
   background: var(--bad-bg);
   border-color: var(--bad-line);
-  color: var(--bad);
+  color: var(--bad-text);
 }
 
 .short-ai-banner__msg {

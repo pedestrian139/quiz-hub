@@ -436,7 +436,8 @@ function QuestionListView({
                     className="btn btn--ghost btn--sm"
                     onClick={() => toggleExpand(q.id)}
                   >
-                    {expanded ? '收起答案与解析 ▲' : '查看答案与解析 ▼'}
+                    <span>{expanded ? '收起答案与解析' : '查看答案与解析'}</span>
+                    <Icon name={expanded ? 'chevronUp' : 'chevronDown'} size={14} />
                   </button>
                 </div>
 
