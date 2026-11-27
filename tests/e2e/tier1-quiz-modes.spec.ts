@@ -422,26 +422,26 @@ test.describe('Tier 1: Quiz Session, Modes, Answer Sheet & Result (UF07-UF15)', 
     await expect(quizFeedback(page)).toContainText('正确答案');
   });
 
-  test('T1-055 [UF11] Keyboard T selects 正确 on tf question', async ({
+  test('T1-055 [UF11] Keyboard 1 selects 正确 on tf question', async ({
     page,
   }, testInfo) => {
     onlyDesktop(testInfo);
     await seedFixtureBank(page, FIXTURE_BANK, makeEmptyStore(), { targetHashRoute: '#/quiz' });
     await selectQuizFilters(page, { count: 10 });
     await modeCard(page, 'tf').click();
-    await page.keyboard.press('T');
+    await page.keyboard.press('1');
     await expect(quizFeedback(page)).toContainText(/回答正确|回答错误/);
     await expect(tfBtn(page, true)).toBeDisabled();
   });
 
-  test('T1-056 [UF11] Keyboard F selects 错误 on tf question', async ({
+  test('T1-056 [UF11] Keyboard 0 selects 错误 on tf question', async ({
     page,
   }, testInfo) => {
     onlyDesktop(testInfo);
     await seedFixtureBank(page, FIXTURE_BANK, makeEmptyStore(), { targetHashRoute: '#/quiz' });
     await selectQuizFilters(page, { count: 10 });
     await modeCard(page, 'tf').click();
-    await page.keyboard.press('F');
+    await page.keyboard.press('0');
     await expect(quizFeedback(page)).toContainText(/回答正确|回答错误/);
     await expect(tfBtn(page, false)).toBeDisabled();
   });

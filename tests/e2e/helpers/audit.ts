@@ -149,8 +149,31 @@ export async function assertNoOverlappingControls(
         .replace(/\s+/g, ' ')
         .trim()
         .slice(0, 32);
+
+      let inFixedOrSticky = false;
+      let fixedDockTop: number | null = null;
+      let cur: Element | null = el;
+      while (cur && cur !== document.documentElement) {
+        const cst = window.getComputedStyle(cur);
+        if (cst.position === 'fixed' || cst.position === 'sticky') {
+          inFixedOrSticky = true;
+          if (cst.position === 'fixed' || cst.position === 'sticky') {
+            const cRect = cur.getBoundingClientRect();
+            if (
+              cRect.bottom >= window.innerHeight - 4 &&
+              cRect.height < window.innerHeight * 0.35
+            ) {
+              fixedDockTop = cRect.top;
+            }
+          }
+        }
+        cur = cur.parentElement;
+      }
+
       return {
         el,
+        inFixedOrSticky,
+        fixedDockTop,
         rect: {
           left: rect.left,
           top: rect.top,
@@ -161,6 +184,7 @@ export async function assertNoOverlappingControls(
       };
     });
 
+    const maxScrollY = Math.max(0, document.documentElement.scrollHeight - window.innerHeight);
     const found: string[] = [];
     for (let i = 0; i < items.length; i++) {
       for (let j = i + 1; j < items.length; j++) {
@@ -172,6 +196,19 @@ export async function assertNoOverlappingControls(
         const ixW = Math.min(a.rect.right, b.rect.right) - Math.max(a.rect.left, b.rect.left);
         const ixH = Math.min(a.rect.bottom, b.rect.bottom) - Math.max(a.rect.top, b.rect.top);
         if (ixW > tol && ixH > tol) {
+          const dockTop =
+            a.fixedDockTop !== null && !b.inFixedOrSticky
+              ? a.fixedDockTop
+              : b.fixedDockTop !== null && !a.inFixedOrSticky
+                ? b.fixedDockTop
+                : null;
+          if (dockTop !== null) {
+            const flowItem = a.fixedDockTop !== null ? b : a;
+            const flowDocBottom = flowItem.rect.bottom + window.scrollY;
+            if (flowDocBottom - maxScrollY <= dockTop + tol) {
+              continue;
+            }
+          }
           found.push(
             `${a.desc} [${a.rect.left.toFixed(1)},${a.rect.top.toFixed(1)},${a.rect.right.toFixed(1)},${a.rect.bottom.toFixed(1)}] overlaps ${b.desc} [${b.rect.left.toFixed(1)},${b.rect.top.toFixed(1)},${b.rect.right.toFixed(1)},${b.rect.bottom.toFixed(1)}] by ${ixW.toFixed(1)}x${ixH.toFixed(1)}px`,
           );

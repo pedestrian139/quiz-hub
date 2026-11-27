@@ -197,7 +197,7 @@ test.describe('Tier 2: Subjective, Nav, Sheet, Result, Storage & Responsive Boun
     await expect(page.locator('body')).not.toContainText('undefined');
   });
 
-  test('T2-061 [UF12] Pressing Space after reveal keeps reference answer visible', async ({
+  test('T2-061 [UF12] Space does not reveal short answer; button reveal keeps reference answer visible', async ({
     page,
   }, testInfo) => {
     onlyDesktop(testInfo);
@@ -205,6 +205,8 @@ test.describe('Tier 2: Subjective, Nav, Sheet, Result, Storage & Responsive Boun
     await selectQuizFilters(page, { count: 10 });
     await modeCard(page, 'short').click();
     await page.keyboard.press('Space');
+    await expect(qRefAnswer(page)).toBeHidden();
+    await btnRevealAnswer(page).click();
     await expect(qRefAnswer(page)).toBeVisible();
     await page.keyboard.press('Space');
     await expect(qRefAnswer(page)).toBeVisible();
