@@ -1,4 +1,4 @@
-import { useMemo, useRef, type ChangeEvent, type KeyboardEvent } from 'react';
+import { useEffect, useMemo, useRef, useState, type ChangeEvent } from 'react';
 import type { HomeStats, QuestionOrigin, QuestionType, UserStore } from '../types/quiz';
 import { getOriginLabel } from '../core/questionUtils';
 import { buildQueue, computeModeStats } from '../core/quizEngine';
@@ -7,7 +7,7 @@ import type { BankViewModel } from '../utils/bankCatalog';
 import type { ImportModalTab } from '../utils/BankLibraryContext';
 import type { BankRecord } from '../utils/quizImportTypes';
 import type { Route } from '../router/useHashRoute';
-import { Icon, type IconName } from '../components/Icons';
+import { Icon, type IconName } from '../components/ui/Icons';
 import type { CountOption, FilterState, Notify } from './quizTypes';
 import { safeAlert, safeConfirm } from './quizTypes';
 
@@ -66,14 +66,16 @@ const MODE_CARDS: ModeCardDef[] = [
   },
 ];
 
+export type QuizHomeFilters = Omit<FilterState, 'search'>;
+
 interface QuizHomeProps {
   viewModel: BankViewModel;
   banks: BankRecord[];
   activeBankId: string;
   store: UserStore;
   stats: HomeStats;
-  filters: FilterState;
-  onChangeFilters: (next: FilterState) => void;
+  filters: QuizHomeFilters;
+  onChangeFilters: (next: QuizHomeFilters) => void;
   onSwitchBank: (bankId: string) => void;
   onOpenImport: (tab?: ImportModalTab) => void;
   onStartMode: (mode: 'all' | QuestionType, matchingCount: number) => void;
@@ -100,18 +102,33 @@ export function QuizHome({
   notify,
 }: QuizHomeProps) {
   const fileInputRef = useRef<HTMLInputElement | null>(null);
-  const searchInputRef = useRef<HTMLInputElement | null>(null);
+  const progressMenuRef = useRef<HTMLDivElement>(null);
+  const progressMenuTrigger = useRef<HTMLButtonElement>(null);
+  const [progressMenuOpen, setProgressMenuOpen] = useState(false);
+
+  useEffect(() => {
+    if (!progressMenuOpen) return;
+    function closeOutside(event: PointerEvent) {
+      if (event.target instanceof Node && !progressMenuRef.current?.contains(event.target)) {
+        setProgressMenuOpen(false);
+      }
+    }
+    document.addEventListener('pointerdown', closeOutside);
+    return () => document.removeEventListener('pointerdown', closeOutside);
+  }, [progressMenuOpen]);
+
+  function closeProgressMenu() {
+    setProgressMenuOpen(false);
+    progressMenuTrigger.current?.focus({ preventScroll: true });
+  }
 
   const { bank, questions, chapters, allChapterIds, counts } = viewModel;
   const selectedChapterSet = useMemo(() => new Set(filters.chapters), [filters.chapters]);
   const allChaptersSelected =
     chapters.length > 0 && filters.chapters.length === chapters.length;
-  const searchQuery = filters.search ?? '';
-  const hasSearch = searchQuery.trim().length > 0;
 
   const matchingCounts = useMemo(() => {
     const origins = filters.origin === 'all' ? undefined : [filters.origin];
-    const search = searchQuery.trim() || undefined;
     const result: Record<'all' | QuestionType, number> = {
       all: 0,
       choice: 0,
@@ -125,13 +142,12 @@ export function QuizHome({
         mode: def.mode,
         chapters: filters.chapters,
         origins,
-        search,
         count: 0,
         order: 'seq',
       }).length;
     }
     return result;
-  }, [filters.chapters, filters.origin, questions, searchQuery]);
+  }, [filters.chapters, filters.origin, questions]);
 
   const modeStatsMap = useMemo(() => {
     return {
@@ -174,31 +190,12 @@ export function QuizHome({
   const handleModeClick = (mode: 'all' | QuestionType) => {
     const count = matchingCounts[mode];
     if (count <= 0) {
-      const msg = hasSearch
-        ? `当前章节、来源与关键词“${searchQuery.trim()}”组合下暂无该题型题目，请调整筛选条件或清除关键词。`
-        : '当前章节与题目来源筛选组合下暂无该题型题目，请调整筛选条件。';
+      const msg = '当前章节与题目来源筛选组合下暂无该题型题目，请调整筛选条件。';
       notify(msg, 'info');
       safeAlert(msg);
       return;
     }
     onStartMode(mode, count);
-  };
-
-  const handleSearchChange = (e: ChangeEvent<HTMLInputElement>) => {
-    onChangeFilters({ ...filters, search: e.target.value });
-  };
-
-  const handleSearchClear = () => {
-    onChangeFilters({ ...filters, search: '' });
-    searchInputRef.current?.focus();
-  };
-
-  const handleSearchKeyDown = (e: KeyboardEvent<HTMLInputElement>) => {
-    e.stopPropagation();
-    if (e.key === 'Escape' && searchQuery.length > 0) {
-      e.preventDefault();
-      handleSearchClear();
-    }
   };
 
   const handleExport = () => {
@@ -337,7 +334,7 @@ export function QuizHome({
           <span className="section-head__hint">
             当前筛选范围：
             {allChaptersSelected ? `全部 ${chapters.length} 章` : `已选 ${filters.chapters.length} 章`}
-            {hasSearch ? ` · 关键词“${searchQuery.trim()}”` : ''} · 匹配{' '}
+            {' · 匹配 '}
             <strong>{matchingCounts.all}</strong> 题
           </span>
         </div>
@@ -387,53 +384,66 @@ export function QuizHome({
         </div>
       </section>
 
-      <section className="filter-panel" aria-label="出题筛选与数据管理">
-        <div className="filter-group filter-group--search">
-          <div className="filter-group__head">
-            <label className="filter-group__label" htmlFor="filter-search-input">
-              关键词检索
-            </label>
-            <span className="filter-group__meta" aria-live="polite">
-              {hasSearch ? (
-                <>
-                  命中 <strong>{matchingCounts.all}</strong> 题
-                </>
-              ) : (
-                '匹配题干、选项、解析与标签'
-              )}
-            </span>
-          </div>
-          <div className={`search-field${hasSearch ? ' has-value' : ''}`}>
-            <span className="search-field__icon" aria-hidden="true">
-              <Icon name="search" size={17} />
-            </span>
-            <input
-              ref={searchInputRef}
-              id="filter-search-input"
-              data-testid="filter-search"
-              type="search"
-              inputMode="search"
-              enterKeyHint="search"
-              autoComplete="off"
-              spellCheck={false}
-              className="search-field__input"
-              placeholder="搜索题干、选项或解析关键词…"
-              value={searchQuery}
-              onChange={handleSearchChange}
-              onKeyDown={handleSearchKeyDown}
-            />
-            {searchQuery.length > 0 && (
+      <section className="filter-panel quiz-controls" aria-labelledby="quiz-controls-title">
+        <div className="quiz-controls__head">
+          <h2 id="quiz-controls-title">出题设置</h2>
+          <div
+            ref={progressMenuRef}
+            className="quiz-controls__menu"
+            onKeyDown={(event) => {
+              if (progressMenuOpen && event.key === 'Escape') {
+                event.preventDefault();
+                closeProgressMenu();
+              }
+            }}
+          >
+            <button
+              ref={progressMenuTrigger}
+              type="button"
+              className="quiz-controls__more"
+              data-testid="progress-menu-trigger"
+              aria-label="更多进度操作"
+              aria-expanded={progressMenuOpen}
+              aria-controls="quiz-progress-actions"
+              onClick={(event) => {
+                event.currentTarget.focus({ preventScroll: true });
+                setProgressMenuOpen((open) => !open);
+              }}
+            >
+              <Icon name="moreHorizontal" size={21} />
+            </button>
+            <div className="quiz-controls__actions" id="quiz-progress-actions" hidden={!progressMenuOpen}>
               <button
                 type="button"
-                data-testid="filter-search-clear"
-                className="search-field__clear"
-                aria-label="清除搜索关键词"
-                title="清除关键词（Esc）"
-                onClick={handleSearchClear}
+                data-testid="btn-export-json"
+                onClick={() => { closeProgressMenu(); handleExport(); }}
               >
-                <Icon name="x" size={16} />
+                <Icon name="download" size={16} />导出进度
               </button>
-            )}
+              <button
+                type="button"
+                data-testid="btn-import-json"
+                onClick={() => { closeProgressMenu(); fileInputRef.current?.click(); }}
+              >
+                <Icon name="upload" size={16} />导入进度
+              </button>
+              <button
+                type="button"
+                data-testid="btn-reset-store"
+                className="quiz-controls__danger"
+                onClick={() => { closeProgressMenu(); handleReset(); }}
+              >
+                <Icon name="trash" size={16} />清空记录
+              </button>
+            </div>
+            <input
+              ref={fileInputRef}
+              data-testid="input-import-file"
+              type="file"
+              accept="application/json,.json"
+              hidden
+              onChange={handleFileChange}
+            />
           </div>
         </div>
 
@@ -562,40 +572,6 @@ export function QuizHome({
             </button>
           </div>
 
-          <div className="utility-bar__group">
-            <button
-              type="button"
-              data-testid="btn-export-json"
-              className="btn btn--ghost"
-              onClick={handleExport}
-            >
-              <Icon name="download" size={16} />导出进度
-            </button>
-            <button
-              type="button"
-              data-testid="btn-import-json"
-              className="btn btn--ghost"
-              onClick={() => fileInputRef.current?.click()}
-            >
-              <Icon name="upload" size={16} />导入进度
-            </button>
-            <input
-              ref={fileInputRef}
-              data-testid="input-import-file"
-              type="file"
-              accept="application/json,.json"
-              style={{ display: 'none' }}
-              onChange={handleFileChange}
-            />
-            <button
-              type="button"
-              data-testid="btn-reset-store"
-              className="btn btn--danger-outline"
-              onClick={handleReset}
-            >
-              <Icon name="trash" size={16} />清空记录
-            </button>
-          </div>
         </div>
       </section>
     </div>

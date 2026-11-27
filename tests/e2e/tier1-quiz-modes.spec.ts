@@ -218,8 +218,9 @@ test.describe('Tier 1: Quiz Session, Modes, Answer Sheet & Result (UF07-UF15)', 
     );
     if (!question) throw new Error('Expected a choice question with four options');
     await seedFixtureBank(page, FIXTURE_BANK, makeEmptyStore(), { targetHashRoute: '#/quiz' });
-    await page.getByTestId('filter-search').fill(question.stem);
-    await modeCard(page, 'choice').click();
+    await page.getByTestId('global-search-trigger').click();
+    await page.getByRole('searchbox', { name: '搜索当前题库' }).fill(question.stem);
+    await page.getByTestId(`spotlight-result-${question.id}`).getByRole('button', { name: '刷这题' }).click();
     await expect(qStem(page)).toContainText(question.stem);
     for (let i = 0; i < 4; i++) {
       await expect(quizOption(page, i)).toBeVisible();

@@ -19,11 +19,11 @@ import {
 } from './helpers/fixtureBank.ts';
 import {
   answerCurrentQuestion,
-  btnExportJson,
+  exportProgress,
   btnNext,
   btnPrev,
   btnQuizChapter,
-  btnResetStore,
+  resetProgress,
   btnResultHome,
   btnRetryMore,
   btnRetryWrong,
@@ -281,9 +281,9 @@ test.describe('Tier 3: Cross-Feature Pairwise Interactions (T3-001..T3-024)', ()
     );
     await seedFixtureBank(page, FIXTURE_BANK, store, { targetHashRoute: '#/quiz' });
 
-    const exported = await captureJsonExport(page, () => btnExportJson(page).click());
+    const exported = await captureJsonExport(page, () => exportProgress(page));
     page.once('dialog', (d) => d.accept());
-    await btnResetStore(page).click();
+    await resetProgress(page);
     const dialogBtn = page
       .getByRole('dialog')
       .getByRole('button', { name: /确认|确定|清空/ });
@@ -470,7 +470,7 @@ test.describe('Tier 3: Cross-Feature Pairwise Interactions (T3-001..T3-024)', ()
     await seedFixtureBank(page, FIXTURE_BANK, store, { targetHashRoute: '#/quiz' });
 
     await expect(statCard(page, 'wrong')).toContainText('2');
-    const exported = await captureJsonExport(page, () => btnExportJson(page).click());
+    const exported = await captureJsonExport(page, () => exportProgress(page));
     expect(exported.parsed).toBeTruthy();
 
     await navLink(page, 'wrong').click();
@@ -622,10 +622,10 @@ test.describe('Tier 3: Cross-Feature Pairwise Interactions (T3-001..T3-024)', ()
       FIXTURE_BANK,
     );
     await seedFixtureBank(page, FIXTURE_BANK, store, { targetHashRoute: '#/quiz' });
-    const exported = await captureJsonExport(page, () => btnExportJson(page).click());
+    const exported = await captureJsonExport(page, () => exportProgress(page));
 
     page.once('dialog', (d) => d.accept());
-    await btnResetStore(page).click();
+    await resetProgress(page);
     const dialogBtn = page
       .getByRole('dialog')
       .getByRole('button', { name: /确认|确定|清空/ });

@@ -29,18 +29,19 @@ import {
 import { NOTES, SECTION_COUNT, TYPE_NAME } from './data/catalog';
 import { useBankLibraryContext } from './utils/BankLibraryContext';
 import { TopNav } from './components/TopNav';
+import { SpotlightSearchModal } from './components/Search/SpotlightSearchModal';
+import { useSpotlightShortcut } from './components/Search/useSpotlightShortcut';
 import { QuizImportPortal } from './components/QuizImport';
 import { UserMenu } from './components/Auth';
 import { Icon } from './components/Icons';
 import { RichContent } from './components/RichContent';
 import { useHashRoute, type Route } from './router/useHashRoute';
 import { HubPage } from './pages/HubPage';
-import { QuizHome } from './pages/QuizHome';
+import { QuizHome, type QuizHomeFilters } from './pages/QuizHome';
 import { QuizSession } from './pages/QuizSession';
 import {
   safeAlert,
   safeConfirm,
-  type FilterState,
   type QuizActions,
   type QuizView,
   type ResultSpec,
@@ -853,15 +854,18 @@ export default function App() {
   const activeStoreApi = library.storeApiFor(library.activeBankId);
   const { questions, chapterById, allChapterIds } = viewModel;
 
-  const [filters, setFilters] = useState<FilterState>(() => ({
+  const [filters, setFilters] = useState<QuizHomeFilters>(() => ({
     chapters: [...allChapterIds],
     origin: 'all',
     count: 20,
     order: 'random',
-    search: '',
   }));
   const [quizView, setQuizView] = useState<QuizView>({ type: 'home' });
+  const [searchOpen, setSearchOpen] = useState(false);
   const [toast, setToast] = useState<{ message: string; tone: ToastTone } | null>(null);
+  const openSearch = useCallback(() => setSearchOpen(true), []);
+  const closeSearch = useCallback(() => setSearchOpen(false), []);
+  useSpotlightShortcut(searchOpen, openSearch, closeSearch);
 
   const sessionSeqRef = useRef(1);
   const toastTimerRef = useRef<number | null>(null);
@@ -882,7 +886,6 @@ export default function App() {
         ...prev,
         chapters: [...allChapterIds],
         origin: 'all',
-        search: '',
       }));
       setQuizView({ type: 'home' });
       return;
@@ -1015,7 +1018,6 @@ export default function App() {
   const handleStartMode = useCallback(
     (mode: 'all' | QuestionType) => {
       const title = mode === 'all' ? '总体刷题' : TYPE_NAME[mode];
-      const search = filters.search.trim() || undefined;
       startSessionWithConfig({
         kind: 'mode',
         title,
@@ -1023,7 +1025,6 @@ export default function App() {
           mode,
           chapters: filters.chapters,
           origins: filters.origin === 'all' ? undefined : [filters.origin],
-          search,
           count: filters.count,
           order: filters.order,
         },
@@ -1031,6 +1032,15 @@ export default function App() {
     },
     [filters, startSessionWithConfig],
   );
+
+  const handleStartSearchPractice = useCallback((ids: string[]) => {
+    closeSearch();
+    startSessionWithConfig({
+      kind: 'review',
+      title: '专项刷题',
+      opts: { mode: 'all', chapters: allChapterIds, onlyIds: ids, count: 0, order: 'seq' },
+    });
+  }, [allChapterIds, closeSearch, startSessionWithConfig]);
 
   const handleNavClick = useCallback(
     (target: Route) => {
@@ -1052,7 +1062,6 @@ export default function App() {
         ...prev,
         chapters: validChapter,
         origin: 'all',
-        search: '',
       }));
       setQuizView({ type: 'home' });
       navigate('quiz');
@@ -1076,10 +1085,22 @@ export default function App() {
           wrongCount={homeStats.wrongCount}
           favCount={homeStats.favCount}
           onNavClick={handleNavClick}
+          searchOpen={searchOpen}
+          onOpenSearch={openSearch}
         />
         <UserMenu />
       </div>
       <QuizImportPortal />
+      {searchOpen && (
+        <SpotlightSearchModal
+          key={library.activeBankId}
+          questions={questions}
+          chapterById={chapterById}
+          bankName={library.activeBank.name}
+          onClose={closeSearch}
+          onStart={handleStartSearchPractice}
+        />
+      )}
 
       {toast && (
         <div
