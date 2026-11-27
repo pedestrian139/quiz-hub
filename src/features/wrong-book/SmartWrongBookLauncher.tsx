@@ -1,11 +1,11 @@
 import { useCallback, useEffect, useId, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { useDialogFocus } from '../../components/Auth/useDialogFocus';
-import { SmartWrongBook } from './SmartWrongBook';
+import { EnsureBankLibraryProvider, SmartWrongBook } from './SmartWrongBook';
 import { useWrongBook } from './useWrongBook';
 import './WrongBook.css';
 
-export function SmartWrongBookLauncher() {
+function SmartWrongBookLauncherInner() {
   const { items, refresh } = useWrongBook();
   const [open, setOpen] = useState(false);
   const titleId = useId();
@@ -160,5 +160,13 @@ export function SmartWrongBookLauncher() {
           document.body,
         )}
     </>
+  );
+}
+
+export function SmartWrongBookLauncher() {
+  return (
+    <EnsureBankLibraryProvider>
+      <SmartWrongBookLauncherInner />
+    </EnsureBankLibraryProvider>
   );
 }

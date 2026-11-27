@@ -446,17 +446,17 @@ describe('SmartWrongBook UI & hook regression tests', () => {
   });
 
   it('performs O(1) raw-string check on pointerdown/keyup without reparsing unchanged JSON', async () => {
+    const accScope = accountPracticeScope('user-o1-raw-check');
     const builtinChoiceQ = BUILTIN_AI_BANK.data.questions.find((q) => q.type === 'choice')!;
-    saveStore(
-      {
-        records: { [builtinChoiceQ.id]: { ok: 0, choice: 0, ts: 1000 } },
-        fav: {},
-        mastery: {},
-      },
-      LEGACY_GUEST_SCOPE,
-    );
+    const rawCheckStore: UserStore = {
+      records: { [builtinChoiceQ.id]: { ok: 0, choice: 0, ts: 1000 } },
+      fav: {},
+      mastery: {},
+    };
+    saveStore(rawCheckStore, accScope);
+    await getBankDb(accScope).saveBankProgress(BUILTIN_AI_BANK_ID, rawCheckStore);
 
-    const container = mountWithScope(LEGACY_GUEST_SCOPE, <SmartWrongBook />);
+    const container = mountWithScope(accScope, <SmartWrongBook />);
     await waitForSelector(container, '[data-testid="wb-item-card"]');
 
     const parseSpy = vi.spyOn(JSON, 'parse');

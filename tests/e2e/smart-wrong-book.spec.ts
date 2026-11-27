@@ -9,15 +9,101 @@ import {
   quizProgressText,
 } from './helpers/selectors.ts';
 import {
-  STORAGE_KEY,
-  buildQuestionStemMap,
-  findQuestionByStem,
+  FIXTURE_BANK,
+  seedFixtureBank,
+} from './helpers/fixtureBank.ts';
+import {
   getCorrectChoiceFor,
   getWrongChoiceFor,
+  loadBankCatalog,
   makeSeededStore,
   pickQuestions,
-  seedStoreAndReload,
+  type Question,
+  type UserStore,
 } from './helpers/storage.ts';
+
+const GUIDE_BANK_ID = 'builtin-quizhub-guide';
+const GUIDE_BANK_NAME = 'QuizHub 使用引导示例题库';
+
+function resolveGuideChoiceQuestion(stemText: string): Question {
+  const guideQuestions = loadBankCatalog().questions;
+  const hit = stemText.includes('信息熵')
+    ? guideQuestions.find((q) => q.id === 'qh-guide-choice-02')
+    : guideQuestions.find((q) => q.id === 'qh-guide-choice-01');
+  if (!hit) {
+    throw new Error(`Unable to resolve guide choice question from stem: "${stemText.slice(0, 80)}"`);
+  }
+  return hit;
+}
+
+async function seedGuideStoreAndReload(
+  page: import('@playwright/test').Page,
+  store: UserStore,
+  targetHashRoute = '#/',
+): Promise<void> {
+  await gotoRoute(page, targetHashRoute);
+  await page.evaluate(
+    async ({ bankId, payload }) => {
+      await new Promise<void>((resolve, reject) => {
+        const req = window.indexedDB.open('quizhub-v2', 1);
+        req.onupgradeneeded = () => {
+          const db = req.result;
+          if (!db.objectStoreNames.contains('banks')) db.createObjectStore('banks', { keyPath: 'id' });
+          if (!db.objectStoreNames.contains('progress')) db.createObjectStore('progress', { keyPath: 'bankId' });
+          if (!db.objectStoreNames.contains('meta')) db.createObjectStore('meta', { keyPath: 'key' });
+        };
+        req.onerror = () => reject(req.error ?? new Error('Failed to open quizhub-v2 IDB'));
+        req.onsuccess = () => {
+          const db = req.result;
+          const tx = db.transaction('progress', 'readwrite');
+          tx.objectStore('progress').put({
+            bankId,
+            store: payload,
+            updatedAt: Date.now(),
+          });
+          tx.oncomplete = () => {
+            db.close();
+            resolve();
+          };
+          tx.onerror = () => {
+            db.close();
+            reject(tx.error ?? new Error('Failed to seed guide progress in IDB'));
+          };
+        };
+      });
+    },
+    { bankId: GUIDE_BANK_ID, payload: store },
+  );
+  await page.reload({ waitUntil: 'domcontentloaded' });
+}
+
+async function readGuestGuideStore(page: import('@playwright/test').Page): Promise<UserStore | null> {
+  return page.evaluate(async (bankId) => {
+    return await new Promise<UserStore | null>((resolve, reject) => {
+      const req = window.indexedDB.open('quizhub-v2', 1);
+      req.onerror = () => reject(req.error ?? new Error('Failed to open quizhub-v2 IDB'));
+      req.onsuccess = () => {
+        const db = req.result;
+        if (!db.objectStoreNames.contains('progress')) {
+          db.close();
+          resolve(null);
+          return;
+        }
+        const tx = db.transaction('progress', 'readonly');
+        const getReq = tx.objectStore('progress').get(bankId);
+        getReq.onsuccess = () => {
+          db.close();
+          const val = getReq.result as { store?: UserStore } | undefined;
+          resolve(val?.store ?? null);
+        };
+        getReq.onerror = () => {
+          db.close();
+          reject(getReq.error ?? new Error('Failed to read guide progress'));
+        };
+      };
+    });
+  }, GUIDE_BANK_ID);
+}
 
 async function readDownloadText(download: import('@playwright/test').Download): Promise<string> {
   const filePath = await download.path();
@@ -59,7 +145,7 @@ test.describe('Smart Wrong Book (R1-R6)', () => {
     await gotoRoute(page, '#/quiz');
     await modeCard(page, 'choice').click();
     const firstStem = (await page.getByTestId('q-stem').innerText()).trim();
-    const builtinQ = findQuestionByStem(firstStem, buildQuestionStemMap());
+    const builtinQ = resolveGuideChoiceQuestion(firstStem);
     const wrongIdx = getWrongChoiceFor(builtinQ) as number;
     const correctIdx = getCorrectChoiceFor(builtinQ) as number;
     await quizOption(page, wrongIdx).click();
@@ -85,7 +171,7 @@ test.describe('Smart Wrong Book (R1-R6)', () => {
     await expect(page.getByTestId('wb-item-card')).toHaveCount(1);
     await page.getByTestId('wb-close-btn').click();
 
-    // 3. Import a custom bank (with 1 choice + 1 short) and mark wrong in QuizImportPortal AFTERWARD
+    // 3. Import a custom bank (with 1 choice + 1 short) and answer both wrong in unified #/quiz workspace AFTERWARD
     //    so custom bank items have newer timestamps while builtin has higher wrongCount (2)
     await page.getByTestId('btn-open-quiz-import').click();
     await page.getByTestId('import-tab-paste').click();
@@ -105,27 +191,27 @@ D. 哈希表
 `);
     await page.getByTestId('btn-parse-paste').click();
     await page.getByTestId('import-bank-name').fill('算法专项测试库');
-    await page.getByTestId('btn-confirm-import').click();
+    await page.getByTestId('btn-confirm-import-sticky').or(page.getByTestId('btn-confirm-import')).first().click();
 
-    await expect(page.getByTestId('qi-practice-home')).toBeVisible();
-    await page.getByTestId('qi-mode-all').click();
+    await expect(page.getByTestId('quiz-import-dialog')).toBeHidden({ timeout: 10_000 });
+    await modeCard(page, 'all').click();
     // Question 1 (choice): pick wrong option A (index 0)
-    await expect(page.getByTestId('qi-q-stem')).toContainText('后进先出');
-    await page.getByTestId('qi-option-0').click();
-    await expect(page.getByTestId('qi-quiz-feedback')).toContainText('回答错误');
-    await page.getByTestId('qi-btn-next').click();
+    await expect(page.getByTestId('q-stem')).toContainText('后进先出');
+    await quizOption(page, 0).click();
+    await expect(page.getByTestId('quiz-feedback')).toContainText('回答错误');
+    await page.getByTestId('btn-next').click();
     // Question 2 (short): reveal & rate "不会"
-    await expect(page.getByTestId('qi-q-stem')).toContainText('梯度下降法');
-    await page.getByTestId('qi-btn-reveal').click();
-    await page.getByTestId('qi-selfcheck-0').click();
-    await page.getByTestId('btn-close-quiz-import').click();
+    await expect(page.getByTestId('q-stem')).toContainText('梯度下降法');
+    await page.getByTestId('btn-reveal-answer').click();
+    await page.getByTestId('selfcheck-0').click();
+    await page.getByTestId('quiz-exit').click();
 
     // 4. Open Smart Wrong Book without reload: both builtin + custom wrong items appear immediately
     await page.getByTestId('wb-open-btn').click();
     const modal = page.getByTestId('wb-modal');
     await expect(modal).toBeVisible();
     await expect(page.getByTestId('wb-item-card')).toHaveCount(3);
-    await expect(page.getByTestId('wb-item-list')).toContainText('人工智能导论');
+    await expect(page.getByTestId('wb-item-list')).toContainText(GUIDE_BANK_NAME);
     await expect(page.getByTestId('wb-item-list')).toContainText('算法专项测试库');
     await assertFullLayoutAudit(page);
 
@@ -139,7 +225,7 @@ D. 哈希表
     // 6. Sort by wrongCount descending -> builtin question (错误 2 次) is first
     await page.getByTestId('wb-sort-count').click();
     await expect(page.getByTestId('wb-item-card').first()).toContainText('错误 2 次');
-    await expect(page.getByTestId('wb-item-card').first()).toContainText('人工智能导论');
+    await expect(page.getByTestId('wb-item-card').first()).toContainText(GUIDE_BANK_NAME);
 
     // Sort by recent -> custom bank question is first (answered after builtin)
     await page.getByTestId('wb-sort-recent').click();
@@ -243,18 +329,22 @@ D. 哈希表
   test('R6: isolates QuizSession shortcuts and recovers focus across unmounting/disabling modal buttons and short Space reveal', async ({
     page,
   }) => {
-    const [qChoice1, qChoice2] = pickQuestions({ type: 'choice', limit: 2 });
-    const [qShort] = pickQuestions({ type: 'short', limit: 1 });
+    const [qChoice1, qChoice2] = pickQuestions({ type: 'choice', limit: 2, bank: FIXTURE_BANK });
+    const [qShort] = pickQuestions({ type: 'short', limit: 1, bank: FIXTURE_BANK });
     if (!qChoice1 || !qChoice2 || !qShort) {
       throw new Error('Expected 2 choice questions and 1 short question');
     }
 
-    await seedStoreAndReload(
+    await seedFixtureBank(
       page,
-      makeSeededStore({
-        wrongIds: [qChoice1.id, qChoice2.id, qShort.id],
-      }),
-      '#/quiz',
+      FIXTURE_BANK,
+      makeSeededStore(
+        {
+          wrongIds: [qChoice1.id, qChoice2.id, qShort.id],
+        },
+        FIXTURE_BANK,
+      ),
+      { targetHashRoute: '#/quiz' },
     );
 
     await modeCard(page, 'choice').click();
@@ -387,12 +477,16 @@ D. 哈希表
     await expect(page.getByTestId('wb-open-btn')).toBeFocused();
 
     // 8. Subjective 'short' mode Space reveal isolation (both after reveal-btn unmount and with dialog focused)
-    await seedStoreAndReload(
+    await seedFixtureBank(
       page,
-      makeSeededStore({
-        wrongIds: [qShort.id],
-      }),
-      '#/quiz',
+      FIXTURE_BANK,
+      makeSeededStore(
+        {
+          wrongIds: [qShort.id],
+        },
+        FIXTURE_BANK,
+      ),
+      { targetHashRoute: '#/quiz' },
     );
     await modeCard(page, 'short').click();
     await expect(page.getByTestId('btn-reveal-answer')).toBeVisible();
@@ -421,8 +515,8 @@ D. 哈希表
     const gateway = await installAuthGateway(page);
     gateway.addAccount('wb-sync@example.com', 'password123', '错题学员');
 
-    // Seed guest localStorage with an unrelated wrong question to verify scope isolation
-    await seedStoreAndReload(
+    // Seed guest IndexedDB progress with an unrelated wrong question to verify scope isolation
+    await seedGuideStoreAndReload(
       page,
       makeSeededStore({
         wrongIds: [q1.id],
@@ -441,7 +535,7 @@ D. 哈希表
     // Answer a choice question wrong as the signed-in account
     await modeCard(page, 'choice').click();
     const accountStem = (await page.getByTestId('q-stem').innerText()).trim();
-    const accountQ = findQuestionByStem(accountStem, buildQuestionStemMap());
+    const accountQ = resolveGuideChoiceQuestion(accountStem);
     const wrongChoice = getWrongChoiceFor(accountQ) as number;
     const correctChoice = getCorrectChoiceFor(accountQ) as number;
     await quizOption(page, wrongChoice).click();
@@ -455,13 +549,12 @@ D. 哈希表
 
     // Verify cloud progress synced ok: 1 with correct choice
     await expect
-      .poll(() => gateway.getCloudProgress('wb-sync@example.com', 'builtin-ai-intro')?.store.records[accountQ.id])
+      .poll(() => gateway.getCloudProgress('wb-sync@example.com', GUIDE_BANK_ID)?.store.records[accountQ.id])
       .toMatchObject({ ok: 1, choice: correctChoice });
 
-    // Confirm legacy-guest localStorage key wasn't overwritten by account scope write
-    const legacyGuestRaw = await page.evaluate((key) => localStorage.getItem(key), STORAGE_KEY);
-    expect(legacyGuestRaw).not.toBeNull();
-    const parsed = JSON.parse(legacyGuestRaw!) as { records?: Record<string, { ok?: number }> };
-    expect(parsed.records?.[q1.id]?.ok).toBe(0);
+    // Confirm legacy-guest IndexedDB progress wasn't overwritten by account scope write
+    const guestGuideStore = await readGuestGuideStore(page);
+    expect(guestGuideStore).not.toBeNull();
+    expect(guestGuideStore?.records?.[q1.id]?.ok).toBe(0);
   });
 });

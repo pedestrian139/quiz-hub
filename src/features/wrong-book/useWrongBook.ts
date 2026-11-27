@@ -11,7 +11,7 @@ import { usePracticeScope } from '../../hooks/practiceScope';
 import type { MasteryLevel, Question, UserStore } from '../../types/quiz';
 import { BUILTIN_AI_BANK_ID } from '../../utils/quizImportTypes';
 import { getBankDb } from '../../utils/bankDb';
-import { useBankLibrary } from '../../utils/useBankLibrary';
+import { useBankLibraryContext } from '../../utils/BankLibraryContext';
 import type { WrongBookItem, WrongBookMetaStore } from './types';
 import {
   collectWrongBookItems,
@@ -76,7 +76,7 @@ function notifyMetaSynced(scope: PracticeScope, meta: WrongBookMetaStore): void 
 
 export function useWrongBook() {
   const scope = usePracticeScope();
-  const library = useBankLibrary();
+  const library = useBankLibraryContext();
 
   const [meta, setMeta] = useState<WrongBookMetaStore>(() => loadWrongBookMeta(scope));
   const [builtinSnapshot, setBuiltinSnapshot] = useState<ScopedBuiltinReadResult>(() =>
@@ -224,7 +224,7 @@ export function useWrongBook() {
     if (!library.ready) return;
     const { meta: synced, changed } = syncWrongBookMetaWithBanks(
       metaRef.current,
-      library.banks,
+      library.switchableBanks,
       reconciledProgress,
     );
     if (changed) {
@@ -233,11 +233,11 @@ export function useWrongBook() {
       saveWrongBookMeta(synced, scope);
       notifyMetaSynced(scope, synced);
     }
-  }, [library.banks, library.ready, reconciledProgress, scope]);
+  }, [library.switchableBanks, library.ready, reconciledProgress, scope]);
 
   const allItems = useMemo<WrongBookItem[]>(() => {
-    return collectWrongBookItems(library.banks, reconciledProgress, meta);
-  }, [library.banks, meta, reconciledProgress]);
+    return collectWrongBookItems(library.switchableBanks, reconciledProgress, meta);
+  }, [library.switchableBanks, meta, reconciledProgress]);
 
   const recordRetryWrong = useCallback(
     async (
@@ -351,7 +351,7 @@ export function useWrongBook() {
   return {
     scope,
     ready: library.ready,
-    banks: library.banks,
+    banks: library.switchableBanks,
     items: allItems,
     refresh,
     recordRetryWrong,

@@ -1,10 +1,14 @@
-import { useEffect, useId, useMemo, useRef, useState } from 'react';
+import { useEffect, useId, useMemo, useRef, useState, type ReactNode } from 'react';
 import {
   formatAnswerText,
   getOptionLabel,
   getTypeLabel,
   isObjectiveQuestion,
 } from '../../core/questionUtils';
+import {
+  BankLibraryProvider,
+  useOptionalBankLibraryContext,
+} from '../../utils/BankLibraryContext';
 import { downloadWrongBookMarkdown, formatWrongTimestamp } from './markdownExport';
 import type { SmartWrongBookProps, WrongBookSort } from './types';
 import { useWrongBook } from './useWrongBook';
@@ -19,7 +23,13 @@ function isFocusDropped(el: Element | null): boolean {
   return el instanceof HTMLElement && el.getAttribute('role') === 'dialog' && el.tabIndex === -1;
 }
 
-export function SmartWrongBook({
+export function EnsureBankLibraryProvider({ children }: { children: ReactNode }) {
+  const existing = useOptionalBankLibraryContext();
+  if (existing) return <>{children}</>;
+  return <BankLibraryProvider>{children}</BankLibraryProvider>;
+}
+
+function SmartWrongBookInner({
   initialBankId = 'all',
   titleId,
   onClose,
@@ -429,5 +439,13 @@ export function SmartWrongBook({
         )}
       </div>
     </div>
+  );
+}
+
+export function SmartWrongBook(props: SmartWrongBookProps) {
+  return (
+    <EnsureBankLibraryProvider>
+      <SmartWrongBookInner {...props} />
+    </EnsureBankLibraryProvider>
   );
 }
