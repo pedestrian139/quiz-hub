@@ -965,7 +965,7 @@ test.describe('Tier 2: Portal, Home, Modes & Objective Quiz Boundaries (T2-001..
     await expect(quizFeedback(page)).toContainText('回答正确');
   });
 
-  test('T2-052 [UF11] Graded tf question ignores subsequent clicks or T/F keys', async ({
+  test('T2-052 [UF11] Graded tf question ignores subsequent clicks or 1/0 keys', async ({
     page,
   }, testInfo) => {
     onlyDesktop(testInfo);
@@ -974,8 +974,8 @@ test.describe('Tier 2: Portal, Home, Modes & Objective Quiz Boundaries (T2-001..
     await selectQuizFilters(page, { count: 10 });
     await modeCard(page, 'tf').click();
     const q = await answerCurrentQuestion(page, stemMap, 'correct');
-    await page.keyboard.press('T');
-    await page.keyboard.press('F');
+    await page.keyboard.press('1');
+    await page.keyboard.press('0');
     await expect(tfBtn(page, true)).toBeDisabled();
     await expect(tfBtn(page, false)).toBeDisabled();
     await expect
@@ -983,7 +983,7 @@ test.describe('Tier 2: Portal, Home, Modes & Objective Quiz Boundaries (T2-001..
       .toBe(1);
   });
 
-  test('T2-053 [UF11] Lowercase t and f keys trigger 正确 / 错误 on tf questions', async ({
+  test('T2-053 [UF11] Deprecated T and F keys are ignored while 1 and 0 trigger 正确 / 错误 on tf questions', async ({
     page,
   }, testInfo) => {
     onlyDesktop(testInfo);
@@ -991,9 +991,12 @@ test.describe('Tier 2: Portal, Home, Modes & Objective Quiz Boundaries (T2-001..
     await selectQuizFilters(page, { count: 10 });
     await modeCard(page, 'tf').click();
     await page.keyboard.press('t');
+    await page.keyboard.press('f');
+    await expect(quizFeedback(page)).toBeHidden();
+    await page.keyboard.press('1');
     await expect(quizFeedback(page)).toContainText(/回答正确|回答错误/);
     await btnNext(page).click();
-    await page.keyboard.press('f');
+    await page.keyboard.press('0');
     await expect(quizFeedback(page)).toContainText(/回答正确|回答错误/);
   });
 

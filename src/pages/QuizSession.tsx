@@ -409,12 +409,25 @@ export function QuizSession({
   useEffect(() => {
     const onKeyDown = (e: KeyboardEvent) => {
       if (!q) return;
-      if (e.defaultPrevented || e.metaKey || e.ctrlKey || e.altKey || e.isComposing) return;
-      if (document.querySelector('[role="dialog"][aria-modal="true"]')) return;
+      if (e.defaultPrevented || e.metaKey || e.ctrlKey || e.altKey || e.isComposing || e.keyCode === 229) {
+        return;
+      }
+      if (
+        document.querySelector(
+          '[role="dialog"][aria-modal="true"], dialog[open], .api-modal-backdrop, .auth-modal-backdrop, .qi-modal-backdrop, .wb-modal-backdrop',
+        )
+      ) {
+        return;
+      }
 
       const target = e.target as HTMLElement | null;
       const hasClosest = Boolean(target && typeof target.closest === 'function');
-      if (hasClosest && target!.closest('input, textarea, select, [contenteditable="true"]')) {
+      if (
+        hasClosest &&
+        target!.closest(
+          'input, textarea, select, [role="textbox"], [contenteditable="true"], [contenteditable]:not([contenteditable="false"])',
+        )
+      ) {
         return;
       }
 
@@ -424,7 +437,21 @@ export function QuizSession({
             'button, a[href], summary, [role="button"], [role="link"], [role="tab"]',
           ),
       );
-      if ((e.key === 'Enter' || e.key === ' ' || e.code === 'Space') && onInteractive) {
+      const isFocusedMultiOption = Boolean(
+        hasClosest && q.type === 'multi' && !isGraded && target!.closest('.option-btn--multi'),
+      );
+      const isFocusedActiveSelfCheck = Boolean(
+        hasClosest &&
+          isGraded &&
+          !isObjectiveQuestion(q.type) &&
+          target!.closest('.selfcheck-btn.is-active'),
+      );
+      if (
+        e.key === 'Enter' &&
+        onInteractive &&
+        !isFocusedMultiOption &&
+        !isFocusedActiveSelfCheck
+      ) {
         return;
       }
 
@@ -441,9 +468,9 @@ export function QuizSession({
 
       if ((q.type === 'choice' || q.type === 'multi') && !isGraded) {
         let optIdx = -1;
-        if (e.key >= '1' && e.key <= '9') {
+        if (e.key >= '1' && e.key <= '4') {
           optIdx = Number(e.key) - 1;
-        } else if (/^[a-iA-I]$/.test(e.key)) {
+        } else if (/^[a-dA-D]$/.test(e.key)) {
           optIdx = e.key.toLowerCase().charCodeAt(0) - 97;
         }
         const optCount = q.options?.length ?? 0;
@@ -454,28 +481,51 @@ export function QuizSession({
           } else {
             handleMultiToggle(optIdx);
           }
+          return;
         }
-        return;
       }
 
       if (q.type === 'tf' && !isGraded) {
-        if (e.key === 't' || e.key === 'T') {
+        if (e.key === '1') {
           e.preventDefault();
           handleTfPick(true);
-        } else if (e.key === 'f' || e.key === 'F') {
+          return;
+        }
+        if (e.key === '0') {
           e.preventDefault();
           handleTfPick(false);
+          return;
         }
-        return;
       }
 
-      if (
-        (q.type === 'short' || q.type === 'analysis') &&
-        !isShortAiMode &&
-        (e.key === ' ' || e.code === 'Space')
-      ) {
-        e.preventDefault();
-        handleReveal();
+      if (e.key === 'Enter') {
+        if (q.type === 'multi') {
+          if (!isGraded) {
+            e.preventDefault();
+            if ((multiDrafts[q.id]?.length ?? 0) > 0) {
+              handleSubmitMulti();
+            }
+            return;
+          }
+          e.preventDefault();
+          handleNext();
+          return;
+        }
+
+        if (q.type === 'choice' || q.type === 'tf') {
+          if (isGraded) {
+            e.preventDefault();
+            handleNext();
+          }
+          return;
+        }
+
+        if (q.type === 'short' || q.type === 'analysis') {
+          if (isGraded && (!isShortAiMode || (!shortAiLoading && Boolean(shortAiResults[q.id])))) {
+            e.preventDefault();
+            handleNext();
+          }
+        }
       }
     };
 
@@ -486,11 +536,14 @@ export function QuizSession({
     handleMultiToggle,
     handleNext,
     handlePrev,
-    handleReveal,
+    handleSubmitMulti,
     handleTfPick,
     isGraded,
     isShortAiMode,
+    multiDrafts,
     q,
+    shortAiLoading,
+    shortAiResults,
   ]);
 
   const answeredCount = useMemo(() => Object.keys(sessionAnswers).length, [sessionAnswers]);
@@ -799,7 +852,7 @@ export function QuizSession({
                       </span>
                       <span>{val ? '正确' : '错误'}</span>
                       <kbd className="tf-btn__kbd" aria-hidden="true">
-                        {val ? 'T' : 'F'}
+                        {val ? '1' : '0'}
                       </kbd>
                     </button>
                   );
@@ -1147,8 +1200,28 @@ export function QuizSession({
             </button>
 
             <span className="shortcut-hint">
-              快捷键：<kbd>←</kbd> / <kbd>→</kbd> 切题 · <kbd>1–4</kbd> / <kbd>A–D</kbd> 选项 · <kbd>T</kbd>/<kbd>F</kbd> 判断 · <kbd>Space</kbd> 看答案
+              <kbd>←</kbd> / <kbd>→</kbd> 切题 · <kbd>1–4</kbd> / <kbd>A–D</kbd> 选项 ·{' '}
+              <kbd>1</kbd> / <kbd>0</kbd> 判断 · <kbd>Enter</kbd> 提交 / 下一题
             </span>
+
+            {((q.type === 'multi' && !isGraded) ||
+              (!isObjectiveQuestion(q.type) && isShortAiMode && !shortAiResults[q.id])) && (
+              <button
+                type="button"
+                data-testid="mobile-btn-submit"
+                className="btn btn--primary mobile-only-bar-btn"
+                disabled={
+                  q.type === 'multi'
+                    ? selectedMulti.length === 0
+                    : shortAiLoading || !(shortDrafts[q.id] ?? '').trim()
+                }
+                onClick={
+                  q.type === 'multi' ? handleSubmitMulti : () => void handleSubmitShortAi()
+                }
+              >
+                {!isObjectiveQuestion(q.type) && shortAiLoading ? '批改中' : '提交'}
+              </button>
+            )}
 
             <button
               type="button"
@@ -1159,6 +1232,17 @@ export function QuizSession({
               {isLast ? '看结果' : '下一题'}
               <Icon name="arrowRight" size={16} />
             </button>
+
+            {!isLast && (
+              <button
+                type="button"
+                data-testid="btn-finish"
+                className="btn btn--ghost mobile-only-bar-btn"
+                onClick={() => finishSession(sessionAnswers, sessionMastery)}
+              >
+                交卷
+              </button>
+            )}
           </div>
 
           {sheetOpen && (
