@@ -16,7 +16,17 @@ import {
   useAiQuestionTutor,
 } from '../components/ApiSettings/AiQuestionTutor';
 import { RichContent } from '../components/RichContent';
-import { useWorkspacePrefs } from '../hooks/useWorkspacePrefs';
+import { usePracticeScope } from '../hooks/practiceScope';
+import { type ShortAnswerMode, useWorkspacePrefs } from '../hooks/useWorkspacePrefs';
+import {
+  isApiConfigReady,
+  loadApiConfig,
+  requestOpenApiSettings,
+  subscribeApiConfig,
+  type ApiConfig,
+} from '../services/apiConfig';
+import { LlmApiError } from '../services/llmClient';
+import { gradeShortAnswer, type SubjectiveGradeFeedback } from '../services/quizAiService';
 import type { QuizActions, ResultSpec, SessionSpec } from './quizTypes';
 
 interface QuizSessionProps {
@@ -93,7 +103,33 @@ export function QuizSession({
   const [sheetOpen, setSheetOpen] = useState(false);
   const [sheetFilter, setSheetFilter] = useState<SheetFilter>('all');
 
-  const { prefs, setAutoExplainOnWrong } = useWorkspacePrefs();
+  const practiceScope = usePracticeScope();
+  const { prefs, setAutoExplainOnWrong, setShortAnswerMode } = useWorkspacePrefs();
+  const [apiConfig, setApiConfig] = useState<ApiConfig>(() => loadApiConfig(practiceScope));
+  const [shortDrafts, setShortDrafts] = useState<Record<string, string>>({});
+  const [shortAiResults, setShortAiResults] = useState<Record<string, SubjectiveGradeFeedback>>({});
+  const [shortAiLoading, setShortAiLoading] = useState(false);
+  const [shortAiError, setShortAiError] = useState<{
+    kind: 'missing-key' | 'api-error';
+    message: string;
+  } | null>(null);
+  const shortAiAbortRef = useRef<AbortController | null>(null);
+  const shortAiInFlightRef = useRef(false);
+  const activeShortQuestionIdRef = useRef<string>('');
+  const shortAiTextareaRef = useRef<HTMLTextAreaElement | null>(null);
+
+  useEffect(() => {
+    setApiConfig(loadApiConfig(practiceScope));
+    return subscribeApiConfig(setApiConfig, practiceScope);
+  }, [practiceScope]);
+
+  useEffect(() => {
+    if (shortAiError?.kind === 'missing-key' && isApiConfigReady(apiConfig)) {
+      setShortAiError(null);
+    }
+  }, [apiConfig, shortAiError]);
+
+  const isShortAiMode = prefs.shortAnswerMode === 'ai';
 
   const startedAtRef = useRef<number>(Date.now());
   const [elapsedMs, setElapsedMs] = useState(0);
@@ -164,6 +200,124 @@ export function QuizSession({
     },
     [actions, q],
   );
+
+  useEffect(() => {
+    activeShortQuestionIdRef.current = q?.id ?? '';
+    shortAiAbortRef.current?.abort();
+    shortAiAbortRef.current = null;
+    shortAiInFlightRef.current = false;
+    setShortAiLoading(false);
+    setShortAiError(null);
+  }, [q?.id]);
+
+  useEffect(() => {
+    return () => {
+      shortAiAbortRef.current?.abort();
+      shortAiAbortRef.current = null;
+      shortAiInFlightRef.current = false;
+    };
+  }, []);
+
+  const handleSwitchShortMode = useCallback(
+    (mode: ShortAnswerMode) => {
+      if (mode === 'self') {
+        shortAiAbortRef.current?.abort();
+        shortAiAbortRef.current = null;
+        shortAiInFlightRef.current = false;
+        setShortAiLoading(false);
+        setShortAiError(null);
+      }
+      setShortAnswerMode(mode);
+    },
+    [setShortAnswerMode],
+  );
+
+  const handleSubmitShortAi = useCallback(async () => {
+    if (!q || shortAiLoading || shortAiInFlightRef.current) return;
+    const draftText = (shortDrafts[q.id] ?? '').trim();
+    if (!draftText) return;
+
+    const latestConfig = loadApiConfig(practiceScope);
+    setApiConfig(latestConfig);
+    if (!isApiConfigReady(latestConfig)) {
+      setShortAiError({
+        kind: 'missing-key',
+        message: '尚未配置大模型 API Key 或模型名称，请先完成 API 配置，或切回免费的三级自评模式。',
+      });
+      return;
+    }
+
+    shortAiAbortRef.current?.abort();
+    const controller = new AbortController();
+    shortAiAbortRef.current = controller;
+    shortAiInFlightRef.current = true;
+
+    const targetQuestion = q;
+    const targetQuestionId = targetQuestion.id;
+    const targetExplain =
+      (targetQuestion.explain ?? '').trim() || (targetQuestion.explanation ?? '').trim();
+
+    setShortAiLoading(true);
+    setShortAiError(null);
+
+    try {
+      const { feedback } = await gradeShortAnswer(
+        {
+          stem: targetQuestion.stem,
+          answer: targetQuestion.answer,
+          explain: targetExplain || undefined,
+          keyPoints: targetQuestion.keyPoints,
+          userAnswer: draftText,
+          type: targetQuestion.type,
+          chapter: targetQuestion.chapter,
+        },
+        { signal: controller.signal, practiceScope },
+      );
+
+      if (controller.signal.aborted || activeShortQuestionIdRef.current !== targetQuestionId) {
+        return;
+      }
+
+      setShortAiResults((prev) => ({ ...prev, [targetQuestionId]: feedback }));
+      handleSelfCheck(feedback.suggestedLevel);
+    } catch (err) {
+      if (controller.signal.aborted || activeShortQuestionIdRef.current !== targetQuestionId) {
+        return;
+      }
+      if (err instanceof LlmApiError && err.code === 'ABORTED') return;
+      if (err instanceof LlmApiError && (err.code === 'NOT_CONFIGURED' || err.code === 'INVALID_URL')) {
+        setShortAiError({ kind: 'missing-key', message: err.userMessage });
+      } else {
+        setShortAiError({
+          kind: 'api-error',
+          message:
+            err instanceof LlmApiError ? err.userMessage : 'AI 批改失败，请稍后重试或切回三级自评。',
+        });
+      }
+    } finally {
+      if (shortAiAbortRef.current === controller) {
+        shortAiAbortRef.current = null;
+        shortAiInFlightRef.current = false;
+      }
+      if (!controller.signal.aborted && activeShortQuestionIdRef.current === targetQuestionId) {
+        setShortAiLoading(false);
+      }
+    }
+  }, [handleSelfCheck, practiceScope, q, shortAiLoading, shortDrafts]);
+
+  const handleRetryShortAi = useCallback(() => {
+    if (!q) return;
+    setShortAiResults((prev) => {
+      if (!Object.prototype.hasOwnProperty.call(prev, q.id)) return prev;
+      const next = { ...prev };
+      delete next[q.id];
+      return next;
+    });
+    setShortAiError(null);
+    window.requestAnimationFrame(() => {
+      shortAiTextareaRef.current?.focus();
+    });
+  }, [q]);
 
   const tutor = useAiQuestionTutor({
     question: q ?? FALLBACK_QUESTION,
@@ -317,6 +471,7 @@ export function QuizSession({
 
       if (
         (q.type === 'short' || q.type === 'analysis') &&
+        !isShortAiMode &&
         (e.key === ' ' || e.code === 'Space')
       ) {
         e.preventDefault();
@@ -334,6 +489,7 @@ export function QuizSession({
     handleReveal,
     handleTfPick,
     isGraded,
+    isShortAiMode,
     q,
   ]);
 
@@ -687,22 +843,209 @@ export function QuizSession({
 
             {!isObjectiveQuestion(q.type) && (
               <div className="subjective-block">
-                {!isRevealed ? (
-                  <div className="reveal-box">
-                    <p className="reveal-box__tip">
-                      建议先在脑海或草稿中梳理核心采分关键词，再展开标准参考答案对照自评。
-                    </p>
-                    <button
-                      type="button"
-                      data-testid="btn-reveal-answer"
-                      className="btn btn--primary"
-                      onClick={handleReveal}
-                    >
-                      <Icon name="sparkles" size={16} />
-                      显示参考答案
-                    </button>
+                <div className="short-mode-bar" role="group" aria-label="简答题作答模式">
+                  <button
+                    type="button"
+                    data-testid="short-mode-self"
+                    aria-pressed={!isShortAiMode ? 'true' : 'false'}
+                    className={`short-mode-btn${!isShortAiMode ? ' is-active' : ''}`}
+                    onClick={() => handleSwitchShortMode('self')}
+                  >
+                    三级自评（默认）
+                  </button>
+                  <button
+                    type="button"
+                    data-testid="short-mode-ai"
+                    aria-pressed={isShortAiMode ? 'true' : 'false'}
+                    className={`short-mode-btn${isShortAiMode ? ' is-active' : ''}`}
+                    onClick={() => handleSwitchShortMode('ai')}
+                  >
+                    AI 批改（消耗 API）
+                  </button>
+                </div>
+
+                {isShortAiMode ? (
+                  <div className="short-ai-panel">
+                    {!shortAiResults[q.id] ? (
+                      <>
+                        <textarea
+                          ref={shortAiTextareaRef}
+                          data-testid="short-ai-textarea"
+                          className="short-ai-textarea"
+                          rows={4}
+                          disabled={shortAiLoading}
+                          placeholder="请输入你的简答题作答内容，点击「提交 AI 批改」后将对照参考答案给出评分与点评..."
+                          value={shortDrafts[q.id] ?? ''}
+                          onChange={(e) => {
+                            const val = e.target.value;
+                            setShortDrafts((prev) => ({ ...prev, [q.id]: val }));
+                          }}
+                        />
+
+                        <div className="short-ai-actions">
+                          <p data-testid="short-ai-cost-hint" className="short-ai-cost-hint">
+                            AI 批改模式 · 点击提交后将调用当前 API 并消耗少量 Token，可随时切回免费三级自评
+                          </p>
+                          <button
+                            type="button"
+                            data-testid="short-ai-submit"
+                            className="btn btn--primary"
+                            disabled={shortAiLoading || !(shortDrafts[q.id] ?? '').trim()}
+                            onClick={() => void handleSubmitShortAi()}
+                          >
+                            {shortAiLoading ? 'AI 批改中...' : '提交 AI 批改'}
+                          </button>
+                        </div>
+
+                        {shortAiError?.kind === 'missing-key' && (
+                          <div
+                            data-testid="short-ai-missing-key"
+                            className="short-ai-banner short-ai-banner--warn"
+                            role="alert"
+                          >
+                            <div className="short-ai-banner__msg">{shortAiError.message}</div>
+                            <div className="short-ai-banner__actions">
+                              <button
+                                type="button"
+                                data-testid="short-ai-open-settings"
+                                className="btn btn--primary btn--sm"
+                                onClick={requestOpenApiSettings}
+                              >
+                                打开 API 配置
+                              </button>
+                              <button
+                                type="button"
+                                data-testid="short-ai-switch-self"
+                                className="btn btn--ghost btn--sm"
+                                onClick={() => handleSwitchShortMode('self')}
+                              >
+                                切回三级自评
+                              </button>
+                            </div>
+                          </div>
+                        )}
+
+                        {shortAiError?.kind === 'api-error' && (
+                          <div
+                            data-testid="short-ai-error"
+                            className="short-ai-banner short-ai-banner--bad"
+                            role="alert"
+                          >
+                            <div className="short-ai-banner__msg">{shortAiError.message}</div>
+                            <div className="short-ai-banner__actions">
+                              <button
+                                type="button"
+                                data-testid="short-ai-switch-self"
+                                className="btn btn--ghost btn--sm"
+                                onClick={() => handleSwitchShortMode('self')}
+                              >
+                                切回三级自评
+                              </button>
+                            </div>
+                          </div>
+                        )}
+                      </>
+                    ) : (
+                      <>
+                        <div data-testid="short-ai-result" className="short-ai-result">
+                          <div className="short-ai-result__head">
+                            <div className="short-ai-result__score-group">
+                              <span
+                                className={`ai-grade-score ${
+                                  shortAiResults[q.id]!.score >= 80
+                                    ? 'ai-grade-score--ok'
+                                    : shortAiResults[q.id]!.score >= 50
+                                      ? 'ai-grade-score--warn'
+                                      : 'ai-grade-score--bad'
+                                }`}
+                              >
+                                {shortAiResults[q.id]!.score} / 100
+                              </span>
+                              <span className="short-ai-result__level-badge">
+                                建议掌握度：
+                                {shortAiResults[q.id]!.suggestedLevel === 2
+                                  ? '完全会'
+                                  : shortAiResults[q.id]!.suggestedLevel === 1
+                                    ? '有点模糊'
+                                    : '不会'}
+                              </span>
+                            </div>
+                            <button
+                              type="button"
+                              data-testid="short-ai-retry"
+                              className="btn btn--ghost btn--sm"
+                              onClick={handleRetryShortAi}
+                            >
+                              重新作答
+                            </button>
+                          </div>
+
+                          {(shortDrafts[q.id] ?? '').trim() && (
+                            <div className="short-ai-result__draft">
+                              <span className="short-ai-result__draft-label">我的作答：</span>
+                              <span>{shortDrafts[q.id]}</span>
+                            </div>
+                          )}
+
+                          <div className="short-ai-result__comment">
+                            <strong>简明点评：</strong>
+                            <span>{shortAiResults[q.id]!.comment}</span>
+                          </div>
+
+                          <div className="ai-grade-cols">
+                            <div className="ai-grade-box ai-grade-box--ok">
+                              <div className="ai-grade-box__label">命中要点</div>
+                              {shortAiResults[q.id]!.matchedPoints.length > 0 ? (
+                                <ul>
+                                  {shortAiResults[q.id]!.matchedPoints.map((pt, i) => (
+                                    <li key={i}>{pt}</li>
+                                  ))}
+                                </ul>
+                              ) : (
+                                <div>暂未命中明确采分要点</div>
+                              )}
+                            </div>
+                            <div className="ai-grade-box ai-grade-box--warn">
+                              <div className="ai-grade-box__label">遗漏要点</div>
+                              {shortAiResults[q.id]!.missingPoints.length > 0 ? (
+                                <ul>
+                                  {shortAiResults[q.id]!.missingPoints.map((pt, i) => (
+                                    <li key={i}>{pt}</li>
+                                  ))}
+                                </ul>
+                              ) : (
+                                <div>核心要点已覆盖完整！</div>
+                              )}
+                            </div>
+                          </div>
+                        </div>
+
+                        <p data-testid="short-ai-cost-hint" className="short-ai-cost-hint">
+                          AI 批改模式 · 点击提交后将调用当前 API 并消耗少量 Token，可随时切回免费三级自评
+                        </p>
+                      </>
+                    )}
                   </div>
                 ) : (
+                  !isRevealed && (
+                    <div className="reveal-box">
+                      <p className="reveal-box__tip">
+                        建议先在脑海或草稿中梳理核心采分关键词，再展开标准参考答案对照自评。
+                      </p>
+                      <button
+                        type="button"
+                        data-testid="btn-reveal-answer"
+                        className="btn btn--primary"
+                        onClick={handleReveal}
+                      >
+                        <Icon name="sparkles" size={16} />
+                        显示参考答案
+                      </button>
+                    </div>
+                  )
+                )}
+
+                {isRevealed && (
                   <>
                     <div data-testid="q-ref-answer" className="ref-answer-card">
                       <div className="ref-answer-card__section">

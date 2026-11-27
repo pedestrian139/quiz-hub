@@ -38,11 +38,28 @@ export interface QuestionExplainContext {
 
 export interface SubjectiveGradeFeedback {
   score: number;
+  suggestedLevel: MasteryLevel;
   recommendedMastery: MasteryLevel;
-  summary: string;
   matchedPoints: string[];
   missingPoints: string[];
+  comment: string;
+  summary: string;
   improvedAnswer: string;
+}
+
+export interface ShortAnswerGradeInput {
+  stem: string;
+  answer: string | number | number[] | boolean;
+  explain?: string;
+  keyPoints?: string[];
+  userAnswer: string;
+  type?: QuestionType;
+  chapter?: number;
+}
+
+export interface SubjectiveGradeFallback {
+  improvedAnswer?: string;
+  comment?: string;
 }
 
 export interface GenerateQuestionsOptions extends LlmRequestOptions {
@@ -225,10 +242,249 @@ export async function askQuestionFollowUpStream(
 }
 
 function toStringList(value: unknown): string[] {
-  if (!Array.isArray(value)) return [];
-  return value
-    .filter((item): item is string => typeof item === 'string' && item.trim().length > 0)
-    .map((item) => item.trim());
+  if (Array.isArray(value)) {
+    return value
+      .filter((item): item is string => typeof item === 'string' && item.trim().length > 0)
+      .map((item) => item.trim());
+  }
+  if (typeof value === 'string' && value.trim().length > 0) {
+    return value
+      .split(/[\n；;]+/)
+      .map((item) => item.replace(/^(?:[-*•]\s+|\d+[.、)]\s*)/, '').trim())
+      .filter((item) => item.length > 0);
+  }
+  return [];
+}
+
+export function mapScoreToMasteryLevel(score: number): MasteryLevel {
+  if (typeof score !== 'number' || !Number.isFinite(score)) {
+    return 0;
+  }
+  const clamped = Math.min(100, Math.max(0, score));
+  if (clamped >= 80) return 2;
+  if (clamped >= 50) return 1;
+  return 0;
+}
+
+function parseMasteryLevel(value: unknown): MasteryLevel | null {
+  if (value === 0 || value === 1 || value === 2) {
+    return value;
+  }
+  if (value === '0' || value === '1' || value === '2') {
+    return Number(value) as MasteryLevel;
+  }
+  return null;
+}
+
+const GRADING_OBJECT_KEYS = [
+  'score',
+  'suggestedLevel',
+  'recommendedMastery',
+  'matchedPoints',
+  'missingPoints',
+  'comment',
+  'summary',
+  'improvedAnswer',
+] as const;
+
+function hasGradingKey(obj: Record<string, unknown>): boolean {
+  return GRADING_OBJECT_KEYS.some(
+    (key) => Object.prototype.hasOwnProperty.call(obj, key) && obj[key] !== undefined,
+  );
+}
+
+function extractGradeObjectFromText(raw: string): Record<string, unknown> {
+  const withoutClosedThink = raw.replace(/<think>[\s\S]*?<\/think>/gi, '');
+  const cleaned = withoutClosedThink.replace(/<\/?think>/gi, '').trim();
+
+  const tryParseObject = (text: string): Record<string, unknown> | null => {
+    const repaired = repairSingleBackslashLatexInJson(text);
+    const variants = repaired !== text ? [repaired, text] : [text];
+    for (const variant of variants) {
+      try {
+        const parsed = JSON.parse(variant) as unknown;
+        if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+          return parsed as Record<string, unknown>;
+        }
+      } catch {
+        // continue
+      }
+    }
+    return null;
+  };
+
+  const findBestObjectInSegment = (
+    segment: string,
+  ): { obj: Record<string, unknown>; hasGradeKeys: boolean } | null => {
+    const trimmed = segment.trim();
+    if (!trimmed) return null;
+
+    const direct = tryParseObject(trimmed);
+    if (direct && hasGradingKey(direct)) {
+      return { obj: direct, hasGradeKeys: true };
+    }
+
+    let fallbackObj: Record<string, unknown> | null = direct;
+
+    for (let start = 0; start < segment.length; start += 1) {
+      if (segment[start] !== '{') continue;
+
+      let depth = 0;
+      let inString = false;
+      let i = start;
+      let foundEnd = -1;
+
+      while (i < segment.length) {
+        const ch = segment[i]!;
+        if (inString) {
+          if (ch === '\\') {
+            i += 2;
+            continue;
+          }
+          if (ch === '"') {
+            inString = false;
+          }
+          i += 1;
+          continue;
+        }
+
+        if (ch === '"') {
+          inString = true;
+        } else if (ch === '{') {
+          depth += 1;
+        } else if (ch === '}') {
+          depth -= 1;
+          if (depth === 0) {
+            foundEnd = i;
+            break;
+          }
+        }
+        i += 1;
+      }
+
+      if (foundEnd > start) {
+        const slice = segment.slice(start, foundEnd + 1);
+        const parsed = tryParseObject(slice);
+        if (parsed) {
+          if (hasGradingKey(parsed)) {
+            return { obj: parsed, hasGradeKeys: true };
+          }
+          if (!fallbackObj) {
+            fallbackObj = parsed;
+          }
+          start = foundEnd;
+        }
+      }
+    }
+
+    return fallbackObj ? { obj: fallbackObj, hasGradeKeys: false } : null;
+  };
+
+  if (cleaned) {
+    const jsonFences: string[] = [];
+    const otherFences: string[] = [];
+    const fenceRegex = /```([a-zA-Z0-9_+-]*)\s*([\s\S]*?)```/g;
+    for (const match of cleaned.matchAll(fenceRegex)) {
+      const lang = (match[1] ?? '').trim().toLowerCase();
+      const body = (match[2] ?? '').trim();
+      if (!body) continue;
+      if (lang === 'json') {
+        jsonFences.push(body);
+      } else {
+        otherFences.push(body);
+      }
+    }
+
+    let fallbackObj: Record<string, unknown> | null = null;
+
+    for (const block of [...jsonFences, ...otherFences]) {
+      const found = findBestObjectInSegment(block);
+      if (found?.hasGradeKeys) {
+        return found.obj;
+      }
+      if (found && !fallbackObj) {
+        fallbackObj = found.obj;
+      }
+    }
+
+    const fromCleaned = findBestObjectInSegment(cleaned);
+    if (fromCleaned?.hasGradeKeys) {
+      return fromCleaned.obj;
+    }
+    if (fromCleaned && !fallbackObj) {
+      fallbackObj = fromCleaned.obj;
+    }
+    if (fallbackObj) {
+      return fallbackObj;
+    }
+  }
+
+  const fallback = extractJsonFromText<unknown>(raw);
+  if (fallback && typeof fallback === 'object' && !Array.isArray(fallback)) {
+    return fallback as Record<string, unknown>;
+  }
+  throw new LlmApiError('PARSE_ERROR', '模型返回的批改结果不是合法 JSON 对象，请重试。');
+}
+
+export function parseSubjectiveGradeResponse(
+  raw: string | Record<string, unknown>,
+  fallback?: SubjectiveGradeFallback | string,
+): SubjectiveGradeFeedback {
+  let data: Record<string, unknown>;
+  if (typeof raw === 'string') {
+    data = extractGradeObjectFromText(raw);
+  } else if (raw && typeof raw === 'object' && !Array.isArray(raw)) {
+    data = raw;
+  } else {
+    throw new LlmApiError('PARSE_ERROR', '模型返回的批改结果格式无效，请重试。');
+  }
+
+  if (!hasGradingKey(data)) {
+    throw new LlmApiError('PARSE_ERROR', 'AI 批改返回格式异常，缺少评分字段，请重试。');
+  }
+
+  let rawScore = 0;
+  if (typeof data.score === 'number' && Number.isFinite(data.score)) {
+    rawScore = data.score;
+  } else if (typeof data.score === 'string') {
+    const trimmed = data.score.trim();
+    if (/^-?\d+(?:\.\d+)?$/.test(trimmed)) {
+      const parsedNum = Number(trimmed);
+      if (Number.isFinite(parsedNum)) {
+        rawScore = parsedNum;
+      }
+    }
+  }
+  const score = Math.min(100, Math.max(0, Math.round(rawScore)));
+
+  const suggestedLevel: MasteryLevel =
+    parseMasteryLevel(data.suggestedLevel) ??
+    parseMasteryLevel(data.recommendedMastery) ??
+    mapScoreToMasteryLevel(score);
+
+  const fallbackObj: SubjectiveGradeFallback =
+    typeof fallback === 'string' ? { improvedAnswer: fallback } : (fallback ?? {});
+  const fallbackComment =
+    fallbackObj.comment?.trim() || '已完成对比批改，请结合下方采分要点查漏补缺。';
+  const commentText =
+    (typeof data.comment === 'string' && data.comment.trim()) ||
+    (typeof data.summary === 'string' && data.summary.trim()) ||
+    fallbackComment;
+  const improvedAnswer =
+    typeof data.improvedAnswer === 'string' && data.improvedAnswer.trim()
+      ? data.improvedAnswer.trim()
+      : (fallbackObj.improvedAnswer ?? '').trim();
+
+  return {
+    score,
+    suggestedLevel,
+    recommendedMastery: suggestedLevel,
+    matchedPoints: toStringList(data.matchedPoints),
+    missingPoints: toStringList(data.missingPoints),
+    comment: commentText,
+    summary: commentText,
+    improvedAnswer,
+  };
 }
 
 export async function gradeSubjectiveDraft(
@@ -241,7 +497,7 @@ export async function gradeSubjectiveDraft(
     {
       role: 'system',
       content:
-        '你是 QuizHub AI 阅卷助教。请对照标准参考答案和采分要点，客观批改学习者的主观题作答，并严格返回合法 JSON 对象（不要输出多余解释）：{"score":0到100的整数,"recommendedMastery":0或1或2,"summary":"一句话总体评价","matchedPoints":["已命中的要点"],"missingPoints":["遗漏或需补充的要点"],"improvedAnswer":"基于用户作答润色后的高分示范回答"}。评分映射：>=80 对应 2（完全会），50~79 对应 1（有点模糊），<50 对应 0（不会）。',
+        '你是 QuizHub AI 阅卷助教。请对照标准参考答案和采分要点，客观批改学习者的主观题作答，并严格返回合法 JSON 对象（不要输出多余解释）：{"score":0到100的整数,"suggestedLevel":0或1或2,"recommendedMastery":0或1或2,"matchedPoints":["已命中的要点"],"missingPoints":["遗漏或需补充的要点"],"comment":"简明点评与改进建议","summary":"一句话总体评价","improvedAnswer":"基于用户作答润色后的高分示范回答"}。评分映射：>=80 对应 2（完全会），50~79 对应 1（有点模糊），<50 对应 0（不会）。',
     },
     {
       role: 'user',
@@ -249,39 +505,47 @@ export async function gradeSubjectiveDraft(
     },
   ];
 
-  const { data, raw } = await chatCompletionJson<Record<string, unknown>>(messages, {
+  const reqOptions: LlmRequestOptions = {
     temperature: 0.2,
     maxTokens: 900,
     ...options,
-  });
-
-  const rawScore = typeof data.score === 'number' && Number.isFinite(data.score) ? data.score : 0;
-  const score = Math.min(100, Math.max(0, Math.round(rawScore)));
-  const recommendedMastery: MasteryLevel =
-    data.recommendedMastery === 2 || data.recommendedMastery === 1 || data.recommendedMastery === 0
-      ? data.recommendedMastery
-      : score >= 80
-        ? 2
-        : score >= 50
-          ? 1
-          : 0;
-
-  const feedback: SubjectiveGradeFeedback = {
-    score,
-    recommendedMastery,
-    summary:
-      typeof data.summary === 'string' && data.summary.trim()
-        ? data.summary.trim()
-        : '已完成对比批改，请结合下方采分要点查漏补缺。',
-    matchedPoints: toStringList(data.matchedPoints),
-    missingPoints: toStringList(data.missingPoints),
-    improvedAnswer:
-      typeof data.improvedAnswer === 'string' && data.improvedAnswer.trim()
-        ? data.improvedAnswer.trim()
-        : formatAnswerText(question),
   };
 
+  let raw: LlmCompletionResult;
+  try {
+    raw = await chatCompletion(messages, { ...reqOptions, jsonMode: true });
+  } catch (err) {
+    if (err instanceof LlmApiError && err.statusCode === 400) {
+      raw = await chatCompletion(messages, { ...reqOptions, jsonMode: false });
+    } else {
+      throw err;
+    }
+  }
+
+  const feedback = parseSubjectiveGradeResponse(raw.content, {
+    improvedAnswer: formatAnswerText(question),
+  });
+
   return { feedback, raw };
+}
+
+export async function gradeShortAnswer(
+  input: ShortAnswerGradeInput,
+  options: LlmRequestOptions = {},
+): Promise<{ feedback: SubjectiveGradeFeedback; raw: LlmCompletionResult }> {
+  const question: Question = {
+    id: '__short_answer__',
+    type: input.type ?? 'short',
+    chapter: input.chapter ?? 1,
+    stem: input.stem,
+    answer: input.answer,
+    explain: input.explain ?? '',
+    ...(Array.isArray(input.keyPoints) && input.keyPoints.length > 0
+      ? { keyPoints: input.keyPoints }
+      : {}),
+    source: { origin: 'comprehensive_bank', file: '', ref: '' },
+  };
+  return gradeSubjectiveDraft(question, input.userAnswer, options);
 }
 
 const ALLOWED_TYPES = new Set<QuestionType>(['choice', 'multi', 'tf', 'short', 'analysis']);

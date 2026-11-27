@@ -4,12 +4,16 @@ import { usePracticeScope } from './practiceScope';
 
 export const WORKSPACE_PREFS_STORAGE_KEY = 'quizhub-v2:workspace-prefs';
 
+export type ShortAnswerMode = 'self' | 'ai';
+
 export interface WorkspacePrefs {
   autoExplainOnWrong: boolean;
+  shortAnswerMode: ShortAnswerMode;
 }
 
 export const DEFAULT_WORKSPACE_PREFS: WorkspacePrefs = {
   autoExplainOnWrong: false,
+  shortAnswerMode: 'self',
 };
 
 function normalizeWorkspacePrefs(raw: unknown): WorkspacePrefs {
@@ -19,6 +23,7 @@ function normalizeWorkspacePrefs(raw: unknown): WorkspacePrefs {
   const obj = raw as Record<string, unknown>;
   return {
     autoExplainOnWrong: obj.autoExplainOnWrong === true,
+    shortAnswerMode: obj.shortAnswerMode === 'ai' ? 'ai' : 'self',
   };
 }
 
@@ -38,7 +43,10 @@ export function loadWorkspacePrefs(scope?: PracticeScope): WorkspacePrefs {
   }
 }
 
-export function saveWorkspacePrefs(prefs: WorkspacePrefs, scope?: PracticeScope): boolean {
+export function saveWorkspacePrefs(
+  prefs: Partial<WorkspacePrefs>,
+  scope?: PracticeScope,
+): boolean {
   try {
     if (typeof window === 'undefined' || !window.localStorage) {
       return false;
@@ -84,9 +92,20 @@ export function useWorkspacePrefs(scopeOverride?: PracticeScope) {
     updatePrefs((prev) => ({ ...prev, autoExplainOnWrong: !prev.autoExplainOnWrong }));
   }, [updatePrefs]);
 
+  const setShortAnswerMode = useCallback(
+    (shortAnswerMode: ShortAnswerMode) => {
+      updatePrefs((prev) => ({
+        ...prev,
+        shortAnswerMode: shortAnswerMode === 'ai' ? 'ai' : 'self',
+      }));
+    },
+    [updatePrefs],
+  );
+
   return {
     prefs,
     setAutoExplainOnWrong,
     toggleAutoExplainOnWrong,
+    setShortAnswerMode,
   };
 }
