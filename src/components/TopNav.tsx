@@ -23,6 +23,8 @@ interface TopNavProps {
   wrongCount: number;
   favCount: number;
   onNavClick: (route: Route) => void;
+  searchOpen: boolean;
+  onOpenSearch: () => void;
 }
 
 const THEME_OPTIONS: Array<{
@@ -35,15 +37,16 @@ const THEME_OPTIONS: Array<{
   { value: 'dark', label: '深色主题', icon: 'moon' },
 ];
 
-export function TopNav({ route, wrongCount, favCount, onNavClick }: TopNavProps) {
+export function TopNav({ route, wrongCount, favCount, onNavClick, searchOpen, onOpenSearch }: TopNavProps) {
   const { theme, setTheme } = useTheme();
+  const searchShortcut = /Mac|iPhone|iPad/.test(navigator.userAgent) ? '⌘K' : 'Ctrl+K';
 
   const badgeFor = (r: Route): number =>
     r === 'wrong' ? wrongCount : r === 'fav' ? favCount : 0;
 
   return (
     <header className="site-header">
-      <div className="site-header__inner">
+      <div className="site-header__inner site-header__inner--search">
         <div className="brand">
           <span className="brand__logo" aria-hidden="true">
             QH
@@ -81,31 +84,49 @@ export function TopNav({ route, wrongCount, favCount, onNavClick }: TopNavProps)
           })}
         </nav>
 
-        <ApiSettingsButton />
+        <div className="site-header__tools">
+          <button
+            type="button"
+            data-testid="global-search-trigger"
+            className="spotlight-trigger"
+            aria-label="搜索题目"
+            aria-keyshortcuts="Meta+K Control+K"
+            aria-haspopup="dialog"
+            aria-expanded={searchOpen}
+            aria-controls={searchOpen ? 'spotlight-search' : undefined}
+            onClick={onOpenSearch}
+          >
+            <Icon name="search" size={17} />
+            <span className="spotlight-trigger__label">搜索题目…</span>
+            <kbd aria-hidden="true">{searchShortcut}</kbd>
+          </button>
 
-        <div
-          className="theme-toggle theme-switcher"
-          role="group"
-          aria-label="主题模式切换"
-          data-testid="theme-toggle"
-        >
-          {THEME_OPTIONS.map((opt) => {
-            const active = theme === opt.value;
-            return (
-              <button
-                key={opt.value}
-                type="button"
-                data-testid={`theme-option-${opt.value}`}
-                className={`theme-switcher__btn${active ? ' is-active' : ''}`}
-                aria-label={opt.label}
-                aria-pressed={active ? 'true' : 'false'}
-                title={opt.label}
-                onClick={() => setTheme(opt.value)}
-              >
-                <Icon name={opt.icon} size={15} strokeWidth={1.75} />
-              </button>
-            );
-          })}
+          <ApiSettingsButton />
+
+          <div
+            className="theme-toggle theme-switcher"
+            role="group"
+            aria-label="主题模式切换"
+            data-testid="theme-toggle"
+          >
+            {THEME_OPTIONS.map((opt) => {
+              const active = theme === opt.value;
+              return (
+                <button
+                  key={opt.value}
+                  type="button"
+                  data-testid={`theme-option-${opt.value}`}
+                  className={`theme-switcher__btn${active ? ' is-active' : ''}`}
+                  aria-label={opt.label}
+                  aria-pressed={active ? 'true' : 'false'}
+                  title={opt.label}
+                  onClick={() => setTheme(opt.value)}
+                >
+                  <Icon name={opt.icon} size={15} strokeWidth={1.75} />
+                </button>
+              );
+            })}
+          </div>
         </div>
       </div>
     </header>

@@ -139,18 +139,14 @@ export function btnOpenFav(page: Page): Locator {
     .first();
 }
 
-export function btnResetStore(page: Page): Locator {
-  return page
-    .getByTestId('btn-reset-store')
-    .or(page.getByRole('button', { name: /清空记录/ }))
-    .first();
+export async function resetProgress(page: Page): Promise<void> {
+  await page.getByTestId('progress-menu-trigger').click();
+  await page.getByTestId('btn-reset-store').click();
 }
 
-export function btnExportJson(page: Page): Locator {
-  return page
-    .getByTestId('btn-export-json')
-    .or(page.getByRole('button', { name: /导出进度/ }))
-    .first();
+export async function exportProgress(page: Page): Promise<void> {
+  await page.getByTestId('progress-menu-trigger').click();
+  await page.getByTestId('btn-export-json').click();
 }
 
 export function btnImportJson(page: Page): Locator {

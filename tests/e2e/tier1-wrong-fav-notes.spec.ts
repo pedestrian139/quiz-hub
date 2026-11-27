@@ -18,9 +18,9 @@ import {
   seedFixtureBank,
 } from './helpers/fixtureBank.ts';
 import {
-  btnExportJson,
+  exportProgress,
   btnQuizChapter,
-  btnResetStore,
+  resetProgress,
   chapterChip,
   gotoRoute,
   inputImportFile,
@@ -195,7 +195,7 @@ test.describe('Tier 1: Wrong Book, Favorites, Storage, Handbook & Layout (UF16-U
     await seedFixtureBank(page, FIXTURE_BANK, store, { targetHashRoute: '#/quiz' });
 
     page.once('dialog', (d) => d.accept());
-    await btnResetStore(page).click();
+    await resetProgress(page);
     const dialogBtn = page
       .getByRole('dialog')
       .getByRole('button', { name: /确认|确定|清空/ });
@@ -225,7 +225,7 @@ test.describe('Tier 1: Wrong Book, Favorites, Storage, Handbook & Layout (UF16-U
     );
     await seedFixtureBank(page, FIXTURE_BANK, store, { targetHashRoute: '#/quiz' });
 
-    const exported = await captureJsonExport(page, () => btnExportJson(page).click());
+    const exported = await captureJsonExport(page, () => exportProgress(page));
     expect(exported.filename).toMatch(/quiz.*backup\.json$/i);
     const parsed = exported.parsed as {
       records: Record<string, unknown>;
@@ -272,7 +272,7 @@ test.describe('Tier 1: Wrong Book, Favorites, Storage, Handbook & Layout (UF16-U
     await seedFixtureBank(page, FIXTURE_BANK, store, { targetHashRoute: '#/quiz' });
 
     page.once('dialog', (d) => d.dismiss());
-    await btnResetStore(page).click();
+    await resetProgress(page);
     const cancelBtn = page
       .getByRole('dialog')
       .getByRole('button', { name: /取消|关闭/ });

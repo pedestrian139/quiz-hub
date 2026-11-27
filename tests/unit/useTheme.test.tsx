@@ -256,7 +256,7 @@ describe('useTheme & ThemeProvider', () => {
     act(() => {
       root!.render(
         <ThemeProvider>
-          <TopNav route="hub" wrongCount={0} favCount={0} onNavClick={() => {}} />
+          <TopNav route="hub" wrongCount={0} favCount={0} onNavClick={() => {}} searchOpen={false} onOpenSearch={() => {}} />
         </ThemeProvider>,
       );
     });

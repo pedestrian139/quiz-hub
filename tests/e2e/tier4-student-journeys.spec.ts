@@ -19,7 +19,7 @@ import {
 } from './helpers/fixtureBank.ts';
 import {
   answerCurrentQuestion,
-  btnExportJson,
+  exportProgress,
   btnNext,
   btnPrev,
   btnQuizChapter,
@@ -318,7 +318,7 @@ test.describe('Tier 4: Real-World Student Journeys (T4-001..T4-012)', () => {
       FIXTURE_BANK,
     );
     await seedFixtureBank(page, FIXTURE_BANK, seed, { targetHashRoute: '#/quiz' });
-    const exported = await captureJsonExport(page, () => btnExportJson(page).click());
+    const exported = await captureJsonExport(page, () => exportProgress(page));
 
     const mobileCtx = await browser.newContext({
       viewport: { width: 390, height: 844 },
