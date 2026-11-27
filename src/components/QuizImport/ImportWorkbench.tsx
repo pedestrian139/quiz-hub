@@ -6,6 +6,7 @@ import {
   type ChangeEvent,
   type DragEvent,
 } from 'react';
+import { Icon } from '../ui/Icons';
 import { getOptionLabel, getTypeLabel } from '../../core/questionUtils';
 import { usePracticeScope } from '../../hooks/practiceScope';
 import {
@@ -1181,7 +1182,14 @@ export function ImportWorkbench({
                 disabled={washing || parsing || selectedWashTypes.length === 0}
                 onClick={() => void handleAiWash()}
               >
-                {washing ? 'AI 正在分段洗题…' : '✨ 开始 AI 洗题'}
+                {washing ? (
+                  'AI 正在分段洗题…'
+                ) : (
+                  <>
+                    <Icon name="sparkles" size={15} />
+                    <span>开始 AI 洗题</span>
+                  </>
+                )}
               </button>
               {washing && (
                 <button
@@ -1217,7 +1225,7 @@ export function ImportWorkbench({
 
         {failedChunks.length > 0 && (
           <div className="qi-card qi-failed-chunks" role="alert">
-            <strong style={{ fontSize: '14px', color: 'var(--bad)' }}>
+            <strong style={{ fontSize: '14px', color: 'var(--bad-text)' }}>
               部分分段洗题失败（{failedChunks.length} 批），可单独重试恢复：
             </strong>
             <div className="qi-draft-list">
@@ -1254,7 +1262,7 @@ export function ImportWorkbench({
           <div className="qi-card qi-preview-placeholder">
             <strong style={{ fontSize: '15px' }}>清洗预览与校对台</strong>
             <span style={{ fontSize: '13.5px', color: 'var(--sub)', lineHeight: 1.6 }}>
-              在左侧上传题库文件或粘贴任意格式试题文本，点击「✨ 开始 AI 洗题」或「本地规则解析预览」，洗出的题目将渲染为可编辑预览卡片（无答案题干自动推导并标注“AI 推断答案”）。
+              在左侧上传题库文件或粘贴任意格式试题文本，点击「开始 AI 洗题」或「本地规则解析预览」，洗出的题目将渲染为可编辑预览卡片（无答案题干自动推导并标注“AI 推断答案”）。
             </span>
           </div>
         )}
@@ -1659,7 +1667,7 @@ export function ImportWorkbench({
                                             className="qi-opt-badge__check"
                                             aria-hidden="true"
                                           >
-                                            ✓
+                                            <Icon name="check" size={12} strokeWidth={2.5} />
                                           </span>
                                         )}
                                       </button>

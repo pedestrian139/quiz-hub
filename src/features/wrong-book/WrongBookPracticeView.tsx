@@ -7,6 +7,7 @@ import {
 } from '../../core/questionUtils';
 import { gradeObjectiveQuestion } from '../../core/quizEngine';
 import type { MasteryLevel, Question } from '../../types/quiz';
+import { Icon } from '../../components/ui/Icons';
 import type { WrongBookItem } from './types';
 import { formatChoiceSnapshotLabel } from './wrongBookMeta';
 
@@ -128,7 +129,7 @@ export function WrongBookPracticeView({
     return (
       <div className="wb-practice-empty" data-testid="wb-practice-done">
         <div className="wb-practice-empty__icon" aria-hidden="true">
-          ✓
+          <Icon name="check" size={22} strokeWidth={2.4} />
         </div>
         <h3>当前筛选错题已全部掌握</h3>
         <p>已全部移出当前错题队列，可以返回错题本列表继续查看其他题库。</p>
@@ -184,7 +185,8 @@ export function WrongBookPracticeView({
           data-testid="wb-back-to-list-btn"
           onClick={onExit}
         >
-          ← 返回错题列表
+          <Icon name="arrowLeft" size={15} />
+          <span>返回错题列表</span>
         </button>
         <div className="wb-practice__progress" data-testid="wb-practice-progress">
           第 {safeIndex + 1} / {items.length} 题

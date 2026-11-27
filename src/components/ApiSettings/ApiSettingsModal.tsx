@@ -30,6 +30,7 @@ import {
   type ModelInfo,
 } from '../../services';
 import { clearAccountCloudApiConfig, saveAccountCloudApiConfig } from '../../services/cloudSync';
+import { Icon } from '../ui/Icons';
 import './ApiSettings.css';
 
 export interface ApiSettingsModalProps {
@@ -542,9 +543,7 @@ export function ApiSettingsModal({ open, onClose, onSaved }: ApiSettingsModalPro
               onClose();
             }}
           >
-            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" aria-hidden="true">
-              <path d="M18 6 6 18M6 6l12 12" />
-            </svg>
+            <Icon name="x" size={16} />
           </button>
         </div>
 
@@ -637,21 +636,11 @@ export function ApiSettingsModal({ open, onClose, onSaved }: ApiSettingsModalPro
                   disabled={loadingModels}
                   onClick={handleFetchModels}
                 >
-                  <svg
+                  <Icon
+                    name="refreshCw"
+                    size={14}
                     className={`api-fetch-btn__icon${loadingModels ? ' is-spinning' : ''}`}
-                    width="14"
-                    height="14"
-                    viewBox="0 0 24 24"
-                    fill="none"
-                    stroke="currentColor"
-                    strokeWidth="2.1"
-                    strokeLinecap="round"
-                    strokeLinejoin="round"
-                    aria-hidden="true"
-                  >
-                    <path d="M21 12a9 9 0 1 1-2.64-6.36" />
-                    <path d="M21 3v6h-6" />
-                  </svg>
+                  />
                   <span>{loadingModels ? '拉取模型中…' : '刷新模型列表'}</span>
                 </button>
               </div>

@@ -833,7 +833,7 @@ export function QuizSession({
                   <RichContent
                     content={
                       baseExplainText ||
-                      '暂无文字解析，可点击下方「✨ AI 深度解析」获取详细思路与逐项排错。'
+                      '暂无文字解析，可点击下方「AI 深度解析」获取详细思路与逐项排错。'
                     }
                   />
                 </div>
@@ -1127,7 +1127,7 @@ export function QuizSession({
                 onClick={() => void tutor.runExplain(false)}
               >
                 <Icon name="sparkles" size={14} />
-                <span>✨ AI 深度解析</span>
+                <span>AI 深度解析</span>
               </button>
             </div>
 

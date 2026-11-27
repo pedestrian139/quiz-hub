@@ -69,17 +69,17 @@
 }
 
 .rich-content a {
-  color: var(--brand);
+  color: var(--brand-text);
   text-decoration: underline;
   text-underline-offset: 2px;
 }
 
 .rich-content a:hover {
-  color: var(--brand-hover, var(--brand));
+  color: var(--brand-hover, var(--brand-text));
 }
 
 .rich-content code {
-  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace;
+  font-family: var(--apple-font-mono);
   font-size: 0.88em;
   background: var(--surface-muted);
   color: var(--ink);

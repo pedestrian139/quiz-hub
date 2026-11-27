@@ -34,7 +34,7 @@
   padding: 3px 10px;
   border-radius: 999px;
   background: var(--brand-2);
-  color: var(--brand);
+  color: var(--brand-text);
   border: 1px solid var(--brand-line);
   font-size: 12px;
   font-weight: 650;
@@ -55,25 +55,26 @@
   min-height: 34px;
   padding: 5px 14px;
   border-radius: 999px;
-  border: 1px solid var(--brand);
-  background: var(--brand);
-  color: #fff;
+  border: 1px solid var(--brand-solid);
+  background: var(--brand-solid);
+  color: var(--on-solid);
   font-size: 13px;
   font-weight: 650;
   transition: background 0.16s ease, transform 0.14s ease;
 }
 
 .qi-trigger-btn:hover {
-  background: var(--brand-hover);
+  background: var(--brand-solid-hover);
+  border-color: var(--brand-solid-hover);
 }
 
 .qi-modal-backdrop {
   position: fixed;
   inset: 0;
   z-index: 90;
-  background: rgba(15, 23, 42, 0.56);
-  backdrop-filter: blur(6px);
-  -webkit-backdrop-filter: blur(6px);
+  background: var(--scrim-bg);
+  backdrop-filter: var(--apple-glass-blur);
+  -webkit-backdrop-filter: var(--apple-glass-blur);
   display: flex;
   align-items: center;
   justify-content: center;
@@ -88,7 +89,7 @@
   color: var(--ink);
   border: 1px solid var(--line-strong);
   border-radius: var(--radius);
-  box-shadow: 0 24px 60px rgba(0, 0, 0, 0.28);
+  box-shadow: var(--shadow-modal);
   display: flex;
   flex-direction: column;
   overflow-y: auto;
@@ -141,7 +142,7 @@
 
 .qi-close-btn:hover {
   border-color: var(--brand);
-  color: var(--brand);
+  color: var(--brand-text);
 }
 
 .qi-tabs {
@@ -173,7 +174,7 @@
 
 .qi-tab.is-active {
   background: var(--brand-2);
-  color: var(--brand);
+  color: var(--brand-text);
   border-color: var(--brand-line);
 }
 
@@ -192,7 +193,7 @@
   font-weight: 600;
   border: 1px solid var(--brand-line);
   background: var(--brand-2);
-  color: var(--brand);
+  color: var(--brand-text);
 }
 
 .qi-toast--success {
@@ -204,7 +205,7 @@
 .qi-toast--error {
   border-color: var(--bad-line);
   background: var(--bad-bg);
-  color: var(--bad);
+  color: var(--bad-text);
 }
 
 .qi-card {
@@ -251,7 +252,7 @@
 
 .qi-btn:hover:not(:disabled) {
   border-color: var(--brand);
-  color: var(--brand);
+  color: var(--brand-text);
 }
 
 .qi-btn:disabled {
@@ -260,27 +261,27 @@
 }
 
 .qi-btn--primary {
-  background: var(--brand);
-  border-color: var(--brand);
-  color: #fff;
+  background: var(--brand-solid);
+  border-color: var(--brand-solid);
+  color: var(--on-solid);
 }
 
 .qi-btn--primary:hover:not(:disabled) {
-  background: var(--brand-hover);
-  border-color: var(--brand-hover);
-  color: #fff;
+  background: var(--brand-solid-hover);
+  border-color: var(--brand-solid-hover);
+  color: var(--on-solid);
 }
 
 .qi-btn--danger {
   border-color: var(--bad-line);
-  color: var(--bad);
+  color: var(--bad-text);
   background: var(--bad-subtle);
 }
 
 .qi-btn--danger:hover:not(:disabled) {
   background: var(--bad-bg);
   border-color: var(--bad);
-  color: var(--bad);
+  color: var(--bad-text);
 }
 
 .qi-btn--warn {
@@ -360,7 +361,7 @@
 .qi-pill--brand {
   background: var(--brand-2);
   border-color: var(--brand-line);
-  color: var(--brand);
+  color: var(--brand-text);
 }
 
 .qi-pill--ok {
@@ -378,7 +379,7 @@
 .qi-pill--bad {
   background: var(--bad-bg);
   border-color: var(--bad-line);
-  color: var(--bad);
+  color: var(--bad-text);
 }
 
 .qi-dropzone {
@@ -437,7 +438,7 @@
 }
 
 .qi-text-link:hover:not(:disabled) {
-  color: var(--brand);
+  color: var(--brand-text);
   text-decoration: underline;
   text-underline-offset: 3px;
 }
@@ -521,7 +522,7 @@
 }
 
 .qi-issue--error {
-  color: var(--bad);
+  color: var(--bad-text);
   font-weight: 600;
 }
 
@@ -625,7 +626,7 @@
   flex-wrap: wrap;
   font-size: 12.5px;
   font-weight: 700;
-  color: var(--brand);
+  color: var(--brand-text);
 }
 
 .qi-formula-preview__hint {
@@ -802,7 +803,7 @@
 .qi-wash-type-hint {
   font-size: 12.5px;
   font-weight: 600;
-  color: var(--bad);
+  color: var(--bad-text);
   overflow-wrap: anywhere;
 }
 
@@ -974,7 +975,7 @@
     position: sticky;
     bottom: 0;
     z-index: 5;
-    box-shadow: 0 -6px 18px rgba(15, 23, 42, 0.08);
+    box-shadow: var(--shadow-sticky);
   }
 }
 

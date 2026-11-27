@@ -34,7 +34,7 @@
   padding: 3px 10px;
   border-radius: 999px;
   background: var(--bad-bg);
-  color: var(--bad);
+  color: var(--bad-text);
   border: 1px solid var(--bad-line);
   font-size: 12px;
   font-weight: 650;
@@ -61,9 +61,9 @@
   min-height: 36px;
   padding: 6px 16px;
   border-radius: 999px;
-  border: 1px solid var(--brand);
-  background: var(--brand);
-  color: #fff;
+  border: 1px solid var(--brand-solid);
+  background: var(--brand-solid);
+  color: var(--on-solid);
   font-size: 13px;
   font-weight: 650;
   cursor: pointer;
@@ -71,7 +71,8 @@
 }
 
 .wb-launcher-btn:hover {
-  background: var(--brand-hover);
+  background: var(--brand-solid-hover);
+  border-color: var(--brand-solid-hover);
 }
 
 .wb-launcher-btn:focus-visible {
@@ -84,9 +85,9 @@
   position: fixed;
   inset: 0;
   z-index: 105;
-  background: rgba(15, 23, 42, 0.56);
-  backdrop-filter: blur(6px);
-  -webkit-backdrop-filter: blur(6px);
+  background: var(--scrim-bg);
+  backdrop-filter: var(--apple-glass-blur);
+  -webkit-backdrop-filter: var(--apple-glass-blur);
   display: flex;
   align-items: center;
   justify-content: center;
@@ -101,7 +102,7 @@
   color: var(--ink);
   border: 1px solid var(--line-strong);
   border-radius: var(--radius);
-  box-shadow: 0 24px 60px rgba(0, 0, 0, 0.28);
+  box-shadow: var(--shadow-modal);
   display: flex;
   flex-direction: column;
   overflow: hidden;
@@ -165,7 +166,7 @@
   padding: 4px 10px;
   border-radius: 999px;
   background: var(--brand-2);
-  color: var(--brand);
+  color: var(--brand-text);
   border: 1px solid var(--brand-line);
   font-size: 12px;
   font-weight: 650;
@@ -187,7 +188,7 @@
 
 .wb-close-btn:hover {
   border-color: var(--brand);
-  color: var(--brand);
+  color: var(--brand-text);
 }
 
 .wb-body {
@@ -286,7 +287,7 @@
 
 .wb-sort-btn.is-active {
   background: var(--brand-2);
-  color: var(--brand);
+  color: var(--brand-text);
   border-color: var(--brand-line);
 }
 
@@ -327,13 +328,14 @@
 }
 
 .wb-btn--primary {
-  background: var(--brand);
-  border-color: var(--brand);
-  color: #fff;
+  background: var(--brand-solid);
+  border-color: var(--brand-solid);
+  color: var(--on-solid);
 }
 
 .wb-btn--primary:hover:not(:disabled) {
-  background: var(--brand-hover);
+  background: var(--brand-solid-hover);
+  border-color: var(--brand-solid-hover);
 }
 
 .wb-btn--ok {
@@ -354,7 +356,7 @@
 
 .wb-btn--ghost:hover:not(:disabled) {
   border-color: var(--brand);
-  color: var(--brand);
+  color: var(--brand-text);
 }
 
 /* Empty state */
@@ -440,13 +442,13 @@
 .wb-tag--bank {
   background: var(--brand-2);
   border-color: var(--brand-line);
-  color: var(--brand);
+  color: var(--brand-text);
 }
 
 .wb-tag--wrong {
   background: var(--bad-bg);
   border-color: var(--bad-line);
-  color: var(--bad);
+  color: var(--bad-text);
 }
 
 .wb-item__time {
@@ -466,7 +468,7 @@
 
 .wb-item__history {
   font-size: 13px;
-  color: var(--bad);
+  color: var(--bad-text);
   line-height: 1.5;
   overflow-wrap: anywhere;
 }
@@ -649,7 +651,7 @@
 .wb-feedback--bad {
   background: var(--bad-bg);
   border: 1px solid var(--bad-line);
-  color: var(--bad);
+  color: var(--bad-text);
 }
 
 .wb-explanation {
