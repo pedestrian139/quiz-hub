@@ -13,6 +13,13 @@ export type ApiProviderId =
 
 export type ApiStorageScope = 'local' | 'session';
 
+export interface ApiModelMeta {
+  id: string;
+  name?: string;
+  contextWindow?: number;
+  maxOutputTokens?: number;
+}
+
 export interface ApiProviderPreset {
   id: ApiProviderId;
   name: string;
@@ -20,6 +27,7 @@ export interface ApiProviderPreset {
   baseUrl: string;
   defaultModel: string;
   models: string[];
+  modelMetas?: Record<string, Omit<ApiModelMeta, 'id'>>;
   keyPlaceholder: string;
   hint: string;
 }
@@ -37,10 +45,13 @@ export interface ApiConfig {
 
 /** Independent storage key — never collides with `ai-intro-quiz-v1` or `ai-intro-quiz-theme`. */
 export const API_CONFIG_STORAGE_KEY = 'ai-intro-quiz-api-config-v1';
+/** Public model catalog cache keyed by provider + baseUrl (never stores API keys). */
+export const API_MODELS_CACHE_KEY = 'ai-intro-quiz-api-models-cache-v1';
 export const API_CONFIG_CHANGE_EVENT = 'quiz-hub:api-config-change';
 export const OPEN_API_SETTINGS_EVENT = 'quiz-hub:open-api-settings';
 
 const DANGEROUS_KEYS = new Set(['__proto__', 'constructor', 'prototype']);
+const MAX_CACHED_MODEL_ENDPOINTS = 20;
 
 export const API_PROVIDER_PRESETS: readonly ApiProviderPreset[] = [
   {
@@ -48,8 +59,12 @@ export const API_PROVIDER_PRESETS: readonly ApiProviderPreset[] = [
     name: 'DeepSeek 官方',
     shortName: 'DeepSeek',
     baseUrl: 'https://api.deepseek.com/v1',
-    defaultModel: 'deepseek-chat',
-    models: ['deepseek-chat', 'deepseek-reasoner'],
+    defaultModel: 'deepseek-flash',
+    models: ['deepseek-flash', 'deepseek-v4-pro'],
+    modelMetas: {
+      'deepseek-flash': { name: 'V4.1-Flash' },
+      'deepseek-v4-pro': { name: 'V4-Pro' },
+    },
     keyPlaceholder: 'sk-...',
     hint: '性价比高、中文课程解析准确，支持 OpenAI 兼容协议。',
   },
@@ -136,6 +151,18 @@ export function getProviderPreset(id: ApiProviderId): ApiProviderPreset {
   return API_PROVIDER_PRESETS.find((p) => p.id === id) ?? API_PROVIDER_PRESETS[0];
 }
 
+export function getPresetModelMetas(preset: ApiProviderPreset): ApiModelMeta[] {
+  return preset.models.map((id) => {
+    const meta = preset.modelMetas?.[id];
+    return {
+      id,
+      ...(meta?.name ? { name: meta.name } : {}),
+      ...(meta?.contextWindow ? { contextWindow: meta.contextWindow } : {}),
+      ...(meta?.maxOutputTokens ? { maxOutputTokens: meta.maxOutputTokens } : {}),
+    };
+  });
+}
+
 export function createDefaultApiConfig(): ApiConfig {
   const preset = API_PROVIDER_PRESETS[0];
   return {
@@ -144,7 +171,7 @@ export function createDefaultApiConfig(): ApiConfig {
     apiKey: '',
     model: preset.defaultModel,
     temperature: 0.3,
-    maxTokens: 1200,
+    maxTokens: 4096,
     timeoutMs: 45000,
     storageScope: 'local',
   };
@@ -256,7 +283,7 @@ export function sanitizeApiConfig(raw: unknown, fallbackScope: ApiStorageScope =
   const apiKey = typeof raw.apiKey === 'string' ? raw.apiKey.trim() : '';
   const model = typeof raw.model === 'string' ? raw.model.trim() : preset.defaultModel;
   const temperature = Math.round(clampNumber(raw.temperature, 0, 2, defaults.temperature) * 100) / 100;
-  const maxTokens = Math.round(clampNumber(raw.maxTokens, 64, 16384, defaults.maxTokens));
+  const maxTokens = Math.round(clampNumber(raw.maxTokens, 64, 65536, defaults.maxTokens));
   const timeoutMs = Math.round(clampNumber(raw.timeoutMs, 5000, 180000, defaults.timeoutMs));
   const storageScope: ApiStorageScope =
     raw.storageScope === 'session' || raw.storageScope === 'local'
@@ -458,5 +485,136 @@ export function requestOpenApiSettings(): void {
     window.dispatchEvent(new CustomEvent(OPEN_API_SETTINGS_EVENT));
   } catch {
     // Ignore
+  }
+}
+
+interface CachedModelsEntry {
+  models: ApiModelMeta[];
+  updatedAt: number;
+}
+
+function modelCacheKey(provider: ApiProviderId, baseUrl: string): string | null {
+  const normalized = normalizeBaseUrl(baseUrl);
+  if (!normalized) return null;
+  return `${provider}::${normalized}`;
+}
+
+function sanitizeCachedModelMeta(raw: unknown): ApiModelMeta | null {
+  if (!isPlainObject(raw)) return null;
+  if (Object.getOwnPropertyNames(raw).some((k) => DANGEROUS_KEYS.has(k))) return null;
+  if (typeof raw.id !== 'string' || !raw.id.trim()) return null;
+  const id = raw.id.trim();
+  const name = typeof raw.name === 'string' && raw.name.trim() && raw.name.trim() !== id
+    ? raw.name.trim()
+    : undefined;
+  const contextWindow =
+    typeof raw.contextWindow === 'number' && Number.isFinite(raw.contextWindow) && raw.contextWindow > 0
+      ? Math.round(raw.contextWindow)
+      : undefined;
+  const maxOutputTokens =
+    typeof raw.maxOutputTokens === 'number' && Number.isFinite(raw.maxOutputTokens) && raw.maxOutputTokens > 0
+      ? Math.round(raw.maxOutputTokens)
+      : undefined;
+  return {
+    id,
+    ...(name ? { name } : {}),
+    ...(contextWindow ? { contextWindow } : {}),
+    ...(maxOutputTokens ? { maxOutputTokens } : {}),
+  };
+}
+
+function readModelCacheMap(): Record<string, CachedModelsEntry> {
+  const storage = getStorageByScope('local');
+  if (!storage) return {};
+  try {
+    const raw = storage.getItem(API_MODELS_CACHE_KEY);
+    if (!raw) return {};
+    const parsed: unknown = JSON.parse(raw);
+    if (!isPlainObject(parsed)) return {};
+    const result: Record<string, CachedModelsEntry> = {};
+    for (const key of Object.getOwnPropertyNames(parsed)) {
+      if (DANGEROUS_KEYS.has(key)) continue;
+      const entry = parsed[key];
+      if (!isPlainObject(entry) || !Array.isArray(entry.models)) continue;
+      const cleanModels: ApiModelMeta[] = [];
+      for (const item of entry.models) {
+        const clean = sanitizeCachedModelMeta(item);
+        if (clean) cleanModels.push(clean);
+      }
+      if (cleanModels.length > 0) {
+        result[key] = {
+          models: cleanModels,
+          updatedAt:
+            typeof entry.updatedAt === 'number' && Number.isFinite(entry.updatedAt)
+              ? entry.updatedAt
+              : 0,
+        };
+      }
+    }
+    return result;
+  } catch {
+    return {};
+  }
+}
+
+export function loadCachedProviderModels(provider: ApiProviderId, baseUrl: string): ApiModelMeta[] {
+  const key = modelCacheKey(provider, baseUrl);
+  if (!key) return [];
+  const map = readModelCacheMap();
+  return map[key]?.models ?? [];
+}
+
+export function saveCachedProviderModels(
+  provider: ApiProviderId,
+  baseUrl: string,
+  models: readonly ApiModelMeta[],
+): void {
+  const key = modelCacheKey(provider, baseUrl);
+  const storage = getStorageByScope('local');
+  if (!key || !storage) return;
+
+  const cleanModels: ApiModelMeta[] = [];
+  const seen = new Set<string>();
+  for (const item of models) {
+    const clean = sanitizeCachedModelMeta(item);
+    if (clean && !seen.has(clean.id)) {
+      seen.add(clean.id);
+      cleanModels.push(clean);
+    }
+  }
+  if (cleanModels.length === 0) return;
+
+  const map = readModelCacheMap();
+  map[key] = { models: cleanModels, updatedAt: Date.now() };
+
+  const entries = Object.entries(map).sort((a, b) => b[1].updatedAt - a[1].updatedAt);
+  const pruned: Record<string, CachedModelsEntry> = {};
+  for (const [k, v] of entries.slice(0, MAX_CACHED_MODEL_ENDPOINTS)) {
+    pruned[k] = v;
+  }
+  try {
+    storage.setItem(API_MODELS_CACHE_KEY, JSON.stringify(pruned));
+  } catch {
+    // Ignore storage quota errors for non-critical public model cache
+  }
+}
+
+export function clearCachedProviderModels(provider?: ApiProviderId, baseUrl?: string): void {
+  const storage = getStorageByScope('local');
+  if (!storage) return;
+  try {
+    if (!provider || !baseUrl) {
+      storage.removeItem(API_MODELS_CACHE_KEY);
+      return;
+    }
+    const key = modelCacheKey(provider, baseUrl);
+    if (!key) return;
+    const map = readModelCacheMap();
+    if (key in map) {
+      delete map[key];
+      storage.setItem(API_MODELS_CACHE_KEY, JSON.stringify(map));
+    }
+  } catch {
+    // Ignore storage errors
   }
 }

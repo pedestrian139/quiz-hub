@@ -4,8 +4,61 @@ import {
   loadApiConfig,
   normalizeBaseUrl,
   type ApiConfig,
+  type ApiModelMeta,
 } from './apiConfig';
 import type { PracticeScope } from '../core/practiceScope';
+
+export type ModelInfo = ApiModelMeta;
+
+export const NON_CHAT_MODEL_KEYWORDS = [
+  'embedding',
+  'rerank',
+  'tts',
+  'whisper',
+  'dall-e',
+  'flux',
+  'image',
+  'audio',
+  'ocr',
+  'moderation',
+  'realtime',
+] as const;
+
+export function normalizeFetchedModelId(rawId: string): string {
+  const trimmed = rawId.trim();
+  if (!trimmed) return '';
+  return trimmed.replace(/^models\//i, '').trim();
+}
+
+export function isNonChatModel(model: string | ModelInfo): boolean {
+  const id = (typeof model === 'string' ? model : model.id).toLowerCase();
+  const name = (typeof model === 'string' ? '' : (model.name ?? '')).toLowerCase();
+  const combined = `${id} ${name}`;
+  return NON_CHAT_MODEL_KEYWORDS.some((kw) => combined.includes(kw));
+}
+
+export function formatContextWindow(tokens?: number): string | null {
+  if (typeof tokens !== 'number' || !Number.isFinite(tokens) || tokens <= 0) {
+    return null;
+  }
+  if (tokens >= 1_000_000) {
+    const binaryM = tokens / 1_048_576;
+    if (Math.abs(binaryM - Math.round(binaryM)) < 0.01) {
+      return `${Math.round(binaryM)}M`;
+    }
+    const decimalM = tokens / 1_000_000;
+    const rounded = Math.round(decimalM * 10) / 10;
+    return `${Number.isInteger(rounded) ? rounded : rounded.toFixed(1)}M`;
+  }
+  if (tokens >= 1_000) {
+    if (tokens % 1024 === 0 && tokens / 1024 >= 2) {
+      return `${tokens / 1024}K`;
+    }
+    const k = Math.round(tokens / 1_000);
+    return `${k}K`;
+  }
+  return String(Math.round(tokens));
+}
 
 export type ChatRole = 'system' | 'user' | 'assistant';
 
@@ -561,11 +614,98 @@ export async function testApiConnection(
   }
 }
 
-export async function fetchAvailableModels(
+function parsePositiveInt(value: unknown): number | undefined {
+  if (typeof value === 'number' && Number.isFinite(value) && value > 0) {
+    return Math.round(value);
+  }
+  if (typeof value === 'string' && value.trim()) {
+    const num = Number(value.trim());
+    if (Number.isFinite(num) && num > 0) {
+      return Math.round(num);
+    }
+  }
+  return undefined;
+}
+
+function parseRawModelEntry(raw: unknown): ModelInfo | null {
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return null;
+  const item = raw as Record<string, unknown>;
+  const rawId =
+    typeof item.id === 'string' && item.id.trim()
+      ? item.id
+      : typeof item.name === 'string' && item.name.trim()
+        ? item.name
+        : '';
+  const id = normalizeFetchedModelId(rawId);
+  if (!id) return null;
+
+  const rawDisplayName =
+    typeof item.display_name === 'string' && item.display_name.trim()
+      ? item.display_name.trim()
+      : typeof item.displayName === 'string' && item.displayName.trim()
+        ? item.displayName.trim()
+        : typeof item.id === 'string' && typeof item.name === 'string' && item.name.trim()
+          ? normalizeFetchedModelId(item.name)
+          : undefined;
+  const name = rawDisplayName && rawDisplayName !== id ? rawDisplayName : undefined;
+
+  const contextWindow = parsePositiveInt(
+    item.context_window ??
+      item.context_length ??
+      item.contextWindow ??
+      item.inputTokenLimit ??
+      item.input_token_limit ??
+      item.max_context_length,
+  );
+  const maxOutputTokens = parsePositiveInt(
+    item.max_output_tokens ??
+      item.maxOutputTokens ??
+      item.outputTokenLimit ??
+      item.output_token_limit ??
+      item.max_completion_tokens,
+  );
+
+  return {
+    id,
+    ...(name ? { name } : {}),
+    ...(contextWindow ? { contextWindow } : {}),
+    ...(maxOutputTokens ? { maxOutputTokens } : {}),
+  };
+}
+
+function mapModelsEndpointError(status: number, bodyText: string): LlmApiError {
+  if (status === 401) {
+    return new LlmApiError(
+      'UNAUTHORIZED',
+      'API Key 无效或已过期（HTTP 401），无法拉取模型列表，请检查 Key 或改用下方兜底预设 / 手动输入。',
+      401,
+      bodyText,
+    );
+  }
+  if (status === 403) {
+    return new LlmApiError(
+      'FORBIDDEN',
+      '当前 API Key 无权限访问模型列表接口（HTTP 403），可改用下方兜底预设或手动输入模型 ID。',
+      403,
+      bodyText,
+    );
+  }
+  if (status === 404) {
+    return new LlmApiError(
+      'NOT_FOUND',
+      '该服务商不支持 /models 模型列表接口（HTTP 404），已自动降级为兜底预设，也可直接手动输入模型 ID。',
+      404,
+      bodyText,
+    );
+  }
+  return mapHttpError(status, bodyText);
+}
+
+export async function fetchAvailableModelInfos(
   configOverride?: Partial<ApiConfig>,
   signal?: AbortSignal,
   practiceScope?: PracticeScope,
-): Promise<string[]> {
+): Promise<ModelInfo[]> {
   const config = resolveEffectiveConfig(configOverride, practiceScope);
   if (!isValidHttpUrl(config.baseUrl)) {
     throw new LlmApiError('INVALID_URL', '请先填写有效的 API Base URL。');
@@ -581,32 +721,65 @@ export async function fetchAvailableModels(
 
     if (!res.ok) {
       const errText = await res.text().catch(() => '');
-      throw mapHttpError(res.status, errText);
+      throw mapModelsEndpointError(res.status, errText);
     }
 
-    const payload = (await res.json().catch(() => null)) as {
-      data?: Array<{ id?: unknown }>;
-      models?: Array<{ id?: unknown; name?: unknown }>;
-    } | null;
+    const payload = (await res.json().catch(() => null)) as
+      | { data?: unknown[]; models?: unknown[] }
+      | unknown[]
+      | null;
 
-    const ids = new Set<string>();
-    if (Array.isArray(payload?.data)) {
-      for (const item of payload.data) {
-        if (typeof item?.id === 'string' && item.id.trim()) {
-          ids.add(item.id.trim());
-        }
-      }
-    } else if (Array.isArray(payload?.models)) {
-      for (const item of payload.models) {
-        const id = typeof item?.id === 'string' ? item.id : typeof item?.name === 'string' ? item.name : '';
-        if (id.trim()) ids.add(id.trim());
+    const rawList: unknown[] = Array.isArray(payload)
+      ? payload
+      : Array.isArray(payload?.data)
+        ? payload.data
+        : Array.isArray(payload?.models)
+          ? payload.models
+          : [];
+
+    const byId = new Map<string, ModelInfo>();
+    for (const rawItem of rawList) {
+      const parsed = parseRawModelEntry(rawItem);
+      if (!parsed) continue;
+      const existing = byId.get(parsed.id);
+      if (!existing) {
+        byId.set(parsed.id, parsed);
+      } else {
+        byId.set(parsed.id, {
+          id: parsed.id,
+          ...(existing.name || parsed.name ? { name: existing.name || parsed.name } : {}),
+          ...(existing.contextWindow || parsed.contextWindow
+            ? { contextWindow: existing.contextWindow || parsed.contextWindow }
+            : {}),
+          ...(existing.maxOutputTokens || parsed.maxOutputTokens
+            ? { maxOutputTokens: existing.maxOutputTokens || parsed.maxOutputTokens }
+            : {}),
+        });
       }
     }
 
-    return Array.from(ids).sort((a, b) => a.localeCompare(b));
+    return Array.from(byId.values()).sort((a, b) => a.id.localeCompare(b.id));
   } catch (err) {
-    throw mapFetchException(err, linked.didTimeout(), Boolean(signal?.aborted));
+    const mapped = mapFetchException(err, linked.didTimeout(), Boolean(signal?.aborted));
+    if (mapped.code === 'NETWORK_OR_CORS') {
+      throw new LlmApiError(
+        'NETWORK_OR_CORS',
+        '拉取模型列表受网络或浏览器 CORS 跨域限制，已自动降级为兜底预设，也可直接手动输入模型 ID。',
+        undefined,
+        mapped.message,
+      );
+    }
+    throw mapped;
   } finally {
     linked.cleanup();
   }
+}
+
+export async function fetchAvailableModels(
+  configOverride?: Partial<ApiConfig>,
+  signal?: AbortSignal,
+  practiceScope?: PracticeScope,
+): Promise<string[]> {
+  const infos = await fetchAvailableModelInfos(configOverride, signal, practiceScope);
+  return infos.map((m) => m.id);
 }

@@ -46,6 +46,7 @@ import type {
   ImportParseResult,
   ImportSourceFormat,
 } from '../../utils/quizImportTypes';
+import { RichContent } from '../RichContent';
 
 export interface CommitNewBankPayload {
   mode: 'new';
@@ -210,8 +211,13 @@ export function ImportWorkbench({
   const [drafts, setDrafts] = useState<DraftQuestion[]>([]);
   const [filterIssuesOnly, setFilterIssuesOnly] = useState(false);
   const [editingId, setEditingId] = useState<string | null>(null);
+  const [formulaPreviewIds, setFormulaPreviewIds] = useState<Record<string, boolean>>({});
   const [visibleCount, setVisibleCount] = useState(PAGE_STEP);
   const [committing, setCommitting] = useState(false);
+
+  const toggleFormulaPreview = (tempId: string) => {
+    setFormulaPreviewIds((prev) => ({ ...prev, [tempId]: !prev[tempId] }));
+  };
 
   const canAppendExisting = Boolean(onCommit) && customBanks.length > 0;
   const effectiveTargetBankMode: 'new' | 'existing' =
@@ -252,6 +258,7 @@ export function ImportWorkbench({
     setDrafts(res.drafts);
     setFilterIssuesOnly(false);
     setEditingId(null);
+    setFormulaPreviewIds({});
     setVisibleCount(PAGE_STEP);
     setFailedChunks([]);
     setWashProgress(null);
@@ -872,32 +879,6 @@ export function ImportWorkbench({
                 粘贴文本 / Markdown / JSON
               </button>
             </div>
-
-            <div className="qi-btn-group">
-              <button
-                type="button"
-                data-testid="btn-download-xlsx-tpl"
-                className="qi-btn qi-btn--sm"
-                onClick={() => {
-                  void downloadExcelTemplate().then(() => {
-                    notify('已下载标准 Excel 导入模板（quizhub-template.xlsx）', 'success');
-                  });
-                }}
-              >
-                下载 Excel 模板
-              </button>
-              <button
-                type="button"
-                data-testid="btn-download-txt-tpl"
-                className="qi-btn qi-btn--sm"
-                onClick={() => {
-                  downloadTxtTemplate();
-                  notify('已下载标准 TXT 导入模板（quizhub-template.txt）', 'success');
-                }}
-              >
-                下载 TXT 模板
-              </button>
-            </div>
           </div>
 
           {inputMode === 'file' ? (
@@ -936,6 +917,35 @@ export function ImportWorkbench({
               >
                 {parsing ? '正在加载解析器并拆题…' : '选择本地文件导入'}
               </button>
+              <div className="qi-template-links">
+                <span className="qi-template-links__label">格式参考：</span>
+                <button
+                  type="button"
+                  data-testid="btn-download-xlsx-tpl"
+                  className="qi-text-link"
+                  onClick={() => {
+                    void downloadExcelTemplate().then(() => {
+                      notify('已下载标准 Excel 导入模板（quizhub-template.xlsx）', 'success');
+                    });
+                  }}
+                >
+                  下载 Excel 模板
+                </button>
+                <span className="qi-template-links__sep" aria-hidden="true">
+                  ·
+                </span>
+                <button
+                  type="button"
+                  data-testid="btn-download-txt-tpl"
+                  className="qi-text-link"
+                  onClick={() => {
+                    downloadTxtTemplate();
+                    notify('已下载标准 TXT 导入模板（quizhub-template.txt）', 'success');
+                  }}
+                >
+                  下载 TXT 模板
+                </button>
+              </div>
             </div>
           ) : (
             <div
@@ -1374,6 +1384,7 @@ export function ImportWorkbench({
                     const hasWarn = draft.issues.some((i) => i.severity === 'warning');
                     const severity = hasErr ? 'error' : hasWarn ? 'warning' : 'ok';
                     const isEditing = editingId === draft.tempId;
+                    const isFormulaPreviewOpen = Boolean(formulaPreviewIds[draft.tempId]);
 
                     return (
                       <div
@@ -1490,6 +1501,18 @@ export function ImportWorkbench({
 
                         {isEditing && (
                           <div className="qi-draft-editor">
+                            <div className="qi-draft-editor__bar">
+                              <span className="qi-field__label">编辑草稿内容</span>
+                              <button
+                                type="button"
+                                data-testid={`draft-formula-preview-toggle-${origIndex}`}
+                                className={`qi-btn qi-btn--sm qi-formula-toggle${isFormulaPreviewOpen ? ' qi-btn--primary' : ''}`}
+                                aria-pressed={isFormulaPreviewOpen}
+                                onClick={() => toggleFormulaPreview(draft.tempId)}
+                              >
+                                {isFormulaPreviewOpen ? '隐藏公式预览' : '公式预览'}
+                              </button>
+                            </div>
                             <div className="qi-grid-two">
                               <label className="qi-field">
                                 <span className="qi-field__label">题型</span>
@@ -1603,7 +1626,8 @@ export function ImportWorkbench({
                                       <button
                                         type="button"
                                         data-testid={`draft-edit-ans-${origIndex}-${optIdx}`}
-                                        className={`qi-btn qi-btn--sm${isChecked ? ' qi-btn--primary' : ''}`}
+                                        className={`qi-btn qi-btn--sm qi-opt-badge${isChecked ? ' qi-btn--primary' : ''}`}
+                                        aria-pressed={isChecked}
                                         onClick={() =>
                                           updateDraft(draft.tempId, (d) => {
                                             if (d.type === 'choice') {
@@ -1627,7 +1651,17 @@ export function ImportWorkbench({
                                           })
                                         }
                                       >
-                                        {getOptionLabel(optIdx)} {isChecked ? '✓' : ''}
+                                        <span className="qi-opt-badge__label">
+                                          {getOptionLabel(optIdx)}
+                                        </span>
+                                        {isChecked && (
+                                          <span
+                                            className="qi-opt-badge__check"
+                                            aria-hidden="true"
+                                          >
+                                            ✓
+                                          </span>
+                                        )}
                                       </button>
                                       <input
                                         type="text"
@@ -1647,7 +1681,7 @@ export function ImportWorkbench({
                                         <button
                                           type="button"
                                           data-testid={`draft-remove-opt-${origIndex}-${optIdx}`}
-                                          className="qi-btn qi-btn--sm qi-btn--danger"
+                                          className="qi-btn qi-btn--sm qi-btn--danger qi-opt-remove"
                                           aria-label={`移除选项 ${getOptionLabel(optIdx)}`}
                                           onClick={() =>
                                             updateDraft(draft.tempId, (d) => {
@@ -1783,6 +1817,92 @@ export function ImportWorkbench({
                                 onKeyDown={stopShortcutBubble}
                               />
                             </label>
+
+                            {isFormulaPreviewOpen && (
+                              <div
+                                data-testid={`draft-formula-preview-${origIndex}`}
+                                className="qi-formula-preview"
+                              >
+                                <div className="qi-formula-preview__header">
+                                  <span>公式与排版实时预览</span>
+                                  <span className="qi-formula-preview__hint">
+                                    支持 $...$ / $$...$$ 与 Markdown
+                                  </span>
+                                </div>
+                                <div className="qi-formula-preview__section">
+                                  <div className="qi-formula-preview__label">题干</div>
+                                  <div className="qi-formula-preview__body">
+                                    {draft.stem.trim() ? (
+                                      <RichContent content={draft.stem} />
+                                    ) : (
+                                      <span className="qi-formula-preview__empty">
+                                        （空题干）
+                                      </span>
+                                    )}
+                                  </div>
+                                </div>
+                                {(draft.type === 'choice' || draft.type === 'multi') &&
+                                  draft.options.length > 0 && (
+                                    <div className="qi-formula-preview__section">
+                                      <div className="qi-formula-preview__label">选项</div>
+                                      <ul className="qi-formula-preview__opts">
+                                        {draft.options.map((opt, optIdx) => {
+                                          const isChecked =
+                                            draft.type === 'choice'
+                                              ? draft.answer === optIdx
+                                              : Array.isArray(draft.answer) &&
+                                                draft.answer.includes(optIdx);
+                                          return (
+                                            <li
+                                              key={optIdx}
+                                              className={`qi-formula-preview__opt${isChecked ? ' is-correct' : ''}`}
+                                            >
+                                              <span className="qi-formula-preview__opt-tag">
+                                                {getOptionLabel(optIdx)}
+                                              </span>
+                                              <div className="qi-formula-preview__opt-text">
+                                                {opt.trim() ? (
+                                                  <RichContent inline content={opt} />
+                                                ) : (
+                                                  <span className="qi-formula-preview__empty">
+                                                    （空选项）
+                                                  </span>
+                                                )}
+                                              </div>
+                                            </li>
+                                          );
+                                        })}
+                                      </ul>
+                                    </div>
+                                  )}
+                                {(draft.type === 'short' || draft.type === 'analysis') && (
+                                  <div className="qi-formula-preview__section">
+                                    <div className="qi-formula-preview__label">参考答案</div>
+                                    <div className="qi-formula-preview__body">
+                                      {typeof draft.answer === 'string' && draft.answer.trim() ? (
+                                        <RichContent content={draft.answer} />
+                                      ) : (
+                                        <span className="qi-formula-preview__empty">
+                                          （未填写参考答案）
+                                        </span>
+                                      )}
+                                    </div>
+                                  </div>
+                                )}
+                                <div className="qi-formula-preview__section">
+                                  <div className="qi-formula-preview__label">解析</div>
+                                  <div className="qi-formula-preview__body">
+                                    {draft.explain.trim() ? (
+                                      <RichContent content={draft.explain} />
+                                    ) : (
+                                      <span className="qi-formula-preview__empty">
+                                        （未填写解析）
+                                      </span>
+                                    )}
+                                  </div>
+                                </div>
+                              </div>
+                            )}
                           </div>
                         )}
                       </div>

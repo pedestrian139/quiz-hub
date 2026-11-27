@@ -1509,6 +1509,112 @@ describe('Smart Import & AI Washing Workbench (M2)', () => {
 
     expect(mockFetch).toHaveBeenCalledTimes(1);
   });
+
+  it('SW-17: Draft editor preserves option row badge/remove layout classes and supports toggleable live LaTeX formula preview without colliding with existing testids', async () => {
+    root = createRoot(container);
+    await act(async () => {
+      root!.render(
+        React.createElement(ImportWorkbench, {
+          notify: vi.fn(),
+          onCommit: vi.fn().mockResolvedValue(undefined),
+        }),
+      );
+    });
+
+    await act(async () => {
+      (container.querySelector('[data-testid="import-tab-paste"]') as HTMLButtonElement).click();
+    });
+
+    const jsonWithMath = JSON.stringify([
+      {
+        type: 'choice',
+        stem: '已知概率 $p = \\frac{1}{2}$，其期望是多少？',
+        options: ['$O(n \\log n)$', '$O(n)$', '$O(1)$'],
+        answer: 0,
+        explain: '根据质能方程 $E = mc^2$ 可得。',
+      },
+    ]);
+
+    const textarea = container.querySelector(
+      '[data-testid="import-paste-textarea"]',
+    ) as HTMLTextAreaElement;
+    await act(async () => {
+      setNativeValue(textarea, jsonWithMath);
+    });
+    await act(async () => {
+      (container.querySelector('[data-testid="ai-wash-btn"]') as HTMLButtonElement).click();
+    });
+    await act(async () => {
+      (container.querySelector('[data-testid="json-intercept-direct-btn"]') as HTMLButtonElement).click();
+    });
+
+    expect(container.querySelectorAll('[data-testid^="preview-draft-"]')).toHaveLength(1);
+
+    await act(async () => {
+      (container.querySelector('[data-testid="draft-edit-0"]') as HTMLButtonElement).click();
+    });
+
+    const ans0 = container.querySelector('[data-testid="draft-edit-ans-0-0"]') as HTMLButtonElement;
+    const ans1 = container.querySelector('[data-testid="draft-edit-ans-0-1"]') as HTMLButtonElement;
+    const remove0 = container.querySelector(
+      '[data-testid="draft-remove-opt-0-0"]',
+    ) as HTMLButtonElement;
+
+    expect(ans0.classList.contains('qi-opt-badge')).toBe(true);
+    expect(ans1.classList.contains('qi-opt-badge')).toBe(true);
+    expect(ans0.getAttribute('aria-pressed')).toBe('true');
+    expect(ans1.getAttribute('aria-pressed')).toBe('false');
+    expect(remove0.classList.contains('qi-opt-remove')).toBe(true);
+    expect(container.querySelector('[data-testid="draft-edit-stem-0"]')).not.toBeNull();
+    expect(container.querySelector('[data-testid="draft-edit-opt-0-0"]')).not.toBeNull();
+    expect(container.querySelector('[data-testid="draft-edit-explain-0"]')).not.toBeNull();
+
+    // Formula preview starts closed
+    expect(container.querySelector('[data-testid="draft-formula-preview-0"]')).toBeNull();
+
+    const toggleBtn = container.querySelector(
+      '[data-testid="draft-formula-preview-toggle-0"]',
+    ) as HTMLButtonElement;
+    expect(toggleBtn.getAttribute('aria-pressed')).toBe('false');
+
+    // Open formula preview -> renders KaTeX across stem, options, and explain
+    await act(async () => {
+      toggleBtn.click();
+    });
+
+    const previewBox = container.querySelector('[data-testid="draft-formula-preview-0"]');
+    expect(previewBox).not.toBeNull();
+    expect(toggleBtn.getAttribute('aria-pressed')).toBe('true');
+    expect(previewBox!.querySelectorAll('.katex').length).toBeGreaterThanOrEqual(5);
+    expect(container.querySelectorAll('[data-testid^="preview-draft-"]')).toHaveLength(1);
+
+    // Live editing updates preview content
+    await act(async () => {
+      setNativeValue(
+        container.querySelector('[data-testid="draft-edit-stem-0"]') as HTMLTextAreaElement,
+        '更新积分公式 $\\int_0^1 x\\,dx = \\frac{1}{2}$',
+      );
+      setNativeValue(
+        container.querySelector('[data-testid="draft-edit-opt-0-1"]') as HTMLInputElement,
+        '$\\alpha + \\beta$',
+      );
+      setNativeValue(
+        container.querySelector('[data-testid="draft-edit-explain-0"]') as HTMLTextAreaElement,
+        '解析更新 $\\sum_{i=1}^n i$',
+      );
+    });
+
+    expect(previewBox!.textContent).toContain('更新积分公式');
+    expect(previewBox!.textContent).toContain('解析更新');
+    expect(previewBox!.querySelectorAll('.katex').length).toBeGreaterThanOrEqual(5);
+
+    // Toggle off
+    await act(async () => {
+      toggleBtn.click();
+    });
+    expect(container.querySelector('[data-testid="draft-formula-preview-0"]')).toBeNull();
+    expect(toggleBtn.getAttribute('aria-pressed')).toBe('false');
+  });
 });
 
 function setSelectValue(el: HTMLSelectElement, value: string) {

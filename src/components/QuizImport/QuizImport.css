@@ -399,6 +399,54 @@
   background: var(--brand-2);
 }
 
+.qi-template-links {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 2px;
+  font-size: 12.5px;
+  line-height: 1.4;
+  color: var(--sub);
+}
+
+.qi-template-links__label {
+  color: var(--sub);
+  opacity: 0.85;
+}
+
+.qi-template-links__sep {
+  color: var(--line-strong);
+  user-select: none;
+}
+
+.qi-text-link {
+  border: none;
+  background: transparent;
+  padding: 2px;
+  min-height: 24px;
+  font-size: 12.5px;
+  font-weight: 400;
+  color: var(--sub);
+  white-space: nowrap;
+  cursor: pointer;
+  border-radius: 4px;
+  text-decoration: none;
+  transition: color 0.14s ease;
+}
+
+.qi-text-link:hover:not(:disabled) {
+  color: var(--brand);
+  text-decoration: underline;
+  text-underline-offset: 3px;
+}
+
+.qi-text-link:focus-visible {
+  outline: 2px solid var(--brand);
+  outline-offset: 2px;
+}
+
 .qi-field {
   display: flex;
   flex-direction: column;
@@ -512,6 +560,150 @@
   align-items: center;
   gap: 8px;
   min-width: 0;
+}
+
+.qi-opt-row .qi-input {
+  flex: 1 1 0;
+  min-width: 0;
+  width: auto;
+}
+
+.qi-opt-badge {
+  flex: 0 0 52px;
+  width: 52px;
+  min-width: 52px;
+  height: 36px;
+  min-height: 36px;
+  padding: 0;
+  gap: 3px;
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+}
+
+.qi-opt-badge__check {
+  font-size: 11.5px;
+  line-height: 1;
+}
+
+.qi-opt-remove {
+  flex: 0 0 auto;
+  min-width: 56px;
+  height: 36px;
+  min-height: 36px;
+  padding: 0 10px;
+  white-space: nowrap;
+}
+
+.qi-draft-editor__bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.qi-formula-toggle {
+  white-space: nowrap;
+}
+
+.qi-formula-preview {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 12px;
+  border-radius: 10px;
+  border: 1px solid var(--brand-line);
+  background: var(--surface-elevated);
+  min-width: 0;
+}
+
+.qi-formula-preview__header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  flex-wrap: wrap;
+  font-size: 12.5px;
+  font-weight: 700;
+  color: var(--brand);
+}
+
+.qi-formula-preview__hint {
+  font-size: 11.5px;
+  font-weight: 500;
+  color: var(--sub);
+}
+
+.qi-formula-preview__section {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+}
+
+.qi-formula-preview__label {
+  font-size: 12px;
+  font-weight: 650;
+  color: var(--sub);
+}
+
+.qi-formula-preview__body {
+  font-size: 14px;
+  color: var(--ink);
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.qi-formula-preview__empty {
+  font-size: 12.5px;
+  color: var(--sub);
+  font-style: italic;
+}
+
+.qi-formula-preview__opts {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.qi-formula-preview__opt {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  padding: 6px 9px;
+  border-radius: 8px;
+  border: 1px solid var(--line);
+  background: var(--surface-subtle);
+  min-width: 0;
+}
+
+.qi-formula-preview__opt.is-correct {
+  border-color: var(--ok-line);
+  background: var(--ok-bg);
+}
+
+.qi-formula-preview__opt-tag {
+  flex: 0 0 22px;
+  width: 22px;
+  text-align: center;
+  font-size: 12px;
+  font-weight: 700;
+  color: var(--sub);
+}
+
+.qi-formula-preview__opt.is-correct .qi-formula-preview__opt-tag {
+  color: var(--ok);
+}
+
+.qi-formula-preview__opt-text {
+  flex: 1 1 0;
+  min-width: 0;
+  font-size: 13.5px;
+  color: var(--ink);
+  overflow-wrap: anywhere;
 }
 
 .qi-workbench {

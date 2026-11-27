@@ -1,16 +1,22 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   API_CONFIG_STORAGE_KEY,
+  API_MODELS_CACHE_KEY,
   clearApiConfig,
+  clearCachedProviderModels,
   createDefaultApiConfig,
+  getPresetModelMetas,
+  getProviderPreset,
   isApiConfigReady,
   isLocalEndpoint,
   isValidHttpUrl,
   loadApiConfig,
+  loadCachedProviderModels,
   maskApiKey,
   normalizeBaseUrl,
   sanitizeApiConfig,
   saveApiConfig,
+  saveCachedProviderModels,
 } from '../../src/services/apiConfig';
 import {
   LlmApiError,
@@ -18,7 +24,11 @@ import {
   buildModelsUrl,
   chatCompletion,
   extractJsonFromText,
+  fetchAvailableModelInfos,
   fetchAvailableModels,
+  formatContextWindow,
+  isNonChatModel,
+  normalizeFetchedModelId,
   streamChatCompletion,
   testApiConnection,
 } from '../../src/services/llmClient';
@@ -340,5 +350,129 @@ describe('API services (V2 feat/api-integration)', () => {
     expect(questions[0].chapter).toBe(5);
     expect(questions[1].type).toBe('tf');
     expect(questions[1].answer).toBe(true);
+  });
+
+  it('API-08: updates DeepSeek presets, sets default maxTokens=4096, and caches public model lists per provider+baseUrl without storing keys', () => {
+    const defaults = createDefaultApiConfig();
+    expect(defaults.provider).toBe('deepseek');
+    expect(defaults.model).toBe('deepseek-flash');
+    expect(defaults.maxTokens).toBe(4096);
+    expect(sanitizeApiConfig({ maxTokens: 65536 }).maxTokens).toBe(65536);
+    expect(sanitizeApiConfig({ maxTokens: 100000 }).maxTokens).toBe(65536);
+
+    const dsPreset = getProviderPreset('deepseek');
+    expect(dsPreset.models).toEqual(['deepseek-flash', 'deepseek-v4-pro']);
+    expect(getPresetModelMetas(dsPreset)).toEqual([
+      { id: 'deepseek-flash', name: 'V4.1-Flash' },
+      { id: 'deepseek-v4-pro', name: 'V4-Pro' },
+    ]);
+
+    saveCachedProviderModels('deepseek', 'https://api.deepseek.com/v1/', [
+      { id: 'deepseek-flash', name: 'V4.1-Flash', contextWindow: 131072, maxOutputTokens: 8192 },
+      { id: 'deepseek-v4-pro', name: 'V4-Pro', contextWindow: 1000000 },
+    ]);
+    const cached = loadCachedProviderModels('deepseek', 'https://api.deepseek.com/v1');
+    expect(cached).toHaveLength(2);
+    expect(cached[1]).toEqual({ id: 'deepseek-v4-pro', name: 'V4-Pro', contextWindow: 1000000 });
+    expect(loadCachedProviderModels('openai', 'https://api.deepseek.com/v1')).toEqual([]);
+
+    const rawCache = globalThis.localStorage.getItem(API_MODELS_CACHE_KEY) ?? '';
+    expect(rawCache).not.toContain('apiKey');
+    expect(rawCache).not.toContain('sk-');
+
+    clearCachedProviderModels('deepseek', 'https://api.deepseek.com/v1');
+    expect(loadCachedProviderModels('deepseek', 'https://api.deepseek.com/v1')).toEqual([]);
+  });
+
+  it('API-09: fetchAvailableModelInfos parses Gemini/OpenAI metadata without created, filters non-chat models, formats context, and maps 401/404/CORS', async () => {
+    expect(normalizeFetchedModelId('models/gemini-2.5-pro')).toBe('gemini-2.5-pro');
+    expect(formatContextWindow(1_000_000)).toBe('1M');
+    expect(formatContextWindow(1_048_576)).toBe('1M');
+    expect(formatContextWindow(131_072)).toBe('128K');
+    expect(formatContextWindow(32_768)).toBe('32K');
+    expect(formatContextWindow(undefined)).toBeNull();
+
+    for (const nonChat of [
+      'text-embedding-3-large',
+      'bge-reranker-v2-m3',
+      'tts-1-hd',
+      'whisper-1',
+      'dall-e-3',
+      'black-forest-labs/FLUX.1-schnell',
+      'imagen-3.0-generate',
+      'gpt-4o-audio-preview',
+      'paddle-ocr-v4',
+      'omni-moderation-latest',
+      'gpt-4o-realtime-preview',
+    ]) {
+      expect(isNonChatModel(nonChat), `Expected "${nonChat}" to be non-chat`).toBe(true);
+    }
+    expect(isNonChatModel({ id: 'deepseek-flash', name: 'V4.1-Flash' })).toBe(false);
+
+    const mockFetch = vi
+      .fn()
+      .mockResolvedValueOnce(
+        new Response(
+          JSON.stringify({
+            models: [
+              {
+                name: 'models/gemini-2.5-pro',
+                displayName: 'Gemini 2.5 Pro',
+                inputTokenLimit: 1048576,
+                outputTokenLimit: 65536,
+              },
+              {
+                id: 'models/text-embedding-004',
+                display_name: 'Text Embedding 004',
+              },
+            ],
+          }),
+          { status: 200, headers: { 'Content-Type': 'application/json' } },
+        ),
+      )
+      .mockResolvedValueOnce(new Response('Unauthorized', { status: 401 }))
+      .mockResolvedValueOnce(new Response('Not Found', { status: 404 }))
+      .mockRejectedValueOnce(new TypeError('Failed to fetch'));
+    vi.stubGlobal('fetch', mockFetch);
+
+    const infos = await fetchAvailableModelInfos({
+      provider: 'gemini',
+      baseUrl: 'https://generativelanguage.googleapis.com/v1beta/openai',
+      apiKey: 'AIza-test-key',
+      model: 'gemini-2.5-flash',
+    });
+    expect(infos).toEqual([
+      {
+        id: 'gemini-2.5-pro',
+        name: 'Gemini 2.5 Pro',
+        contextWindow: 1048576,
+        maxOutputTokens: 65536,
+      },
+      {
+        id: 'text-embedding-004',
+        name: 'Text Embedding 004',
+      },
+    ]);
+
+    await expect(
+      fetchAvailableModelInfos({
+        baseUrl: 'https://api.deepseek.com/v1',
+        apiKey: 'sk-bad',
+      }),
+    ).rejects.toMatchObject({ code: 'UNAUTHORIZED', statusCode: 401 });
+
+    await expect(
+      fetchAvailableModelInfos({
+        baseUrl: 'https://api.deepseek.com/v1',
+        apiKey: 'sk-ok',
+      }),
+    ).rejects.toMatchObject({ code: 'NOT_FOUND', statusCode: 404 });
+
+    await expect(
+      fetchAvailableModelInfos({
+        baseUrl: 'https://api.deepseek.com/v1',
+        apiKey: 'sk-ok',
+      }),
+    ).rejects.toMatchObject({ code: 'NETWORK_OR_CORS' });
   });
 });
