@@ -314,11 +314,233 @@
   cursor: not-allowed;
 }
 
+/* Short-Answer Dual-Mode Switch & AI Grading */
+.short-mode-bar {
+  display: inline-flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  padding: 4px;
+  border-radius: 12px;
+  border: 1px solid var(--line);
+  background: var(--surface-subtle);
+  align-self: flex-start;
+  max-width: 100%;
+}
+
+.short-mode-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 36px;
+  padding: 6px 14px;
+  border-radius: 9px;
+  border: 1px solid transparent;
+  background: transparent;
+  color: var(--sub);
+  font-size: 13px;
+  font-weight: 650;
+  cursor: pointer;
+  transition: background-color 0.15s ease, color 0.15s ease, border-color 0.15s ease, box-shadow 0.15s ease;
+}
+
+.short-mode-btn:hover {
+  color: var(--ink);
+}
+
+.short-mode-btn.is-active {
+  background: var(--card);
+  color: var(--brand);
+  border-color: var(--brand-line);
+  box-shadow: 0 1px 3px rgba(15, 23, 42, 0.08);
+}
+
+.short-ai-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 16px 18px;
+  border-radius: 14px;
+  border: 1px solid var(--line);
+  background: var(--surface-subtle);
+  min-width: 0;
+  max-width: 100%;
+}
+
+.short-ai-textarea {
+  width: 100%;
+  box-sizing: border-box;
+  min-height: 104px;
+  padding: 11px 13px;
+  border-radius: 10px;
+  border: 1.5px solid var(--line-strong);
+  background: var(--card);
+  color: var(--ink);
+  font-family: inherit;
+  font-size: 14.5px;
+  line-height: 1.6;
+  resize: vertical;
+}
+
+.short-ai-textarea:focus {
+  outline: none;
+  border-color: var(--brand);
+  box-shadow: 0 0 0 3px var(--ring-focus);
+}
+
+.short-ai-textarea:disabled {
+  opacity: 0.72;
+  cursor: not-allowed;
+}
+
+.short-ai-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.short-ai-cost-hint {
+  margin: 0;
+  flex: 1 1 240px;
+  min-width: 0;
+  font-size: 12.5px;
+  line-height: 1.5;
+  color: var(--muted);
+  overflow-wrap: anywhere;
+}
+
+.short-ai-banner {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 12px 14px;
+  border-radius: 11px;
+  border: 1px solid var(--line);
+  font-size: 13.5px;
+  line-height: 1.55;
+  min-width: 0;
+}
+
+.short-ai-banner--warn {
+  background: var(--warn-bg);
+  border-color: var(--warn-line);
+  color: var(--ink);
+}
+
+.short-ai-banner--bad {
+  background: var(--bad-bg);
+  border-color: var(--bad-line);
+  color: var(--bad);
+}
+
+.short-ai-banner__msg {
+  overflow-wrap: anywhere;
+}
+
+.short-ai-banner__actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+
+.short-ai-result {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 14px 16px;
+  border-radius: 12px;
+  border: 1px solid var(--brand-line);
+  background: var(--card);
+  min-width: 0;
+}
+
+.short-ai-result__head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.short-ai-result__score-group {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+
+.short-ai-result__level-badge {
+  display: inline-flex;
+  align-items: center;
+  padding: 4px 10px;
+  border-radius: 999px;
+  border: 1px solid var(--line);
+  background: var(--surface-subtle);
+  color: var(--sub);
+  font-size: 12.5px;
+  font-weight: 650;
+}
+
+.short-ai-result__draft {
+  padding: 9px 12px;
+  border-radius: 9px;
+  border: 1px solid var(--line);
+  background: var(--surface-subtle);
+  font-size: 13.5px;
+  line-height: 1.55;
+  color: var(--sub);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.short-ai-result__draft-label {
+  font-weight: 700;
+  color: var(--ink);
+}
+
+.short-ai-result__comment {
+  font-size: 14px;
+  line-height: 1.6;
+  color: var(--ink);
+  overflow-wrap: anywhere;
+}
+
+@media (max-width: 480px) {
+  .short-mode-bar {
+    width: 100%;
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .short-mode-btn {
+    padding: 6px 8px;
+    font-size: 12.5px;
+  }
+
+  .short-ai-panel {
+    padding: 13px 12px;
+  }
+
+  .short-ai-actions {
+    flex-direction: column;
+    align-items: stretch;
+  }
+
+  .short-ai-actions .btn {
+    width: 100%;
+    justify-content: center;
+  }
+}
+
 @media print {
   .workspace-mobile-bar,
   .ai-workspace-controls,
   .ai-explain-drawer,
-  .bank-switcher-bar {
+  .bank-switcher-bar,
+  .short-mode-bar {
     display: none !important;
   }
 }
